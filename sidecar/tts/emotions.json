@@ -1,0 +1,10 @@
+{
+  "neutra":    { "qwen_instruct": "Parla in modo naturale e colloquiale", "chatterbox_exaggeration": 0.5, "speed": 1.0 },
+  "gioia":     { "qwen_instruct": "Parla con tono allegro e vivace", "chatterbox_exaggeration": 0.7, "speed": 1.05 },
+  "tristezza": { "qwen_instruct": "Parla piano, con tono triste e dolce", "chatterbox_exaggeration": 0.4, "speed": 0.92 },
+  "sorpresa":  { "qwen_instruct": "Parla con stupore, tono che sale", "chatterbox_exaggeration": 0.8, "speed": 1.04 },
+  "rabbia":    { "qwen_instruct": "Parla con tono deciso e un po' infastidito", "chatterbox_exaggeration": 0.75, "speed": 1.03 },
+  "pensiero":  { "qwen_instruct": "Parla con tono riflessivo, come se pensassi ad alta voce", "chatterbox_exaggeration": 0.45, "speed": 0.95 },
+  "imbarazzo": { "qwen_instruct": "Parla con un po' di imbarazzo, esitando leggermente", "chatterbox_exaggeration": 0.5, "speed": 0.97 },
+  "sonno":     { "qwen_instruct": "Parla con voce assonnata, lenta e morbida", "chatterbox_exaggeration": 0.3, "speed": 0.88 }
+}

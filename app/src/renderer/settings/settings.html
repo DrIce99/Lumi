@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    />
+    <title>Impostazioni - Lumi</title>
+    <link rel="stylesheet" href="settings.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div class="logo" aria-hidden="true"><i></i><i></i></div>
+      <div>
+        <h1>Impostazioni di Lumi</h1>
+        <p class="sub" id="statusLine">…</p>
+      </div>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="general" type="button">Generale</button>
+      <button class="tab" data-tab="brain" type="button">Cervello</button>
+      <button class="tab" data-tab="voice" type="button">Voce</button>
+      <button class="tab" data-tab="screen" type="button">Schermo</button>
+      <button class="tab" data-tab="memory" type="button">Memoria</button>
+      <button class="tab" data-tab="status" type="button">Stato</button>
+    </nav>
+
+    <main>
+      <section class="panel active" data-panel="general">
+        <div class="card">
+          <h2>Profilo hardware</h2>
+          <p id="gpuText" class="hint"></p>
+          <div id="profiles" class="profiles"></div>
+        </div>
+        <label class="field">
+          <span>Come ti chiami?</span>
+          <input id="userName" type="text" maxlength="50" placeholder="Facoltativo: Lumi lo scoprirà anche parlando con te" />
+        </label>
+        <label class="field">
+          <span>Personalità (facoltativo)</span>
+          <textarea id="personality" rows="3" maxlength="2000" placeholder="Es.: un po' ironico, appassionato di musica, mi dà del lei…"></textarea>
+        </label>
+        <label class="field">
+          <span>Quanto prende l'iniziativa</span>
+          <select id="sociability">
+            <option value="silenzioso">Silenzioso: parla solo se lo interpelli</option>
+            <option value="discreto">Discreto: un commento spontaneo ogni tanto</option>
+            <option value="normale">Normale</option>
+            <option value="chiacchierone">Chiacchierone</option>
+          </select>
+        </label>
+        <label class="check"><input id="doNotDisturb" type="checkbox" /> Non disturbare (niente commenti spontanei, percezione in pausa)</label>
+        <label class="check"><input id="muted" type="checkbox" /> Voce disattivata: risponde solo con il testo</label>
+        <label class="check"><input id="subtitles" type="checkbox" /> Mostra anche il testo di quello che dice (sottotitoli)</label>
+        <div class="grid2">
+          <label class="field">
+            <span>Dimensione del volto <output id="scaleOut"></output></span>
+            <input id="scale" type="range" min="0.5" max="3" step="0.1" />
+          </label>
+          <label class="field">
+            <span>Colore degli occhi</span>
+            <input id="color" type="color" />
+          </label>
+        </div>
+        <label class="field">
+          <span>Scorciatoia per scrivergli</span>
+          <input id="chatHotkey" type="text" maxlength="60" placeholder="Control+Alt+L" />
+          <small class="hint">Formato Electron, ad esempio <code>Control+Alt+L</code>. Puoi anche cliccare sugli occhi.</small>
+        </label>
+        <label class="check"><input id="launchAtLogin" type="checkbox" /> Avvia con Windows</label>
+      </section>
+
+      <section class="panel" data-panel="brain">
+        <p class="note">
+          Lumi pensa con un servizio di IA gratuito o locale. Per la voce conta soprattutto la rapidità della prima parola:
+          Groq è il più veloce. Puoi usare un modello per la conversazione, uno (magari locale) per i commenti spontanei e
+          uno con la visione per guardare lo schermo.
+        </p>
+        <div class="choice">
+          <h2>Conversazione</h2>
+          <div class="row">
+            <select id="chatProvider" aria-label="Servizio per la conversazione"></select>
+            <input id="chatModel" type="text" list="chatModels" placeholder="modello" aria-label="Modello per la conversazione" />
+            <button id="chatDetect" type="button">Rileva modelli</button>
+          </div>
+          <datalist id="chatModels"></datalist>
+          <small id="chatHint" class="hint"></small>
+        </div>
+        <div class="choice">
+          <h2>Commenti spontanei</h2>
+          <div class="row">
+            <select id="idleProvider" aria-label="Servizio per i commenti spontanei"></select>
+            <input id="idleModel" type="text" list="idleModels" placeholder="modello" aria-label="Modello per i commenti spontanei" />
+            <button id="idleDetect" type="button">Rileva modelli</button>
+          </div>
+          <datalist id="idleModels"></datalist>
+          <small id="idleHint" class="hint"></small>
+        </div>
+        <div class="choice">
+          <h2>Visione (look_at_screen)</h2>
+          <div class="row">
+            <select id="visionProvider" aria-label="Servizio per la visione"></select>
+            <input id="visionModel" type="text" list="visionModels" placeholder="vuoto = il modello della conversazione" aria-label="Modello con visione" />
+            <button id="visionDetect" type="button">Rileva modelli</button>
+          </div>
+          <datalist id="visionModels"></datalist>
+          <small id="visionHint" class="hint"></small>
+        </div>
+        <div class="row">
+          <button id="test" type="button">Prova la connessione</button>
+        </div>
+        <ul id="testResult" class="results"></ul>
+        <h2>Servizi e chiavi</h2>
+        <div id="providers" class="providers"></div>
+      </section>
+
+      <section class="panel" data-panel="voice">
+        <h2>Come ti ascolta</h2>
+        <label class="field">
+          <span>Modalità</span>
+          <select id="listenMode">
+            <option value="push-to-talk">Tieni premuto un tasto per parlare</option>
+            <option value="wake-word">Parola di attivazione</option>
+            <option value="continuous">Ascolto continuo</option>
+          </select>
+        </label>
+        <div class="grid2">
+          <label class="field">
+            <span>Tasto da tenere premuto</span>
+            <input id="hotkey" type="text" maxlength="60" placeholder="Control+Alt+Space" />
+          </label>
+          <label class="field">
+            <span>Parola di attivazione</span>
+            <input id="wakeWord" type="text" maxlength="40" placeholder="ehi lumi" />
+          </label>
+        </div>
+        <label class="field">
+          <span>Dopo una risposta resta in ascolto per <output id="followUpOut"></output></span>
+          <input id="followUpSeconds" type="range" min="0" max="30" step="1" />
+        </label>
+        <label class="field">
+          <span>Microfono</span>
+          <select id="micDevice"></select>
+        </label>
+        <label class="check"><input id="bargeIn" type="checkbox" /> Posso interromperlo parlando mentre parla</label>
+        <label class="check"><input id="backchannel" type="checkbox" /> Segnali di ascolto ("mh", "sì") mentre parlo a lungo</label>
+        <label class="check"><input id="fillers" type="checkbox" /> Riempitivi ("allora…") se la risposta tarda</label>
+
+        <h2>Riconoscimento vocale</h2>
+        <div class="grid3">
+          <label class="field">
+            <span>Motore</span>
+            <select id="sttEngine">
+              <option value="faster-whisper">faster-whisper (locale)</option>
+              <option value="parakeet">Parakeet TDT v3 (locale)</option>
+              <option value="whisper-cpp">whisper.cpp (locale, CPU)</option>
+              <option value="groq">Whisper di Groq (remoto)</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Modello</span>
+            <input id="sttModel" type="text" list="sttModels" />
+            <datalist id="sttModels"></datalist>
+          </label>
+          <label class="field">
+            <span>Dispositivo</span>
+            <select id="sttDevice">
+              <option value="auto">Automatico</option>
+              <option value="cuda">Scheda video (CUDA)</option>
+              <option value="cpu">Processore</option>
+            </select>
+          </label>
+        </div>
+        <label class="field">
+          <span>Vocabolario (nomi e termini da riconoscere, separati da virgola)</span>
+          <input id="vocabulary" type="text" placeholder="Sme.UP, RPG, Kubernetes" />
+        </label>
+
+        <h2>Voce di Lumi</h2>
+        <div class="grid3">
+          <label class="field">
+            <span>Motore</span>
+            <select id="ttsEngine">
+              <option value="qwen3">Qwen3-TTS</option>
+              <option value="chatterbox">Chatterbox Multilingual</option>
+              <option value="kokoro">Kokoro (leggero)</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Modello</span>
+            <select id="ttsModel"></select>
+          </label>
+          <label class="field">
+            <span>Voce</span>
+            <input id="ttsVoice" type="text" list="ttsVoices" />
+            <datalist id="ttsVoices"></datalist>
+          </label>
+        </div>
+        <div class="row">
+          <button id="pickVoice" type="button">Scegli un campione per clonare la voce…</button>
+          <small class="hint">Usa solo la tua voce o voci per cui hai il consenso.</small>
+        </div>
+        <div class="grid3">
+          <label class="field">
+            <span>Velocità <output id="speedOut"></output></span>
+            <input id="speed" type="range" min="0.7" max="1.4" step="0.05" />
+          </label>
+          <label class="field">
+            <span>Volume <output id="volumeOut"></output></span>
+            <input id="volume" type="range" min="0.1" max="1" step="0.05" />
+          </label>
+          <label class="field">
+            <span>Seme (stessa voce tra le frasi)</span>
+            <input id="seed" type="number" min="0" max="2147483647" step="1" />
+          </label>
+        </div>
+        <div class="row">
+          <input id="voiceText" type="text" value="Ciao! Sono Lumi. Come posso aiutarti oggi?" />
+          <button id="testVoice" type="button">Prova la voce</button>
+        </div>
+        <small id="voiceResult" class="hint"></small>
+      </section>
+
+      <section class="panel" data-panel="screen">
+        <label class="check"><input id="perceptionEnabled" type="checkbox" /> Lumi guarda lo schermo (testo, cursore, notifiche)</label>
+        <p class="note">
+          Il riconoscimento del testo (OCR) e la lettura dei campi attivi avvengono sul tuo PC. Al servizio di IA arriva solo
+          un breve riassunto testuale; uno screenshot vero viene inviato solo con lo strumento "guarda lo schermo", secondo la
+          regola qui sotto. La percezione si ferma da sola con lo schermo bloccato, quando sei via da più di 5 minuti, in
+          "Non disturbare", nelle finestre in incognito e nelle app elencate.
+        </p>
+        <div class="grid3">
+          <label class="field">
+            <span>OCR</span>
+            <select id="ocr">
+              <option value="windows">Windows OCR</option>
+              <option value="rapidocr">RapidOCR</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Cambiamenti al secondo <output id="captureFpsOut"></output></span>
+            <input id="captureFps" type="range" min="1" max="10" step="1" />
+          </label>
+          <label class="field">
+            <span>Letture OCR al secondo <output id="ocrFpsOut"></output></span>
+            <input id="ocrFps" type="range" min="0.2" max="4" step="0.1" />
+          </label>
+        </div>
+        <label class="check"><input id="uia" type="checkbox" /> Segue il cursore del testo anche in Chrome, VS Code ed Electron (UI Automation)</label>
+        <label class="field">
+          <span>Screenshot al servizio di IA</span>
+          <select id="sendScreenshots">
+            <option value="never">Mai</option>
+            <option value="ask">Chiedi ogni volta</option>
+            <option value="always">Sempre</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>App in cui la percezione si ferma (una per riga)</span>
+          <textarea id="pauseInApps" rows="4"></textarea>
+        </label>
+      </section>
+
+      <section class="panel" data-panel="memory">
+        <p class="note">Ciò che Lumi ricorda di te. Puoi cancellare i singoli ricordi, oppure chiedergli a voce di dimenticare qualcosa.</p>
+        <h2>Ricordi</h2>
+        <ul id="facts" class="list"></ul>
+        <h2>Promemoria</h2>
+        <ul id="reminders" class="list"></ul>
+        <h2>Diario</h2>
+        <ul id="diary" class="list"></ul>
+        <div class="row">
+          <button id="openData" type="button">Apri la cartella dei dati</button>
+          <button id="clearMemory" type="button" class="danger">Dimentica tutto</button>
+        </div>
+      </section>
+
+      <section class="panel" data-panel="status">
+        <div class="card">
+          <h2>Motori della voce e della vista</h2>
+          <p id="sidecarText" class="hint"></p>
+          <ul id="engines" class="list"></ul>
+          <div class="row">
+            <button id="restartSidecar" type="button">Riavvia</button>
+          </div>
+        </div>
+        <p id="dataPath" class="hint"></p>
+      </section>
+    </main>
+
+    <footer class="bottom">
+      <span id="status" class="hint"></span>
+      <button id="save" type="button" class="primary">Salva</button>
+    </footer>
+
+    <script src="settings.js"></script>
+  </body>
+</html>

@@ -1,0 +1,27 @@
+{
+  "name": "lumi",
+  "productName": "Lumi",
+  "version": "0.1.0",
+  "description": "Assistente vocale da scrivania: due occhi che ti ascoltano, ti rispondono a voce e guardano lo schermo",
+  "private": true,
+  "main": "dist/main/main.js",
+  "scripts": {
+    "postinstall": "node node_modules/electron/install.js",
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node build.mjs --tests && node --test \"dist/test/*.test.js\"",
+    "check": "npm run typecheck && npm test",
+    "start": "node build.mjs && node run.mjs",
+    "debug": "node build.mjs && node run.mjs --debug"
+  },
+  "dependencies": {
+    "koffi": "^3.3.3"
+  },
+  "devDependencies": {
+    "@ricky0123/vad-web": "^0.0.31",
+    "@types/node": "^24.0.0",
+    "electron": "^44.7.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
+  }
+}

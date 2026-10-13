@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.log
+__pycache__/
+.pytest_cache/
+.venv/
+*.egg-info/
+sidecar/tests/_audio/
