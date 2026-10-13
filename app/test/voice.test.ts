@@ -201,17 +201,17 @@ test("SttClient: frames carry the session id; partial and final results", () => 
   let socket!: FakeSocket;
   const client = new SttClient(() => "ws://x", () => (socket = new FakeSocket()));
   const events: string[] = [];
-  client.start(7, { vocabulary: ["Lumi"], partials: true }, { partial: (t) => events.push(`p:${t}`), final: (r) => events.push(`f:${r.text}:${r.durationMs}`) });
+  client.start(7, { vocabulary: ["Lumi"], partials: true, voiceprint: true }, { partial: (t) => events.push(`p:${t}`), final: (r) => events.push(`f:${r.text}:${r.durationMs}:${r.voiceprint?.join(",") ?? "-"}`) });
   socket.open();
   client.audio(7, new Uint8Array([1, 0, 2, 0]));
   client.audio(8, new Uint8Array([9, 9]));
   client.end(7);
-  assert.deepEqual(JSON.parse(socket.sent[0] as string), { type: "start", id: 7, vocabulary: ["Lumi"], partials: true });
+  assert.deepEqual(JSON.parse(socket.sent[0] as string), { type: "start", id: 7, vocabulary: ["Lumi"], partials: true, voiceprint: true });
   assert.deepEqual([...(socket.sent[1] as Uint8Array)], [7, 0, 0, 0, 1, 0, 2, 0]);
   assert.equal(socket.sent.length, 3, "no frame for an unknown session");
   socket.text({ id: 7, partial: "ciao" });
-  socket.text({ id: 7, final: "ciao Lumi", words: [], durationMs: 1200, ms: 90 });
-  assert.deepEqual(events, ["p:ciao", "f:ciao Lumi:1200"]);
+  socket.text({ id: 7, final: "ciao Lumi", words: [], durationMs: 1200, ms: 90, voiceprint: [0.6, 0.8] });
+  assert.deepEqual(events, ["p:ciao", "f:ciao Lumi:1200:0.6,0.8"]);
 });
 
 test("restart delays grow and the sidecar gets the engines from the settings", () => {

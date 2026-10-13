@@ -44,7 +44,7 @@ import time  # noqa: E402
 from contextlib import asynccontextmanager, suppress  # noqa: E402
 from dataclasses import dataclass, field  # noqa: E402
 
-from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect  # noqa: E402
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
 import devices  # noqa: E402
@@ -328,6 +328,7 @@ class SttSession:
     id: int
     vocabulary: list[str]
     partials: bool
+    voiceprint: bool = False
     audio: bytearray = field(default_factory=bytearray)
     ended: bool = False
     last_partial_bytes: int = 0
@@ -343,6 +344,17 @@ MAX_SECONDS = 60
 
 def _transcribe(engine, audio, vocabulary, partial):
     return engine.transcribe(audio, vocabulary, partial)
+
+
+async def _voiceprint(audio) -> list[float] | None:
+    """The speaker embedding of a turn; None when it can't be measured (too short, no model)."""
+    import voiceprint
+
+    try:
+        return await asyncio.to_thread(voiceprint.embed, audio)
+    except Exception as err:  # noqa: BLE001 - a missing voiceprint must never cost the transcript
+        log.warning("Voiceprint failed: %s", err)
+        return None
 
 
 @app.websocket("/stt")
@@ -391,20 +403,27 @@ async def stt_socket(ws: WebSocket) -> None:
             await send_json({"id": s.id, "final": "", "words": [], "durationMs": duration_ms, "ms": 0})
             return
         started = time.monotonic()
+        # The voiceprint is measured on the CPU while the GPU transcribes
+        print_task = asyncio.create_task(_voiceprint(audio)) if s.voiceprint else None
         try:
             result = await asyncio.wrap_future(manager.submit("stt", _transcribe, audio, s.vocabulary, False))
         except Exception as err:
+            if print_task:
+                print_task.cancel()
             await send_json({"id": s.id, "final": "", "words": [], "error": str(err), "durationMs": duration_ms})
             return
-        await send_json(
-            {
-                "id": s.id,
-                "final": result.text,
-                "words": [{"word": w.word, "start": w.start, "end": w.end, "p": w.probability} for w in result.words],
-                "durationMs": duration_ms,
-                "ms": round((time.monotonic() - started) * 1000),
-            }
-        )
+        reply = {
+            "id": s.id,
+            "final": result.text,
+            "words": [{"word": w.word, "start": w.start, "end": w.end, "p": w.probability} for w in result.words],
+            "durationMs": duration_ms,
+            "ms": round((time.monotonic() - started) * 1000),
+        }
+        if print_task and result.text:
+            vector = await print_task
+            if vector:
+                reply["voiceprint"] = vector
+        await send_json(reply)
 
     try:
         while True:
@@ -420,7 +439,7 @@ async def stt_socket(ws: WebSocket) -> None:
             data = json.loads(message.get("text") or "{}")
             kind, sid = data.get("type"), int(data.get("id", 0))
             if kind == "start":
-                s = SttSession(sid, [str(w) for w in data.get("vocabulary", [])][:200], bool(data.get("partials", True)))
+                s = SttSession(sid, [str(w) for w in data.get("vocabulary", [])][:200], bool(data.get("partials", True)), bool(data.get("voiceprint", False)))
                 s.task = asyncio.create_task(partial_loop(s))
                 sessions[sid] = s
             elif kind == "end" and sid in sessions:
@@ -440,6 +459,51 @@ async def stt_socket(ws: WebSocket) -> None:
 
 
 # ---------------- OCR ----------------
+
+
+class LumaRequest(BaseModel):
+    """Screen rectangles (physical pixels) to capture as small luminance frames."""
+
+    regions: list[dict]
+    size: int = 640
+
+
+@app.post("/screen/luma")
+async def screen_luma(req: LumaRequest, _: None = Depends(http_auth)) -> Response:
+    """Frames for the app's change detection: the luminance bytes one after the other, sizes in X-Sizes."""
+    from screen import grab_luma
+
+    def grab() -> list[tuple[int, int, bytes]]:
+        return [grab_luma(int(r["x"]), int(r["y"]), int(r["width"]), int(r["height"]), req.size) for r in req.regions]
+
+    try:
+        frames = await asyncio.to_thread(grab)
+    except Exception as err:  # noqa: BLE001 - a locked screen or a secure desktop can't be captured
+        raise HTTPException(status_code=503, detail=f"capture failed: {err}") from err
+    return Response(
+        b"".join(f[2] for f in frames),
+        media_type="application/octet-stream",
+        headers={"X-Sizes": ",".join(f"{w}x{h}" for w, h, _ in frames)},
+    )
+
+
+class JpegRequest(BaseModel):
+    """A screen rectangle (physical pixels) to capture for the vision model."""
+
+    region: dict
+    size: int = 1280
+
+
+@app.post("/screen/jpeg")
+async def screen_jpeg(req: JpegRequest, _: None = Depends(http_auth)) -> Response:
+    from screen import grab_jpeg
+
+    r = req.region
+    try:
+        width, height, jpeg = await asyncio.to_thread(grab_jpeg, int(r["x"]), int(r["y"]), int(r["width"]), int(r["height"]), req.size)
+    except Exception as err:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"capture failed: {err}") from err
+    return Response(jpeg, media_type="image/jpeg", headers={"X-Size": f"{width}x{height}"})
 
 
 class OcrRequest(BaseModel):
@@ -464,14 +528,13 @@ def decode_image(req: OcrRequest):
 
 def grab_region(region: dict):
     """Captures a rectangle of the screen (physical pixels). Lumi's window excludes itself from captures."""
-    import mss
     from PIL import Image
 
+    from screen import grab_bgra
+
     box = {k: int(region[k]) for k in ("x", "y", "width", "height")}
-    factory = getattr(mss, "MSS", None) or mss.mss
-    with factory() as sct:
-        shot = sct.grab({"left": box["x"], "top": box["y"], "width": max(1, box["width"]), "height": max(1, box["height"])})
-    return Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+    size = (max(1, box["width"]), max(1, box["height"]))
+    return Image.frombytes("RGB", size, grab_bgra(box["x"], box["y"], *size), "raw", "BGRX")
 
 
 def offset_lines(lines: list[dict], dx: float, dy: float) -> list[dict]:
@@ -622,6 +685,76 @@ async def uia_socket(ws: WebSocket) -> None:
     finally:
         state.uia.unsubscribe(push)
         task.cancel()
+
+
+@app.websocket("/apps")
+async def apps_socket(ws: WebSocket) -> None:
+    """Listening to other apps (a Discord call). The app sends {"apps": ["Discord"], "vocabulary": [...]};
+    the sidecar answers with {"type": "status", "apps": {...}} and, for every utterance heard,
+    {"type": "heard", "app", "text", "durationMs", "voiceprint"?}. Closing the socket stops listening."""
+    if not await ws_accept(ws):
+        return
+    from appaudio import RATE, AppListener
+
+    loop = asyncio.get_running_loop()
+    utterances: asyncio.Queue = asyncio.Queue(maxsize=20)
+    send_lock = asyncio.Lock()
+    vocabulary: list[str] = []
+    manager = state.manager
+
+    async def send_json(obj: dict) -> None:
+        async with send_lock:
+            await ws.send_text(json.dumps(obj))
+
+    def on_utterance(app_name: str, audio) -> None:
+        def put() -> None:
+            if utterances.full():
+                # Too much to transcribe: the oldest goes
+                utterances.get_nowait()
+            utterances.put_nowait((app_name, audio))
+
+        loop.call_soon_threadsafe(put)
+
+    def on_status(statuses: dict) -> None:
+        asyncio.run_coroutine_threadsafe(send_json({"type": "status", "apps": statuses}), loop)
+
+    async def transcriber() -> None:
+        while True:
+            app_name, audio = await utterances.get()
+            if manager.config("stt") is None:
+                await send_json({"type": "status", "apps": {app_name: "errore: serve il riconoscimento vocale locale (non Groq)"}})
+                continue
+            print_task = asyncio.create_task(_voiceprint(audio))
+            try:
+                result = await asyncio.wrap_future(manager.submit("stt", _transcribe, audio, vocabulary, False))
+            except Exception as err:  # noqa: BLE001
+                print_task.cancel()
+                log.warning("Transcribing %s audio failed: %s", app_name, err)
+                continue
+            vector = await print_task
+            if not result.text:
+                continue
+            message = {"type": "heard", "app": app_name, "text": result.text, "durationMs": round(len(audio) * 1000 / RATE)}
+            if vector:
+                message["voiceprint"] = vector
+            await send_json(message)
+
+    listener = AppListener(on_utterance, on_status)
+    task = asyncio.create_task(transcriber())
+    try:
+        while True:
+            message = await ws.receive()
+            if message["type"] == "websocket.disconnect":
+                break
+            data = json.loads(message.get("text") or "{}")
+            vocabulary[:] = [str(w) for w in data.get("vocabulary", [])][:200]
+            apps = [str(a) for a in data.get("apps", [])]
+            await asyncio.to_thread(listener.set_apps, apps)
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+    finally:
+        task.cancel()
+        await asyncio.to_thread(listener.close)
 
 
 # ---------------- entry point ----------------

@@ -5,7 +5,9 @@ Three flavours, chosen by the model in the settings:
   style instruction (ignored by the 0.6B model);
 - VoiceDesign: the voice is described in words (the `voice` setting);
 - Base: the voice is cloned from a reference clip (x-vector only, so the
-  accent of the clip doesn't bleed into the Italian).
+  accent of the clip doesn't bleed into the Italian). No style instruction:
+  Base models aren't trained to follow one, and with it every emotion
+  pulled the timbre somewhere else (it sounded like different people).
 The voice must stay the same between sentences: fixed speaker and seed.
 """
 
@@ -36,6 +38,17 @@ DEFAULT_DESCRIPTION = "Voce maschile giovane, calda e vivace, italiano naturale 
 # Codec steps per streamed chunk: 4 steps = ~333 ms of audio. Smaller chunks
 # reach the first sound sooner but cost more decoding.
 CHUNK_STEPS = 4
+# Longer reference clips usually mix several voices or music
+MAX_CLIP_SECONDS = 30
+
+
+def clip_seconds(path: str) -> float | None:
+    try:
+        import soundfile as sf
+
+        return float(sf.info(path).duration)
+    except Exception:
+        return None
 
 
 def patch_rope_registry() -> None:
@@ -102,6 +115,10 @@ class Qwen3Engine(TTSEngine):
     def _prepare_clone(self, clip: str) -> None:
         if not clip or not Path(clip).is_file():
             raise EngineUnavailable("Per clonare una voce scegli un file audio (10-20 secondi di voce pulita).")
+        seconds = clip_seconds(clip)
+        if seconds and seconds > MAX_CLIP_SECONDS:
+            # The voice print averages the whole clip: a long one mixes voices, music and noise
+            log.warning("Voice clip is %.0f s long: 10-20 s of one clean voice gives a steadier voice", seconds)
         self.clone_prompt = self.model.model.create_voice_clone_prompt(ref_audio=clip, ref_text="", x_vector_only_mode=True)
         self._clip = clip
 
@@ -147,7 +164,6 @@ class Qwen3Engine(TTSEngine):
                     language=LANGUAGE,
                     voice_clone_prompt=self.clone_prompt,
                     xvec_only=True,
-                    instruct=instruct,
                     chunk_size=CHUNK_STEPS,
                 )
             try:

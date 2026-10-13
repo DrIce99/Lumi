@@ -1,11 +1,19 @@
 // End of turn: silence alone is not enough, because people pause in the
-// middle of a sentence. The VAD silence (500 ms) is combined with a
-// semantic check: Smart Turn's probability that the turn is complete, or
-// a heuristic on the last word ("e", "ma", "quindi" -> wait). When the turn
-// looks unfinished the wait grows up to 1.2 s. Pure, tested.
+// middle of a sentence. The VAD silence (the user's "pause before
+// answering", 1 s by default) is combined with a semantic check: Smart
+// Turn's probability that the turn is complete, or a heuristic on the last
+// word ("e", "ma", "quindi" -> wait). When the turn looks unfinished the
+// wait grows to 2.4 times the pause. Pure, tested.
 
-export const MIN_SILENCE_MS = 500;
-export const MAX_SILENCE_MS = 1200;
+export const DEFAULT_PAUSE_MS = 1000;
+/** How much longer Lumi waits when the sentence sounds unfinished. */
+const UNFINISHED_FACTOR = 2.4;
+const MAX_WAIT_MS = 4000;
+
+/** Silence that ends a turn that sounds finished, and one that doesn't. */
+export function silenceRange(pauseMs: number): { min: number; max: number } {
+  return { min: pauseMs, max: Math.min(MAX_WAIT_MS, Math.round(pauseMs * UNFINISHED_FACTOR)) };
+}
 
 /** Words after which an Italian sentence is clearly not finished. */
 const CONTINUES = new Set([
@@ -44,7 +52,8 @@ export function endsSentence(text: string | null): boolean {
  * How much silence ends the turn. `turnComplete` is Smart Turn's
  * probability (null when unavailable); the heuristic covers the rest.
  */
-export function requiredSilenceMs(transcript: string | null, turnComplete: number | null): number {
+export function requiredSilenceMs(transcript: string | null, turnComplete: number | null, pauseMs = DEFAULT_PAUSE_MS): number {
+  const { min: MIN_SILENCE_MS, max: MAX_SILENCE_MS } = silenceRange(pauseMs);
   if (turnComplete !== null && Number.isFinite(turnComplete)) {
     // An unfinished last word overrides an optimistic model; a sentence that
     // ends with final punctuation (Whisper hears the intonation) tempers a
@@ -58,8 +67,8 @@ export function requiredSilenceMs(transcript: string | null, turnComplete: numbe
 }
 
 /** Whether `silenceMs` of silence ends the turn. */
-export function turnEnded(silenceMs: number, transcript: string | null, turnComplete: number | null): boolean {
-  return silenceMs >= requiredSilenceMs(transcript, turnComplete);
+export function turnEnded(silenceMs: number, transcript: string | null, turnComplete: number | null, pauseMs = DEFAULT_PAUSE_MS): boolean {
+  return silenceMs >= requiredSilenceMs(transcript, turnComplete, pauseMs);
 }
 
 /** Utterances that are only noise, a cough or a backchannel of the user's own. */

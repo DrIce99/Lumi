@@ -411,6 +411,8 @@ const WRITTEN_CALLS = {
   gemma: 'say{emotion:<|"|>gioia<|"|>,text:<|"|>Certo! Posso ascoltarti, e vedo lo schermo (quando serve).<|"|>}',
   quoted: 'say(emotion:gioia,text: "Ciao! Sono qui come tuo assistente.")\nsay(emotion:gioia,text: "C\'è qualcosa su cui stai lavorando?")',
   bare: "say(emotion:gioia,text: Ciao! Certo che ti racconto, sono qui per te (davvero).)\nsay(emotion: pensiero, intensity: 0.4, text: Come posso esserti utile oggi?)",
+  positional: 'say("gioia", "Prego! Riposati pure un po\', te lo meriti: davvero.", 0.8, "")',
+  preamble: 'I need a little more information to Can you tell me di cosa si tratta? call:say{emotion:pensiero,intensity:0.8,text:Dovrei capire meglio. Cosa intendi con "Prodoso"?}',
 };
 
 test("tool calls written as text are read back, in Gemma's syntax and as function calls", () => {
@@ -424,6 +426,9 @@ test("tool calls written as text are read back, in Gemma's syntax and as functio
     ["say", { emotion: "gioia", text: "Ciao! Certo che ti racconto, sono qui per te (davvero)." }, true],
     ["say", { emotion: "pensiero", intensity: 0.4, text: "Come posso esserti utile oggi?" }, true],
   ]);
+  // Values without keys take the required parameters first; a preamble before the call is dropped
+  assert.deepEqual(read(WRITTEN_CALLS.positional), [["say", { emotion: "gioia", text: "Prego! Riposati pure un po', te lo meriti: davvero.", intensity: 0.8, look: "" }, true]]);
+  assert.deepEqual(read(WRITTEN_CALLS.preamble), [["say", { emotion: "pensiero", intensity: 0.8, text: 'Dovrei capire meglio. Cosa intendi con "Prodoso"?' }, true]]);
   // Template tokens, prefixes and fences around calls; single quotes with apostrophes
   assert.deepEqual(read("```tool_code\n<|tool_call>call:stay_quiet{minutes:30}<tool_call|>\n```"), [["stay_quiet", { minutes: 30 }, true]]);
   assert.deepEqual(read("say(emotion='gioia', text='C'è il sole, dai!')"), [["say", { emotion: "gioia", text: "C'è il sole, dai!" }, true]]);

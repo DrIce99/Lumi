@@ -13,6 +13,7 @@ const bridge: SettingsBridge = {
   pickVoiceFile: () => ipcRenderer.invoke(IPC.settingsPickVoice),
   forgetFact: (id) => ipcRenderer.invoke(IPC.settingsForget, id),
   clearMemory: () => ipcRenderer.invoke(IPC.settingsClear),
+  forgetVoice: (id) => ipcRenderer.invoke(IPC.settingsForgetVoice, id),
   openDataFolder: () => ipcRenderer.invoke(IPC.settingsOpenData),
   restartSidecar: () => ipcRenderer.invoke(IPC.settingsRestartSidecar),
   onStatus: (cb) => {

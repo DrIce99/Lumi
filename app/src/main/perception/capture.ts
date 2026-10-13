@@ -1,10 +1,13 @@
-// Screen changes, a few times per second: desktopCapturer thumbnails (about
+// Screen changes, a few times per second: small luminance frames (about
 // 640 px wide) of the monitor with the active window and of Lumi's monitor,
 // diffed in 32x32 blocks. Lumi's own window never appears (content
 // protection). The changed rectangles are reported in screen DIP.
-import { desktopCapturer, type Display } from "electron";
+// The frames come from the sidecar, not from desktopCapturer: getSources
+// blocked this thread ~400 ms per call, and the click-through mouse hook
+// runs here, so the whole system pointer froze at every capture.
+import type { Display } from "electron";
 import { log } from "../log";
-import { changedBlocks, Habituation, lumaFromBgra, mergeBlocks, type Frame } from "./diff";
+import { changedBlocks, Habituation, mergeBlocks, type Frame } from "./diff";
 
 export interface Change {
   displayId: number;
@@ -15,8 +18,6 @@ export interface Change {
   /** 1 for a new change, lower for a region that keeps changing. */
   novelty: number;
 }
-
-const THUMB = 640;
 
 export class ChangeDetector {
   private timer: NodeJS.Timeout | null = null;
@@ -29,8 +30,10 @@ export class ChangeDetector {
       fps: () => number;
       /** The displays worth watching now. */
       displays: () => Display[];
-      /** Whether to capture at all (perception on and not paused). */
+      /** Whether to capture at all (perception on and not paused, sidecar up). */
       active: () => boolean;
+      /** One frame per display, in the same order. */
+      grab: (displays: Display[]) => Promise<Frame[]>;
       onChanges: (changes: Change[]) => void;
     },
   ) {}
@@ -59,16 +62,17 @@ export class ChangeDetector {
     try {
       const displays = this.options.displays();
       if (!displays.length) return;
-      const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: THUMB, height: THUMB }, fetchWindowIcons: false });
+      const t0 = performance.now();
+      const frames = await this.options.grab(displays);
+      const t1 = performance.now();
       const changes: Change[] = [];
-      for (const display of displays) {
-        const source = sources.find((s) => s.display_id === String(display.id)) ?? (sources.length === 1 ? sources[0] : undefined);
-        if (!source || source.thumbnail.isEmpty()) continue;
-        const { width, height } = source.thumbnail.getSize();
-        const frame = lumaFromBgra(source.thumbnail.toBitmap(), width, height);
+      displays.forEach((display, d) => {
+        const frame = frames[d];
+        if (!frame) return;
+        const { width, height } = frame;
         const prev = this.frames.get(display.id);
         this.frames.set(display.id, frame);
-        if (!prev) continue;
+        if (!prev) return;
         const grid = changedBlocks(prev, frame);
         const boxes = mergeBlocks(grid, width, height);
         let habit = this.habits.get(display.id);
@@ -89,7 +93,8 @@ export class ChangeDetector {
             novelty: novelty[i],
           });
         });
-      }
+      });
+      if (process.env.LUMI_DEBUG_LAG === "1") log.info(`Capture: grab ${(t1 - t0).toFixed(0)} ms, diff ${(performance.now() - t1).toFixed(1)} ms, ${changes.length} changes`);
       if (changes.length) this.options.onChanges(changes);
     } catch (err) {
       log.warn("Screen capture failed", err);

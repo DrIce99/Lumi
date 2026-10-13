@@ -73,9 +73,14 @@ class Reader {
     return m[0];
   }
 
-  /** `key: value` pairs up to the closer; `params` delimit unquoted values. */
+  /**
+   * `key: value` pairs up to the closer; `params` delimit unquoted values.
+   * Values without a key (`say("gioia", "Ciao!", 0.8)`) take the
+   * parameters in order.
+   */
   readArgs(closer: string, params: readonly string[]): Args | null {
     const values: [string, unknown][] = [];
+    let positional = 0;
     for (;;) {
       this.skipSpace();
       if (this.done) return { values, complete: this.final };
@@ -88,23 +93,35 @@ class Reader {
         continue;
       }
       if (this.cutQuote) return { values, complete: false };
+      const start = this.i;
       const key = this.readKey();
-      if (key === null) return this.done ? { values, complete: this.final } : null;
       this.skipSpace();
-      if (this.done) return { values, complete: this.final };
-      if (this.s[this.i] !== ":" && this.s[this.i] !== "=") return null;
-      this.i++;
-      this.skipSpace();
-      if (this.done) return { values, complete: this.final };
-      const v = this.readValue(closer, params);
+      // A quoted word at the end of streaming text may be a key or a value: wait for what follows
+      if (key !== null && this.done && !this.final) return { values, complete: false };
+      let name: string;
+      let v: Value;
+      if (key !== null && (this.s[this.i] === ":" || this.s[this.i] === "=")) {
+        this.i++;
+        this.skipSpace();
+        if (this.done) return { values, complete: this.final };
+        name = key;
+        v = this.readValue(closer, params);
+      } else {
+        const next = params[positional++];
+        if (next === undefined) return null;
+        this.i = start;
+        name = next;
+        const ch = this.s[this.i];
+        v = this.s.startsWith(QUOTE, this.i) || ch === '"' || ch === "'" ? this.readString() : ch === "{" || ch === "[" ? this.readNested() : this.readBare(closer, []);
+      }
       if ("partial" in v) {
         if (this.final) {
-          if (v.partial !== null) values.push([key, v.partial]);
+          if (v.partial !== null) values.push([name, v.partial]);
           return { values, complete: true };
         }
-        return { values, open: v.partial === null ? undefined : { key, text: v.partial }, complete: false };
+        return { values, open: v.partial === null ? undefined : { key: name, text: v.partial }, complete: false };
       }
-      values.push([key, v.value]);
+      values.push([name, v.value]);
     }
   }
 
@@ -233,12 +250,23 @@ function argsJson(args: Args): string {
 }
 
 /**
- * Reads the tool calls a reply starts with, or null when it doesn't start
- * with one. `final` says the reply is complete; otherwise the last call may
- * be cut short. `rest` is the text after the calls.
+ * Reads the tool calls in a reply written as text, or null when there are
+ * none. They usually open the reply; a preamble before them (the model
+ * thinking aloud, often half in English) is dropped. `final` says the reply
+ * is complete; otherwise the last call may be cut short. `rest` is the text
+ * after the calls.
  */
 export function readTextCalls(text: string, tools: ToolShapes, final: boolean): { calls: TextCall[]; rest: string } | null {
+  const first = readCallsAt(text, 0, tools, final);
+  if (first) return first;
+  const names = [...tools.keys()].join("|");
+  const later = new RegExp(`[\\s>:.,;!?'"](?:<\\|tool_call>)?(?:call:)?(?:${names})\\s*[({]`).exec(text);
+  return later ? readCallsAt(text, later.index + 1, tools, final) : null;
+}
+
+function readCallsAt(text: string, from: number, tools: ToolShapes, final: boolean): { calls: TextCall[]; rest: string } | null {
   const r = new Reader(text, final);
+  r.i = from;
   const calls: TextCall[] = [];
   for (;;) {
     const start = r.i;

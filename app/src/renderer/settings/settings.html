@@ -141,12 +141,27 @@
           <input id="followUpSeconds" type="range" min="0" max="30" step="1" />
         </label>
         <label class="field">
+          <span>Pausa prima di rispondere <output id="pauseOut"></output></span>
+          <input id="pauseMs" type="range" min="300" max="2500" step="100" />
+          <small class="hint">Quanto silenzio aspetta Lumi prima di rispondere. Se la frase sembra lasciata a metà aspetta di più.</small>
+        </label>
+        <label class="field">
           <span>Microfono</span>
           <select id="micDevice"></select>
         </label>
         <label class="check"><input id="bargeIn" type="checkbox" /> Posso interromperlo parlando mentre parla</label>
         <label class="check"><input id="backchannel" type="checkbox" /> Segnali di ascolto ("mh", "sì") mentre parlo a lungo</label>
         <label class="check"><input id="fillers" type="checkbox" /> Riempitivi ("allora…") se la risposta tarda</label>
+        <label class="check"><input id="voicesEnabled" type="checkbox" /> Riconosci le voci (l'impronta della voce resta su questo PC)</label>
+        <label class="check"><input id="onlyMe" type="checkbox" /> Al microfono rispondi solo alla mia voce</label>
+
+        <h2>Audio delle app</h2>
+        <label class="check"><input id="appAudioEnabled" type="checkbox" /> Ascolta anche l'audio di queste app (per esempio i tuoi amici su Discord)</label>
+        <label class="field">
+          <span>App da ascoltare (una per riga, il nome del programma)</span>
+          <textarea id="appAudioApps" rows="2" placeholder="Discord"></textarea>
+          <small class="hint">Lumi sente solo queste app, mai la propria voce, la musica o i video. L'audio viene trascritto su questo PC con il riconoscimento vocale locale; le frasi trascritte entrano nella conversazione di Lumi (e quindi vanno al servizio AI scelto per il cervello). Durante una chiamata l'ascolto continuo aspetta la parola di attivazione. Avvisa i tuoi amici che Lumi li ascolta. <span id="appAudioStatus"></span></small>
+        </label>
 
         <h2>Riconoscimento vocale</h2>
         <div class="grid3">
@@ -271,6 +286,9 @@
         <ul id="reminders" class="list"></ul>
         <h2>Diario</h2>
         <ul id="diary" class="list"></ul>
+        <h2>Voci riconosciute</h2>
+        <p class="hint">La prima voce sentita al microfono è la tua. Per dare un nome a una voce dillo a Lumi: "quello che ha appena parlato è Marco". Se Lumi ha preso un'altra voce per la tua, dimentica la tua: la imparerà di nuovo.</p>
+        <ul id="knownVoices" class="list"></ul>
         <div class="row">
           <button id="openData" type="button">Apri la cartella dei dati</button>
           <button id="clearMemory" type="button" class="danger">Dimentica tutto</button>

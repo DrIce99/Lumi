@@ -15,7 +15,6 @@ dependencies = [
   "num2words>=0.5.14",
   "huggingface-hub>=1.5,<2",
   "pillow>=10",
-  "mss>=9",
   "onnxruntime>=1.20.1",
   "faster-whisper>=1.2",
   "onnx-asr[hub]>=0.10",

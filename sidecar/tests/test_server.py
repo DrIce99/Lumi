@@ -139,3 +139,45 @@ def test_ocr_png_and_raw(client):
     raw = bytes(40 * 10 * 4)
     out = client.post("/ocr", json={"image": base64.b64encode(raw).decode(), "format": "bgra", "width": 40, "height": 10}).json()
     assert out["lines"][0]["rect"]["width"] == 38.0
+
+
+def test_screen_luma_frames(client, monkeypatch):
+    import screen
+
+    assert screen.thumbnail_size(3440, 1440, 640) == (640, 268)
+    assert screen.thumbnail_size(1080, 1920, 640) == (360, 640)
+    assert screen.thumbnail_size(300, 200, 640) == (300, 200)
+    asked = []
+
+    def fake(x, y, width, height, max_side):
+        asked.append((x, y, width, height, max_side))
+        w, h = screen.thumbnail_size(width, height, max_side)
+        return w, h, bytes([len(asked)]) * (w * h)
+
+    monkeypatch.setattr(screen, "grab_luma", fake)
+    regions = [{"x": 0, "y": 0, "width": 3440, "height": 1440}, {"x": 3440, "y": -232, "width": 1080, "height": 1920}]
+    res = client.post("/screen/luma", json={"regions": regions})
+    assert res.headers["x-sizes"] == "640x268,360x640"
+    assert res.content == bytes([1]) * (640 * 268) + bytes([2]) * (360 * 640)
+    assert asked == [(0, 0, 3440, 1440, 640), (3440, -232, 1080, 1920, 640)]
+
+
+@pytest.mark.skipif(not hasattr(__import__("ctypes"), "windll"), reason="Windows only")
+def test_screen_luma_real_capture():
+    import ctypes
+
+    import screen
+
+    ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+    w, h, luma = screen.grab_luma(0, 0, 800, 400, 200)
+    assert (w, h) == (200, 100) and len(luma) == 200 * 100
+
+
+@pytest.mark.skipif(not hasattr(__import__("ctypes"), "windll"), reason="Windows only")
+def test_screen_jpeg(client):
+    import ctypes
+
+    ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+    res = client.post("/screen/jpeg", json={"region": {"x": 0, "y": 0, "width": 800, "height": 400}, "size": 400})
+    assert res.headers["x-size"] == "400x200"
+    assert Image.open(io.BytesIO(res.content)).size == (400, 200)

@@ -40,14 +40,14 @@ export function applyProfile(settings: Settings, profile: Profile): Settings {
   s.profile = profile;
   switch (profile) {
     case "leggero":
-      s.brain.chat = { provider: "groq", model: "llama-3.3-70b-versatile" };
+      s.brain.chat = { provider: "groq", model: "openai/gpt-oss-120b" };
       s.brain.idle = { provider: "groq", model: "openai/gpt-oss-20b" };
       s.brain.vision = { provider: "gemini", model: "" };
       s.stt = { ...s.stt, engine: "groq", model: "whisper-large-v3-turbo", device: "cpu" };
       s.tts = { ...s.tts, engine: "kokoro", model: "v1.0", voice: "im_nicola" };
       break;
     case "bilanciato":
-      s.brain.chat = { provider: "groq", model: "llama-3.3-70b-versatile" };
+      s.brain.chat = { provider: "groq", model: "openai/gpt-oss-120b" };
       s.brain.idle = { provider: "ollama", model: "qwen3" };
       s.brain.vision = { provider: "gemini", model: "" };
       s.stt = { ...s.stt, engine: "faster-whisper", model: "large-v3-turbo", device: "auto" };

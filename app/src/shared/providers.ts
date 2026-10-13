@@ -42,8 +42,9 @@ export const PROVIDERS: Record<ProviderId, ProviderInfo> = {
     envKey: "GROQ_API_KEY",
     keyHelp: "console.groq.com → API Keys",
     note: "Gratis con limiti e con la latenza più bassa: il più adatto alla conversazione a voce. Con la stessa chiave Lumi può usare anche Whisper di Groq per capire cosa dici (l'audio esce dal PC).",
-    suggestions: ["llama-3.3-70b-versatile", "openai/gpt-oss-20b", "meta-llama/llama-4-scout-17b-16e-instruct", "qwen/qwen3-32b"],
-    visionSuggestions: ["meta-llama/llama-4-scout-17b-16e-instruct"],
+    // qwen3.8-27b sees images but describes tool calls in words instead of making them: vision only
+    suggestions: ["openai/gpt-oss-120b", "openai/gpt-oss-20b"],
+    visionSuggestions: ["qwen/qwen3.8-27b"],
   },
   gemini: {
     label: "Google Gemini (gratis con limiti)",
@@ -77,6 +78,17 @@ export const PROVIDERS: Record<ProviderId, ProviderInfo> = {
     note: "LM Studio, llama.cpp server e altri: indica l'indirizzo base dell'API (di solito finisce con /v1) e, se serve, la chiave.",
     suggestions: [],
     visionSuggestions: [],
+  },
+};
+
+/** Models a service retired, with what replaces them (saved settings are updated on load). */
+export const RETIRED_MODELS: Partial<Record<ProviderId, Record<string, string>>> = {
+  groq: {
+    "llama-3.3-70b-versatile": "openai/gpt-oss-120b",
+    "llama-3.1-8b-instant": "openai/gpt-oss-20b",
+    "qwen/qwen3-32b": "openai/gpt-oss-120b",
+    "meta-llama/llama-4-scout-17b-16e-instruct": "qwen/qwen3.8-27b",
+    "meta-llama/llama-4-maverick-17b-128e-instruct": "qwen/qwen3.8-27b",
   },
 };
 

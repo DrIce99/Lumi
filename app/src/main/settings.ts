@@ -1,7 +1,7 @@
 // Persistent user settings (non-secret), in %APPDATA%\Lumi\settings.json.
 // API keys live in secrets.ts.
 import { join } from "node:path";
-import { DEFAULT_OLLAMA_URL, isProvider, PROVIDERS, type ProviderId } from "../shared/providers";
+import { DEFAULT_OLLAMA_URL, isProvider, PROVIDERS, RETIRED_MODELS, type ProviderId } from "../shared/providers";
 import {
   DEFAULT_SETTINGS,
   DEVICES,
@@ -81,7 +81,8 @@ const color = (v: unknown, fallback: string) => (typeof v === "string" && /^#[0-
 function brainChoice(v: unknown, fallback: BrainChoice, allowEmptyModel = false): BrainChoice {
   const o = obj(v);
   const provider: ProviderId = isProvider(o.provider) ? o.provider : fallback.provider;
-  const model = str(o.model, fallback.model, 200).trim();
+  const saved = str(o.model, fallback.model, 200).trim();
+  const model = RETIRED_MODELS[provider]?.[saved] ?? saved;
   // An empty model falls back to the service's first suggestion
   return { provider, model: model || (allowEmptyModel ? "" : PROVIDERS[provider].suggestions[0] || (provider === fallback.provider ? fallback.model : "")) };
 }
@@ -95,6 +96,8 @@ export function sanitizeSettings(input: unknown): Settings {
   const tts = obj(raw.tts);
   const listen = obj(raw.listen);
   const face = obj(raw.face);
+  const voices = obj(raw.voices);
+  const appAudio = obj(raw.appAudio);
   const perception = obj(raw.perception);
   return {
     profile: oneOf(raw.profile, PROFILES, d.profile),
@@ -126,10 +129,19 @@ export function sanitizeSettings(input: unknown): Settings {
       hotkey: str(listen.hotkey, d.listen.hotkey, 60).trim(),
       wakeWord: str(listen.wakeWord, d.listen.wakeWord, 40).trim().toLowerCase() || d.listen.wakeWord,
       followUpSeconds: Math.round(num(listen.followUpSeconds, d.listen.followUpSeconds, 0, 60)),
+      pauseMs: Math.round(num(listen.pauseMs, d.listen.pauseMs, 300, 2500) / 100) * 100,
       bargeIn: bool(listen.bargeIn, d.listen.bargeIn),
       backchannel: bool(listen.backchannel, d.listen.backchannel),
       fillers: bool(listen.fillers, d.listen.fillers),
       micDevice: str(listen.micDevice, d.listen.micDevice, 200),
+    },
+    voices: {
+      enabled: bool(voices.enabled, d.voices.enabled),
+      onlyMe: bool(voices.onlyMe, d.voices.onlyMe),
+    },
+    appAudio: {
+      enabled: bool(appAudio.enabled, d.appAudio.enabled),
+      apps: strings(appAudio.apps, d.appAudio.apps, 8, 60).map((a) => a.replace(/\.exe$/i, "")),
     },
     face: {
       scale: Math.round(num(face.scale, d.face.scale, 0.5, 3) * 100) / 100,

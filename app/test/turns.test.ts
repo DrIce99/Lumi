@@ -64,7 +64,7 @@ class FakeStt implements SttBackend {
   }
 }
 
-function setup(mode: ListenMode, extra: Partial<Settings["listen"]> = {}) {
+function setup(mode: ListenMode, extra: Partial<Settings["listen"]> = {}, inCall = () => false) {
   const clock = new FakeClock();
   const stt = new FakeStt();
   const settings: Settings = { ...DEFAULT_SETTINGS, listen: { ...DEFAULT_SETTINGS.listen, mode, ...extra } };
@@ -83,6 +83,7 @@ function setup(mode: ListenMode, extra: Partial<Settings["listen"]> = {}) {
     speaking: () => speaking,
     setListening: (on) => listening.push(on),
     recentSpeech: () => recent,
+    inCall,
   };
   const turns = new TurnManager(host, clock);
   return {
@@ -132,8 +133,8 @@ test("pressing push-to-talk while Lumi talks interrupts it", () => {
   assert.equal(t.interrupts(), 1);
 });
 
-test("continuous listening: the turn ends after 500 ms of silence when the sentence is complete", () => {
-  const t = setup("continuous");
+test("continuous listening: the turn ends after the pause (here 500 ms) when the sentence is complete", () => {
+  const t = setup("continuous", { pauseMs: 500 });
   assert.deepEqual([t.lastControl().enabled, t.lastControl().autoStream], [true, true]);
   t.turns.mic({ type: "speech-start" });
   t.turns.mic({ type: "speech-confirmed" });
@@ -149,8 +150,22 @@ test("continuous listening: the turn ends after 500 ms of silence when the sente
   assert.deepEqual(t.said, ["Apri il file di configurazione."]);
 });
 
-test("an unfinished sentence waits up to 1.2 s, and resumed speech continues the same turn", () => {
+test("by default Lumi waits a full second of silence before answering", () => {
   const t = setup("continuous");
+  t.turns.mic({ type: "speech-start" });
+  t.turns.mic({ type: "speech-confirmed" });
+  t.frame();
+  t.stt.partial(1, "Apri il file di configurazione.");
+  t.turns.mic({ type: "speech-end", durationMs: 1800 });
+  // The VAD already waited 300 ms: 700 ms more
+  t.clock.advance(650);
+  assert.ok(!t.stt.log.includes("end 1"));
+  t.clock.advance(100);
+  assert.ok(t.stt.log.includes("end 1"));
+});
+
+test("an unfinished sentence waits longer (1.2 s for a 500 ms pause), and resumed speech continues the same turn", () => {
+  const t = setup("continuous", { pauseMs: 500 });
   t.turns.mic({ type: "speech-start" });
   t.turns.mic({ type: "speech-confirmed" });
   t.stt.partial(1, "Volevo chiederti se");
@@ -263,16 +278,20 @@ test("end-of-turn heuristics and Smart Turn probabilities", () => {
   assert.equal(trailingIncomplete("Allora,"), true);
   assert.equal(trailingIncomplete("Aspetta..."), true);
   assert.equal(trailingIncomplete(null), false);
-  assert.equal(requiredSilenceMs("Che ore sono?", null), 500);
-  assert.equal(requiredSilenceMs("Che ore sono e", null), 1200);
-  assert.equal(requiredSilenceMs("Che ore sono", 0.9), 500);
-  assert.equal(requiredSilenceMs("Che ore sono", 0.1), 1200);
-  assert.equal(requiredSilenceMs("Che ore sono", 0.5), 850);
-  assert.equal(requiredSilenceMs("Che ore sono?", 0.03), 850, "final punctuation tempers a pessimistic model");
-  assert.equal(requiredSilenceMs("Aspetta...", 0.9), 1200);
-  assert.equal(requiredSilenceMs("Che ore sono e", 0.95), 1200, "an unfinished last word wins over the model");
-  assert.equal(turnEnded(600, "Ok.", null), true);
-  assert.equal(turnEnded(600, "Ok ma", null), false);
+  assert.equal(requiredSilenceMs("Che ore sono?", null, 500), 500);
+  assert.equal(requiredSilenceMs("Che ore sono e", null, 500), 1200);
+  assert.equal(requiredSilenceMs("Che ore sono", 0.9, 500), 500);
+  assert.equal(requiredSilenceMs("Che ore sono", 0.1, 500), 1200);
+  assert.equal(requiredSilenceMs("Che ore sono", 0.5, 500), 850);
+  assert.equal(requiredSilenceMs("Che ore sono?", 0.03, 500), 850, "final punctuation tempers a pessimistic model");
+  assert.equal(requiredSilenceMs("Aspetta...", 0.9, 500), 1200);
+  assert.equal(requiredSilenceMs("Che ore sono e", 0.95, 500), 1200, "an unfinished last word wins over the model");
+  assert.equal(turnEnded(600, "Ok.", null, 500), true);
+  assert.equal(turnEnded(600, "Ok ma", null, 500), false);
+  // The default pause is longer, and grows the same way when the sentence sounds unfinished
+  assert.equal(requiredSilenceMs("Che ore sono?", null), 1000);
+  assert.equal(requiredSilenceMs("Che ore sono e", null), 2400);
+  assert.equal(requiredSilenceMs("Che ore sono e", null, 2500), 4000, "never more than 4 s");
   assert.equal(meaningless("Mmh."), true);
   assert.equal(meaningless("Eh, ok"), true);
   assert.equal(meaningless("Ok, apri il file"), false);
@@ -299,4 +318,25 @@ test("Groq gets a WAV file in a multipart body", () => {
   assert.match(contentType, /^multipart\/form-data; boundary=/);
   assert.match(text, /name="model"\r\n\r\nwhisper-large-v3-turbo/);
   assert.match(text, /filename="audio.wav"\r\nContent-Type: audio\/wav/);
+});
+
+test("during a call, continuous listening waits for the wake word (the user is talking to friends)", () => {
+  let call = true;
+  const t = setup("continuous", { pauseMs: 500 }, () => call);
+  const say = (id: number, text: string) => {
+    t.turns.mic({ type: "speech-start" });
+    t.turns.mic({ type: "speech-confirmed" });
+    t.frame();
+    t.stt.partial(id, text);
+    t.turns.mic({ type: "speech-end", durationMs: 1500 });
+    t.clock.advance(2000);
+    t.stt.final(id, text);
+  };
+  say(1, "Dai ragazzi, entriamo nella partita.");
+  assert.deepEqual(t.said, [], "said to the friends");
+  say(2, "Ehi Lumi, che ore sono?");
+  assert.deepEqual(t.said, ["che ore sono?"]);
+  call = false;
+  say(3, "Apri il file di configurazione.");
+  assert.equal(t.said[t.said.length - 1], "Apri il file di configurazione.", "after the call, continuous again");
 });

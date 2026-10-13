@@ -39,6 +39,7 @@ export const IPC = {
   settingsPickVoice: "settings:pick-voice",
   settingsForget: "settings:forget",
   settingsClear: "settings:clear",
+  settingsForgetVoice: "settings:forget-voice",
   settingsOpenData: "settings:open-data",
   settingsRestartSidecar: "settings:restart-sidecar",
   // main -> settings window

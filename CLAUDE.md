@@ -43,8 +43,13 @@ Work one roadmap phase at a time; finish each with checks green.
   candidates `{ rect, kind, salience, t }` in screen DIP coordinates;
   `attention.ts` (pure) picks the gaze target with decay and hysteresis;
   `reading.ts` (pure) turns OCR lines into a fixation sequence.
-  `desktopCapturer` works in physical pixels: convert with
+  Screen captures work in physical pixels: convert with
   `screen.screenToDipRect` / `dipToScreenRect`, per display.
+- Never block the main thread: `setIgnoreMouseEvents(…, { forward: true })`
+  installs a low-level mouse hook there, so any stall freezes the whole
+  system pointer. That's why screen captures (change detection and
+  `look_at_screen`) are taken by the sidecar (`/screen/luma`,
+  `/screen/jpeg`): `desktopCapturer.getSources` blocked ~400 ms per call.
 - OCR runs only on changed regions, never on the full screen every frame.
   The vision model (`look_at_screen`) is on demand only; gaze never waits
   for it. Grounding "look at X" = fuzzy match of X against OCR/UIA text.
@@ -70,13 +75,19 @@ Work one roadmap phase at a time; finish each with checks green.
 - Barge-in: user speech > 300 ms while speaking → 80 ms fade-out, cancel
   TTS (`{ cancel: id }`) and the LLM stream, and store in history only the
   text actually played, marked as interrupted. Track played text per chunk.
-- End of turn = VAD silence (500 ms) + semantic check (Smart Turn or the
-  trailing-word heuristic in `endpoint.ts`), max wait 1.2 s.
+- End of turn = VAD silence (`listen.pauseMs`, 1 s by default, set in the
+  settings) + semantic check (Smart Turn or the trailing-word heuristic in
+  `endpoint.ts`); an unfinished-sounding turn waits 2.4x the pause, max 4 s.
+  The user found 500 ms too eager: Lumi answered mid-thought.
 - Text sent to TTS is normalized to spoken Italian first
   (`sidecar/text/normalize_it.py`): numbers, dates, times, currency,
   acronyms, URLs, emoji.
 - Voice identity must stay stable across sentences: fixed speaker + seed
   (Qwen3-TTS) or the same reference clip (Chatterbox).
+  Qwen3-TTS Base (cloning) gets no emotion instruction: it isn't trained
+  for one and the timbre drifted with each emotion. The clip itself
+  matters most: 10-20 s of one clean voice (a long compilation of roles
+  averages into an unstable voice).
 - Backchannel and filler clips are pre-generated at startup with the
   current voice and cached; they never go through the LLM.
 
@@ -98,7 +109,12 @@ Work one roadmap phase at a time; finish each with checks green.
   `look_at_screen` subject to `sendScreenshots` (`never|ask|always`).
 - Perception pauses for apps in `pauseInApps`, private browser windows,
   locked screen, user away > 5 min, "Non disturbare".
-- Logs never contain audio or OCR text unless `LUMI_DEBUG_PERCEPTION=1`.
+- Logs never contain audio or OCR text unless `LUMI_DEBUG_PERCEPTION=1`
+  (the same goes for transcripts of other apps' audio).
+- Other apps' audio (`appAudio`, off by default) is captured and transcribed
+  only in the sidecar, with the local STT; only the transcribed lines reach
+  the prompt. Voiceprints (`voices.json`) never leave the main process
+  (the settings window gets labels, not vectors).
 - API keys encrypted with DPAPI (as in Pixel Pet); env vars
   `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY` also accepted.
 
@@ -130,7 +146,9 @@ Work one roadmap phase at a time; finish each with checks green.
   The wake word is spotted in transcripts (`voice/wakeWord.ts`, fuzzy), so
   "Ehi Lumi" works without training an openWakeWord model.
 - OCR: the app sends the changed rectangle (physical px) and the sidecar
-  captures it with `mss` (`POST /ocr {region}`); PNG/BGRA images are still
+  captures it with GDI BitBlt without CAPTUREBLT (`sidecar/screen.py`: that
+  flag makes the mouse pointer stutter at every capture; `POST /ocr
+  {region}`); PNG/BGRA images are still
   accepted. The sidecar process is per-monitor DPI aware.
 - Smart Turn v3.2 (`sidecar/turn/`): Whisper log-mel features computed in
   numpy (checked against WhisperFeatureExtractor in tests), so the light
@@ -150,13 +168,37 @@ Work one roadmap phase at a time; finish each with checks green.
   M4B with chapters via ffmpeg, else WAV. `POST/GET/DELETE /tts/batch`.
 - Gemma 4 through Ollama writes many say calls as text instead of calling
   the tool (5 of 12 in a probe): `say{emotion:<|"|>gioia<|"|>,text:<|"|>…<|"|>}`,
-  `say(emotion:gioia,text: "…")` or with unquoted text.
+  `say(emotion:gioia,text: "…")`, with unquoted text, positional
+  (`say("gioia", "…", 0.8, "")`: required parameters first) or after an
+  English preamble (dropped). Any leak that reaches the spoken history gets
+  imitated by the model in later turns, so it snowballs.
   `brain/providers/textCalls.ts` reads them back, also while streaming
   (values only grow, so live speech never takes words back), and the
   history keeps them as real calls. Ollama hands over real tool calls only
   when complete, so they don't stream: the first sentence waits for the end
   of the reply. `main/ollama.ts` starts the local Ollama server when a
   brain choice uses it.
+
+- Memory: every conversation line also goes to `archive.jsonl` (appends
+  serialized in a promise chain: concurrent `appendFile` reorders lines).
+  Lines that leave the 16-line window are summarized into episodes by the
+  "idle" model between moments (`Brain.writeEpisode`, JSON with summary +
+  facts; requests to Lumi are not facts). `recall.ts` is BM25 on stemmed
+  Italian, a hit needs half of the query's meaningful words; recall finds
+  `<recalled>` automatically for every message plus the `recall` tool.
+- Voices: `sidecar/voiceprint.py` runs WeSpeaker ResNet34 (VoxCeleb) with
+  onnxruntime and Kaldi fbank in numpy (checked against torchaudio), not
+  sherpa-onnx (it bundles onnxruntime 1.17, which clashes with the newer
+  DLL the other engines load). Thresholds in `voice/speakers.ts`: same
+  voice >= 0.55, new < 0.40 (measured: same vs average >= 0.69, different
+  <= 0.67 on Kokoro voices; Discord-like test: same 0.67-0.81, different
+  0.11). The first mic voice is the owner; uncertain counts as the user.
+- App audio: `sidecar/appaudio.py` uses WASAPI process loopback (include
+  tree) through comtypes. comtypes must be imported before the capture
+  thread starts (`_com()` in `start()`), or CoInitializeEx fails with
+  RPC_E_CHANGED_MODE. Windows captures nothing from a tree that contains
+  the capturing process, so tests must play from a process outside the
+  sidecar's tree (PowerShell SoundPlayer), not a Python child.
 
 ## Debug aids (env vars)
 
@@ -167,7 +209,8 @@ of candidates and target), `LUMI_DEBUG_PERCEPTION=1`,
 `LUMI_DEBUG_HEAR=<file.wav>` (PCM16 WAV fed to the turn manager as if
 spoken with push-to-talk: tests STT → brain → TTS without a microphone),
 `LUMI_DEBUG_CAPTURE=<prefix>` (PNG frames of the face window),
-`LUMI_DEBUG_VISIBLE=1` (no content protection: real screenshots show the
+`LUMI_DEBUG_LAG=1` (logs main-thread delay every 5 s and each capture's
+time and changes), `LUMI_DEBUG_VISIBLE=1` (no content protection: real screenshots show the
 face, to check it on screen),
 `LUMI_DEBUG_SETTINGS=<tab>` (opens the settings on a tab; captured with
 LUMI_DEBUG_CAPTURE). Logs: `%APPDATA%\Lumi\logs\` (`lumi.log`,

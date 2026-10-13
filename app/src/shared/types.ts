@@ -56,10 +56,24 @@ export interface Settings {
     wakeWord: string;
     /** After an answer Lumi keeps listening this long without hotkey or wake word (0 = off). */
     followUpSeconds: number;
+    /** Silence after a finished sentence before Lumi answers (longer when it sounds unfinished). */
+    pauseMs: number;
     bargeIn: boolean;
     backchannel: boolean;
     fillers: boolean;
     micDevice: string;
+  };
+  /** Recognizing voices (voiceprints stay on this computer). */
+  voices: {
+    enabled: boolean;
+    /** At the microphone, answer only the owner's voice (others are heard as context). */
+    onlyMe: boolean;
+  };
+  /** Listening to other apps (a Discord call): their audio is transcribed on this computer. */
+  appAudio: {
+    enabled: boolean;
+    /** Executable names, e.g. "Discord". */
+    apps: string[];
   };
   face: { scale: number; color: string; subtitles: boolean };
   perception: {
@@ -87,7 +101,7 @@ export const DEFAULT_SETTINGS: Settings = {
   userName: "",
   personality: "",
   brain: {
-    chat: { provider: "groq", model: "llama-3.3-70b-versatile" },
+    chat: { provider: "groq", model: "openai/gpt-oss-120b" },
     idle: { provider: "ollama", model: "qwen3" },
     vision: { provider: "gemini", model: "" },
     ollamaUrl: DEFAULT_OLLAMA_URL,
@@ -100,11 +114,14 @@ export const DEFAULT_SETTINGS: Settings = {
     hotkey: "Control+Alt+Space",
     wakeWord: "ehi lumi",
     followUpSeconds: 8,
+    pauseMs: 1000,
     bargeIn: true,
     backchannel: true,
     fillers: true,
     micDevice: "",
   },
+  voices: { enabled: true, onlyMe: false },
+  appAudio: { enabled: false, apps: ["Discord"] },
   face: { scale: 1, color: "#F5F3EE", subtitles: false },
   perception: {
     enabled: true,
@@ -335,6 +352,19 @@ export interface SettingsSnapshot {
   /** Detected with nvidia-smi, for the profile wizard. */
   gpu: GpuInfo | null;
   voices: Partial<Record<TtsEngine, string[]>>;
+  /** Voices Lumi recognizes (no voiceprints: they never leave the main process). */
+  knownVoices: KnownVoice[];
+  /** Listened apps and their state ("in ascolto", "chiusa", "errore: ..."). */
+  appAudioStatus: Record<string, string>;
+}
+
+export interface KnownVoice {
+  id: string;
+  label: string;
+  owner: boolean;
+  via: string[];
+  samples: number;
+  lastHeard: string;
 }
 
 export interface ConnectionReport {
@@ -354,6 +384,7 @@ export interface SettingsBridge {
   pickVoiceFile(): Promise<string | null>;
   forgetFact(id: string): Promise<SettingsSnapshot>;
   clearMemory(): Promise<SettingsSnapshot>;
+  forgetVoice(id: string): Promise<SettingsSnapshot>;
   openDataFolder(): Promise<void>;
   restartSidecar(): Promise<SettingsSnapshot>;
   onStatus(cb: (status: SidecarStatus) => void): void;

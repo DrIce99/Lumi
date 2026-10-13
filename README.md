@@ -37,7 +37,9 @@ L'obiettivo è che sembri **il più umano possibile**, cioè con poca latenza, t
 - **Voce espressiva in italiano**: emozioni decise dal modello e applicate sia alla voce sia agli occhi.
 - **Vede lo schermo**: legge il testo con l'OCR locale in tempo reale e, quando serve, manda uno screenshot a un modello con visione.
 - **Cervello a scelta**: Ollama in locale, Google Gemini, Groq, OpenRouter (modelli `:free`) o qualsiasi API compatibile OpenAI (LM Studio…).
-- **Memoria persistente** e **momenti autonomi** (commenti spontanei nelle pause), come in Pixel Pet.
+- **Memoria persistente** e **momenti autonomi** (commenti spontanei nelle pause), come in Pixel Pet. Ogni frase della conversazione finisce in un archivio locale (`archive.jsonl`): le parti più vecchie vengono riassunte in "episodi" che restano nel contesto, i fatti importanti su di te vengono estratti da soli, e a ogni domanda Lumi cerca nel suo passato i ricordi collegati (ricerca BM25 sull'italiano, tutta sul PC; tool `recall` per le ricerche esplicite, "ti ricordi quando…").
+- **Riconosce le voci**: un piccolo modello (WeSpeaker ResNet34, ONNX su CPU) misura l'"impronta" di ogni frase. La prima voce sentita al microfono è la tua; le altre diventano "Voce 2", "Voce 3"… finché non dici a Lumi chi sono ("quello che ha parlato è Marco", tool `name_voice`). Le impronte restano in `voices.json` e si cancellano dalle impostazioni.
+- **Ascolta l'audio delle app** (facoltativo, spento di default): per esempio i tuoi amici su Discord. Windows cattura solo l'audio di quelle app (process loopback), mai la voce di Lumi, la musica o i video; il sidecar lo divide in frasi, lo trascrive in locale e riconosce chi parla. Le frasi entrano nella conversazione come contesto; Lumi risponde a un amico solo se lo chiama per nome, e durante una chiamata l'ascolto continuo aspetta la parola di attivazione.
 - **Modalità lettura / audiolibri** (fase successiva): lo stesso motore TTS converte testi lunghi in audio.
 
 ---
@@ -137,7 +139,7 @@ Il volto si disegna su `<canvas>` (o SVG) nel renderer, a 60 fps solo mentre qua
 | Puntatore e finestra in primo piano (koffi: `GetCursorPos`, `GetForegroundWindow`) | posizione del mouse, finestra attiva | 30–60 Hz | nullo |
 | **Caret** (koffi: `GetGUIThreadInfo`; UIA `TextPattern2` per Chrome, VS Code ed Electron, che non usano il caret di sistema) | dove stai scrivendo | 20 Hz / a eventi | nullo |
 | **UI Automation** (eventi di focus, testo e rettangoli dell'elemento attivo) | campo con il focus, testo selezionato | a eventi | basso |
-| **Rilevamento cambiamenti** (`desktopCapturer` a bassa risoluzione, differenza tra blocchi 32×32) | rettangoli delle zone che sono cambiate | 4–5 fps | basso |
+| **Rilevamento cambiamenti** (cattura a bassa risoluzione fatta dal sidecar, differenza tra blocchi 32×32) | rettangoli delle zone che sono cambiate | 4–5 fps | basso |
 | **OCR locale** solo sulle zone cambiate (Windows OCR, con fallback RapidOCR) | parole e righe con i loro rettangoli | 1–2 fps | medio |
 | Modello con visione (`look_at_screen`) | comprensione del contenuto | su richiesta | alto |
 
@@ -175,7 +177,7 @@ Per far "guardare" qualcosa a Lumi mentre ne parla, il modello usa il tool `look
 
 ### Note
 
-- **DPI**: `desktopCapturer` lavora in pixel fisici, mentre Electron usa pixel indipendenti dal dispositivo (DIP). Conviene convertire sempre con `screen.dipToScreenRect` / `screenToDipRect` e lavorare per singolo monitor.
+- **DPI**: le catture dello schermo lavorano in pixel fisici, mentre Electron usa pixel indipendenti dal dispositivo (DIP). Conviene convertire sempre con `screen.dipToScreenRect` / `screenToDipRect` e lavorare per singolo monitor.
 - **Più monitor**: si cattura solo il monitor con la finestra attiva, più quello in cui si trova Lumi.
 - **Prestazioni**: l'OCR va solo sulle zone cambiate e mai su tutto lo schermo a ogni fotogramma. La percezione si mette in pausa quando lo schermo è bloccato, quando l'utente è assente da più di 5 minuti o in modalità "Non disturbare".
 
@@ -194,7 +196,7 @@ microfono ─► AEC del browser ─► VAD (Silero) ─► STT in streaming ─
 ### Perché sembri umano
 
 - **Latenza**: l'obiettivo è meno di 1 s tra la fine della tua frase e l'inizio della risposta. Per arrivarci tutto procede in streaming: l'LLM genera, il testo viene **diviso in frasi** (punteggiatura, oppure una virgola dopo 60 caratteri) e ogni frase passa subito al TTS. La prima frase va sintetizzata il prima possibile.
-- **Fine del turno**: il solo silenzio non basta, perché le persone fanno pause a metà frase. Si combinano il VAD (silenzio oltre 500 ms) e un controllo semantico: un modello di turn detection come *Smart Turn* di Pipecat, oppure un'euristica sull'ultima parola ("e", "ma", "quindi" → aspetta). Se il turno è incerto, l'attesa arriva fino a 1,2 s.
+- **Fine del turno**: il solo silenzio non basta, perché le persone fanno pause a metà frase. Si combinano il VAD (silenzio oltre la «pausa prima di rispondere», 1 s di default e regolabile nelle impostazioni) e un controllo semantico: un modello di turn detection come *Smart Turn* di Pipecat, oppure un'euristica sull'ultima parola ("e", "ma", "quindi" → aspetta). Se il turno sembra lasciato a metà, l'attesa cresce fino a 2,4 volte la pausa (al massimo 4 s).
 - **Interruzioni (barge-in)**: se il VAD rileva la tua voce mentre Lumi parla per più di 300 ms, la riproduzione si ferma con una dissolvenza di 80 ms, lo stream dell'LLM viene annullato e **nella cronologia resta solo la parte effettivamente pronunciata**, segnata come interrotta.
 - **Cancellazione dell'eco**: l'audio TTS si riproduce **nel renderer** (WebAudio), nello stesso processo di `getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })`, così l'AEC di Chromium ha il riferimento. Le cuffie restano comunque l'opzione più affidabile.
 - **Segnali di ascolto (backchannel)**: durante le tue frasi lunghe, nelle pause brevi, Lumi a volte fa un "mh", un "sì" o un "ah" a basso volume, da clip pre-generate con la sua voce e senza passare dall'LLM. Gli occhi annuiscono con un piccolo movimento verticale.
@@ -315,7 +317,7 @@ lumi/
 │  │  ├─ sidecar.ts            spawn, health check, riavvio
 │  │  ├─ perception/
 │  │  │  ├─ desktop.ts         koffi: finestre, foreground, cursore, caret
-│  │  │  ├─ capture.ts         desktopCapturer + diff a blocchi
+│  │  │  ├─ capture.ts         frame dal sidecar + diff a blocchi
 │  │  │  ├─ attention.ts       candidati → bersaglio dello sguardo (puro, testato)
 │  │  │  ├─ reading.ts         simulazione della lettura (puro, testato)
 │  │  │  └─ context.ts         riassunto percettivo per il prompt
@@ -360,6 +362,9 @@ Il sidecar ascolta solo su `127.0.0.1`, con una porta casuale e un token generat
 | `/stt` | WS | PCM 16 kHz → `{ partial }` / `{ final, words[] }` |
 | `/tts` | WS | `{ id, text, emotion, intensity }` → blocchi PCM + `{ id, done }`; `{ cancel: id }` |
 | `POST /ocr` | HTTP | PNG + rettangoli → `{ lines: [{ text, rect, words[] }] }` |
+| `POST /screen/luma` | HTTP | rettangoli dei monitor → fotogrammi in scala di grigi (~640 px) per il rilevamento dei cambiamenti |
+| `POST /screen/jpeg` | HTTP | rettangolo di un monitor → JPEG per `look_at_screen` |
+| `/apps` | WS | `{ apps: ["Discord"] }` → `{ type: "status", apps }` e, per ogni frase sentita in quelle app, `{ type: "heard", app, text, voiceprint }` |
 | `/uia` | WS | → eventi `{ focus, caret, selection }` con rettangoli |
 | `POST /tts/batch` | HTTP | testo lungo → file audio (modalità audiolibro) |
 
@@ -395,6 +400,9 @@ Il sidecar ascolta solo su `127.0.0.1`, con una porta casuale e un token generat
 - La percezione si **ferma da sola** nelle app indicate in `pauseInApps`, nelle finestre in incognito e con lo schermo bloccato.
 - Sui piani gratuiti alcuni servizi (per esempio Gemini) possono usare i dati inviati per migliorare i propri modelli: verificane le condizioni prima di usarli con dati di lavoro.
 - **Clonazione della voce**: usa solo la tua voce o voci per cui hai il consenso.
+- **Audio delle app** (spento di default): l'audio viene trascritto sul PC e serve il riconoscimento vocale locale (non Groq); le frasi trascritte entrano nel contesto e quindi vanno al servizio di IA scelto per il cervello. Avvisa le persone in chiamata che Lumi le ascolta.
+- **Impronte vocali**: sono dati biometrici, restano in `voices.json` sul PC e si cancellano una per una (o con "Dimentica tutto") dalla scheda Memoria.
+- **Archivio della conversazione** (`archive.jsonl`): resta sul PC; "Dimentica tutto" lo svuota.
 - I log di debug non salvano né l'audio né il testo OCR, a meno che non si attivi `LUMI_DEBUG_PERCEPTION=1`.
 
 ---

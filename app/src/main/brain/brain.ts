@@ -8,9 +8,9 @@
 // look_at_screen, whose screenshot the model needs to see.
 import type { Emotion } from "../../shared/emotions";
 import { PROVIDERS } from "../../shared/providers";
-import type { Settings } from "../../shared/types";
+import { FACT_KINDS, type FactKind, type Settings } from "../../shared/types";
 import { log } from "../log";
-import type { Memory } from "./memory";
+import { RECENT_LINES, speakerLabel, type ConversationEntry, type Memory } from "./memory";
 import { buildContext, buildSystemPrompt, type Situation, type Trigger } from "./prompt";
 import { ProviderError, type ChatProvider, type LiveSay, type MomentSession, type ToolCallOut, type ToolResultIn } from "./providers/types";
 import { parseToolCall, type LookRegion, type ToolCall } from "./tools";
@@ -59,9 +59,44 @@ export interface BrainHost {
   quiet(minutes: number | undefined): void;
   /** Delays autonomous moments after rate limits and outages. */
   backOff(minutes: number): void;
+  /** Names a recognized voice; returns what happened, for the model. */
+  nameVoice?(voice: string, name: string): string;
 }
 
 const MAX_ROUNDS = 4;
+/** Facts an episode summary may add at once (a small model can get carried away). */
+const MAX_EPISODE_FACTS = 4;
+
+const EPISODE_SYSTEM = `You keep the long-term memory of Lumi, a voice assistant that lives on the user's screen.
+You get a stretch of conversation. Reply with only a JSON object:
+{"summary": "...", "facts": [{"fact": "...", "kind": "user|work|preference|event"}]}
+- summary: Italian, two to four short sentences in first person as Lumi, calling the user by name: what was talked about, decided, asked or promised, with names, places and dates. Enough to pick the thread up again later.
+- facts: durable things about the user's life worth remembering for weeks: who they are, people around them, their work and projects, tastes and habits, upcoming events with their date. Third person, one short Italian sentence each, like "Ha una sorella, Giulia, che vive a Milano.".
+  Not facts: requests to you, what they asked you to do or change, opinions about you, small talk, anything sensitive (passwords, health, money). Never repeat or contradict what is already known: if the user corrected something, write the correction only when they said it clearly. Usually zero or one fact.`;
+
+/** Reads the episode summarizer's reply; a plain-text reply is taken as the summary. */
+export function parseEpisodeReply(text: string): { summary: string; facts: { fact: string; kind: FactKind }[] } {
+  const json = /\{[\s\S]*\}/.exec(text)?.[0];
+  if (json) {
+    try {
+      const o = JSON.parse(json) as { summary?: unknown; facts?: unknown };
+      const summary = typeof o.summary === "string" ? o.summary.trim() : "";
+      const facts = (Array.isArray(o.facts) ? o.facts : [])
+        .map((f) => (typeof f === "string" ? { fact: f } : (f as { fact?: unknown; kind?: unknown })))
+        .filter((f): f is { fact: string; kind?: unknown } => typeof f?.fact === "string" && f.fact.trim().length > 3)
+        .map((f) => ({ fact: f.fact.trim(), kind: (FACT_KINDS as string[]).includes(String(f.kind)) && f.kind !== "note" ? (f.kind as FactKind) : "user" }))
+        .slice(0, MAX_EPISODE_FACTS);
+      if (summary) return { summary, facts };
+    } catch {
+      // not JSON after all
+    }
+  }
+  return { summary: text.replace(/```\w*/g, "").trim(), facts: [] };
+}
+
+function transcript(entries: ConversationEntry[], user: string): string {
+  return entries.map((e) => `${speakerLabel(e, user)}${e.via ? ` (${e.via})` : ""}: ${e.text}`).join("\n");
+}
 
 export class Brain {
   private busy = false;
@@ -71,6 +106,7 @@ export class Brain {
   private interrupted = false;
   private readonly queue: Trigger[] = [];
   private authFailed = false;
+  private compacting = false;
 
   constructor(private readonly host: BrainHost) {}
 
@@ -121,6 +157,52 @@ export class Brain {
       this.speech = null;
       const next = this.queue.shift();
       if (next) void this.handle(next);
+      else void this.writeEpisode();
+    }
+  }
+
+  /**
+   * Summarizes the conversation that left the recent window into an
+   * episode, picking out durable facts on the way. Runs between moments,
+   * with the model for autonomous moments (usually the local one).
+   */
+  async writeEpisode(): Promise<void> {
+    if (this.compacting) return;
+    const memory = this.host.memory;
+    const entries = memory.pendingEpisode();
+    if (!entries) return;
+    this.compacting = true;
+    try {
+      const user = this.host.settings().userName || "Utente";
+      const chosen = this.authFailed ? null : this.host.provider("idle");
+      let summary = "";
+      let facts: { fact: string; kind: FactKind }[] = [];
+      if (chosen) {
+        const known = memory.facts().map((f) => `- ${f.text}`).join("\n") || "(nothing yet)";
+        try {
+          const result = await chosen.provider.complete({
+            model: chosen.model,
+            system: EPISODE_SYSTEM,
+            prompt: `The user's name: ${user}\nAlready known about the user:\n${known}\n\nConversation (${entries[0].at.slice(0, 16)} - ${entries[entries.length - 1].at.slice(0, 16)}):\n${transcript(entries, user)}`,
+          });
+          ({ summary, facts } = parseEpisodeReply(result.text));
+        } catch (err) {
+          log.warn("Episode summary failed", err);
+          return;
+        }
+      } else {
+        // No model available: keep at least what was said to Lumi, so the window can move on
+        summary = entries
+          .filter((e) => e.who !== "lumi")
+          .map((e) => e.text)
+          .join(" / ")
+          .slice(0, 600);
+      }
+      const episode = memory.addEpisode(entries, summary);
+      for (const f of facts) memory.remember(f.fact, f.kind);
+      if (episode) log.info(`Episode ${episode.id}: ${entries.length} lines summarized, ${facts.length} new facts`);
+    } finally {
+      this.compacting = false;
     }
   }
 
@@ -133,17 +215,18 @@ export class Brain {
   async writeDiary(): Promise<void> {
     const settings = this.host.settings();
     for (const day of this.host.memory.pendingDiaryDays()) {
-      let summary = `Abbiamo scambiato ${day.entries.length} messaggi.`;
+      let summary = day.episodes.map((e) => e.summary).join(" ") || `Abbiamo scambiato ${day.entries.length} messaggi.`;
       const chosen = this.authFailed ? null : this.host.provider("idle");
-      if (chosen && day.entries.length >= 2) {
+      if (chosen && day.entries.length + day.episodes.length >= 2) {
         const user = settings.userName || "Utente";
-        const transcript = day.entries.map((e) => `${e.who === "user" ? user : "Lumi"}: ${e.text}`).join("\n");
+        const earlier = day.episodes.map((e) => `(earlier, summarized) ${e.summary}`);
+        const text = [...earlier, transcript(day.entries.slice(-120), user)].filter(Boolean).join("\n");
         try {
           const result = await chosen.provider.complete({
             model: chosen.model,
             system:
               "You keep the diary of Lumi, a voice assistant that lives on the user's screen. Summarize the day in Italian, in two to four short sentences written in first person as Lumi: what the user did, said or felt, and anything worth remembering tomorrow. Output only the summary.",
-            prompt: `Conversation of ${day.date}:\n${transcript}`,
+            prompt: `Conversation of ${day.date}:\n${text}`,
           });
           if (result.text) summary = result.text;
         } catch (err) {
@@ -164,10 +247,15 @@ export class Brain {
       facts: host.memory.facts(),
       reminders: host.memory.reminders(),
       diary: host.memory.diary(),
-      conversation: host.memory.recentConversation(16),
+      episodes: host.memory.recentEpisodes(),
+      recalled: isMessage ? host.memory.search(trigger.text, 3, settings.userName || "Utente") : [],
+      conversation: host.memory.recentConversation(RECENT_LINES),
       trigger,
     });
-    if (isMessage) host.memory.addMessage("user", trigger.text);
+    if (isMessage) {
+      if (trigger.speaker) host.memory.addMessage("other", trigger.text, false, { name: trigger.speaker });
+      else host.memory.addMessage("user", trigger.text);
+    }
 
     const chosen = this.authFailed ? null : host.provider(isMessage ? "chat" : "idle");
     if (!chosen) {
@@ -282,10 +370,17 @@ export class Brain {
         return done(`Saved as [${memory.remember(call.fact, call.kind).id}].`);
       case "forget":
         return done(memory.forget(call.id) ? `Forgot [${call.id}].` : `There is no memory with id ${call.id}.`);
+      case "recall": {
+        const hits = memory.search(call.query, 5, this.host.settings().userName || "Utente");
+        if (!hits.length) return done("Nothing found in your memory about that.");
+        return done(hits.map((h) => `[${h.doc.at.slice(0, 16).replace("T", " ")}] ${h.doc.text}`).join("\n---\n"));
+      }
       case "set_reminder": {
         const reminder = memory.addReminder(call.text, call.due);
         return done(`Reminder [${reminder.id}] set for ${call.due.toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.`);
       }
+      case "name_voice":
+        return done(this.host.nameVoice ? this.host.nameVoice(call.voice, call.person) : "You can't recognize voices now.");
       case "stay_quiet":
         this.host.quiet(call.minutes);
         return done("Staying quiet.");

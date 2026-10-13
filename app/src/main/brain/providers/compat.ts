@@ -71,7 +71,14 @@ export const TOOL_SPECS: ToolSpec[] = TOOLS.map((t) => ({
 }));
 
 /** Tool and parameter names, to read calls a model wrote as text. */
-const TOOL_SHAPES: ToolShapes = new Map(TOOL_SPECS.map((t) => [t.name, Object.keys((t.parameters.properties ?? {}) as Record<string, unknown>)]));
+const TOOL_SHAPES: ToolShapes = new Map(
+  TOOL_SPECS.map((t) => {
+    // Required parameters first: that's the order models use for values without a key
+    const required = (t.parameters.required ?? []) as string[];
+    const all = Object.keys((t.parameters.properties ?? {}) as Record<string, unknown>);
+    return [t.name, [...required, ...all.filter((p) => !required.includes(p))]];
+  }),
+);
 
 function withoutAdditionalProperties(schema: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};

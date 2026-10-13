@@ -369,6 +369,12 @@ function fill(next: SettingsSnapshot): void {
   $("doNotDisturb").checked = s.doNotDisturb;
   $("muted").checked = s.muted;
   $("subtitles").checked = s.face.subtitles;
+  $("voicesEnabled").checked = s.voices.enabled;
+  $("onlyMe").checked = s.voices.onlyMe;
+  $("appAudioEnabled").checked = s.appAudio.enabled;
+  $<HTMLTextAreaElement>("appAudioApps").value = s.appAudio.apps.join("\n");
+  const appStatus = Object.entries(next.appAudioStatus);
+  $<HTMLElement>("appAudioStatus").textContent = appStatus.length ? `Adesso: ${appStatus.map(([app, state]) => `${app} ${state}`).join(", ")}.` : "";
   $("scale").value = String(s.face.scale);
   $("color").value = s.face.color.toLowerCase();
   $("chatHotkey").value = s.chatHotkey;
@@ -386,6 +392,7 @@ function fill(next: SettingsSnapshot): void {
   $("hotkey").value = s.listen.hotkey;
   $("wakeWord").value = s.listen.wakeWord;
   $("followUpSeconds").value = String(s.listen.followUpSeconds);
+  $("pauseMs").value = String(s.listen.pauseMs);
   $("bargeIn").checked = s.listen.bargeIn;
   $("backchannel").checked = s.listen.backchannel;
   $("fillers").checked = s.listen.fillers;
@@ -409,7 +416,7 @@ function fill(next: SettingsSnapshot): void {
   $<HTMLSelectElement>("sendScreenshots").value = s.perception.sendScreenshots;
   $<HTMLTextAreaElement>("pauseInApps").value = s.perception.pauseInApps.join("\n");
 
-  for (const id of ["scale", "followUpSeconds", "speed", "volume", "captureFps", "ocrFps"]) $(id).dispatchEvent(new Event("input"));
+  for (const id of ["scale", "followUpSeconds", "pauseMs", "speed", "volume", "captureFps", "ocrFps"]) $(id).dispatchEvent(new Event("input"));
 
   listItems(
     "facts",
@@ -425,6 +432,15 @@ function fill(next: SettingsSnapshot): void {
     "diary",
     [...next.diary].reverse().map((d) => ({ tag: d.date, text: d.summary })),
     "Il diario si riempie giorno dopo giorno.",
+  );
+  listItems(
+    "knownVoices",
+    next.knownVoices.map((v) => ({
+      tag: v.owner ? "la tua" : v.via.filter((x) => x !== "mic").join(", ") || "microfono",
+      text: `${v.label} - sentita ${v.samples} ${v.samples === 1 ? "volta" : "volte"}, l'ultima ${new Date(v.lastHeard).toLocaleString("it-IT", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`,
+      action: () => void api.forgetVoice(v.id).then(fill),
+    })),
+    "Nessuna voce ancora.",
   );
   renderStatus(next.sidecar);
   $<HTMLElement>("dataPath").textContent = `Impostazioni, memoria, modelli e log sono in ${next.dataPath}.`;
@@ -451,6 +467,14 @@ function collect(): Settings {
     chatHotkey: $("chatHotkey").value,
     launchAtLogin: $("launchAtLogin").checked,
     face: { scale: num("scale", s.face.scale), color: $("color").value, subtitles: $("subtitles").checked },
+    voices: { enabled: $("voicesEnabled").checked, onlyMe: $("onlyMe").checked },
+    appAudio: {
+      enabled: $("appAudioEnabled").checked,
+      apps: $<HTMLTextAreaElement>("appAudioApps")
+        .value.split(/\n|,/)
+        .map((a) => a.trim())
+        .filter(Boolean),
+    },
     brain: {
       chat: choice("chat"),
       idle: choice("idle"),
@@ -463,6 +487,7 @@ function collect(): Settings {
       hotkey: $("hotkey").value,
       wakeWord: $("wakeWord").value,
       followUpSeconds: num("followUpSeconds", s.listen.followUpSeconds),
+      pauseMs: num("pauseMs", s.listen.pauseMs),
       bargeIn: $("bargeIn").checked,
       backchannel: $("backchannel").checked,
       fillers: $("fillers").checked,
@@ -527,6 +552,7 @@ async function save(announce = true): Promise<void> {
 }
 
 bindOutput("scale", "scaleOut", (v) => `×${v.toFixed(1)}`);
+bindOutput("pauseMs", "pauseOut", (v) => `${(v / 1000).toLocaleString("it-IT", { minimumFractionDigits: 1 })} s`);
 bindOutput("followUpSeconds", "followUpOut", (v) => (v ? `${v} s` : "niente (serve sempre il tasto o la parola)"));
 bindOutput("speed", "speedOut", (v) => `×${v.toFixed(2)}`);
 bindOutput("volume", "volumeOut", (v) => `${Math.round(v * 100)}%`);

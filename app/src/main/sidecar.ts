@@ -178,6 +178,23 @@ export class Sidecar extends EventEmitter<{ status: [SidecarStatus]; ready: [Sid
     return (await res.json()) as T;
   }
 
+  /** POST with a JSON body and a binary answer (screen frames). */
+  async requestBinary(path: string, body: unknown, timeoutMs = 5_000): Promise<{ data: Uint8Array; headers: Headers }> {
+    const endpoint = this.current;
+    if (!endpoint) throw new Error("sidecar not running");
+    const res = await fetch(`${endpoint.url}${path}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${endpoint.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(`sidecar ${path}: ${res.status} ${detail.slice(0, 300)}`);
+    }
+    return { data: new Uint8Array(await res.arrayBuffer()), headers: res.headers };
+  }
+
   /** WebSocket URL of an endpoint, with the token. */
   socketUrl(path: string): string | null {
     const endpoint = this.endpoint();

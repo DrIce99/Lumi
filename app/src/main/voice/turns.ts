@@ -7,14 +7,14 @@
 // (endpoint.ts). If the user speaks over Lumi for more than ~300 ms
 // (barge-in), the voice and the model stop and the new utterance is heard.
 import type { ListenMode, MicControl, MicEvent, Settings } from "../../shared/types";
-import { MAX_SILENCE_MS, meaningless, requiredSilenceMs } from "./endpoint";
+import { meaningless, requiredSilenceMs, silenceRange } from "./endpoint";
 import type { SttFinal, SttHandlers } from "./sttClient";
 import { matchWakeWord } from "./wakeWord";
 
 /** A speech recognizer: the sidecar (streaming, partials) or a remote service. */
 export interface SttBackend {
   readonly partials: boolean;
-  start(id: number, options: { vocabulary: string[]; partials: boolean }, handlers: SttHandlers): boolean;
+  start(id: number, options: { vocabulary: string[]; partials: boolean; voiceprint?: boolean }, handlers: SttHandlers): boolean;
   audio(id: number, pcm: Uint8Array): void;
   end(id: number): void;
   cancel(id: number): void;
@@ -37,8 +37,8 @@ export interface TurnHost {
   /** The speech recognizer to use now, or null when none is available. */
   stt(): SttBackend | null;
   micControl(control: MicControl): void;
-  /** The user said something to Lumi. */
-  utterance(text: string): void;
+  /** The user said something to Lumi (with the voiceprint, when voices are recognized). */
+  utterance(text: string, voiceprint?: number[]): void;
   /** Barge-in: stop the voice and the model now. */
   interrupt(): void;
   /** Lumi's voice is playing (or about to). */
@@ -52,6 +52,8 @@ export interface TurnHost {
   backchannel?(): void;
   /** The wake word alone was heard: a short "sì?" before the request. */
   acknowledge?(): void;
+  /** The user is in a call Lumi listens to: "continuous" then waits for the wake word (they talk to their friends). */
+  inCall?(): boolean;
   log?(message: string): void;
 }
 
@@ -229,7 +231,7 @@ export class TurnManager {
 
   control(): MicControl {
     const settings = this.host.settings();
-    const mode: ListenMode = settings.listen.mode;
+    const mode: ListenMode = this.mode();
     const available = this.host.stt() !== null;
     const speaking = this.host.speaking();
     const bargeIn = settings.listen.bargeIn && speaking;
@@ -266,8 +268,8 @@ export class TurnManager {
       lastBackchannel: 0,
       ending: false,
     };
-    const vocabulary = this.host.settings().stt.vocabulary;
-    const ok = stt.start(s.id, { vocabulary, partials: stt.partials }, {
+    const { stt: sttSettings, voices } = this.host.settings();
+    const ok = stt.start(s.id, { vocabulary: sttSettings.vocabulary, partials: stt.partials, voiceprint: voices.enabled }, {
       partial: (text) => this.onPartial(s, text),
       final: (result) => this.onFinal(s, result),
     });
@@ -285,7 +287,7 @@ export class TurnManager {
       this.clearEndTimer(s);
       return;
     }
-    const mode = this.host.settings().listen.mode;
+    const mode = this.mode();
     const speaking = this.host.speaking();
     const overLumi = speaking && this.host.settings().listen.bargeIn;
     const addressed = mode === "continuous" || this.followUp() || overLumi;
@@ -367,7 +369,7 @@ export class TurnManager {
     const now = this.clock.now();
     // Only in long turns, not too often, and only when the turn clearly goes on
     if (!this.host.backchannel || !s.addressed || now - s.startedAt < 4000 || now - s.lastBackchannel < 6000) return;
-    if (requiredSilenceMs(s.partial, s.turnComplete) < MAX_SILENCE_MS) return;
+    if (this.silenceNeeded(s) < silenceRange(this.host.settings().listen.pauseMs).max) return;
     s.lastBackchannel = now;
     this.host.backchannel();
   }
@@ -375,14 +377,18 @@ export class TurnManager {
   private scheduleEndCheck(s: Session): void {
     this.clearEndTimer(s);
     if (s.silenceSince === null) return;
-    const due = s.silenceSince + requiredSilenceMs(s.partial, s.turnComplete);
+    const due = s.silenceSince + this.silenceNeeded(s);
     const wait = Math.max(0, due - this.clock.now());
     s.endTimer = this.clock.setTimeout(() => {
       s.endTimer = null;
       if (this.session !== s || s.speechActive || s.silenceSince === null) return;
-      if (this.clock.now() >= s.silenceSince + requiredSilenceMs(s.partial, s.turnComplete)) this.finish(s);
+      if (this.clock.now() >= s.silenceSince + this.silenceNeeded(s)) this.finish(s);
       else this.scheduleEndCheck(s);
     }, wait);
+  }
+
+  private silenceNeeded(s: Session): number {
+    return requiredSilenceMs(s.partial, s.turnComplete, this.host.settings().listen.pauseMs);
   }
 
   private finish(s: Session): void {
@@ -411,7 +417,7 @@ export class TurnManager {
     if (result.error) this.host.log?.(`Speech recognition failed: ${result.error}`);
     if (!text) return this.refresh();
     const settings = this.host.settings();
-    if (!s.viaPtt && settings.listen.mode === "wake-word" && !s.addressed) {
+    if (!s.viaPtt && this.mode() === "wake-word" && !s.addressed) {
       const wake = matchWakeWord(text, settings.listen.wakeWord);
       if (!wake.matched) return this.refresh();
       text = wake.rest;
@@ -425,7 +431,7 @@ export class TurnManager {
         }, WAKE_WINDOW_MS + 50);
         return this.refresh();
       }
-    } else if (settings.listen.mode === "wake-word" && !s.viaPtt) {
+    } else if (this.mode() === "wake-word" && !s.viaPtt) {
       // Addressed by the wake word heard in a partial: drop the name from the request
       const wake = matchWakeWord(text, settings.listen.wakeWord);
       if (wake.matched) text = wake.rest || text;
@@ -437,8 +443,14 @@ export class TurnManager {
     }
     this.followUpUntil = 0;
     this.wakeUntil = 0;
-    this.host.utterance(text);
+    this.host.utterance(text, result.voiceprint);
     this.refresh();
+  }
+
+  /** The listening mode in effect: during a call, "continuous" becomes "wake-word". */
+  private mode(): ListenMode {
+    const mode = this.host.settings().listen.mode;
+    return mode === "continuous" && this.host.inCall?.() ? "wake-word" : mode;
   }
 
   private clearEndTimer(s: Session): void {

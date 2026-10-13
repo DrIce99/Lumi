@@ -13,7 +13,7 @@ test("missing or broken settings fall back to the defaults", () => {
     profile: "turbo",
     face: { scale: 9, color: "red" },
     tts: { engine: "kokoro", speed: 0.1, seed: -5 },
-    listen: { mode: "wake-word", followUpSeconds: 500, wakeWord: "  Ehi LUMI " },
+    listen: { mode: "wake-word", followUpSeconds: 500, wakeWord: "  Ehi LUMI ", pauseMs: 9000 },
     perception: { pauseInApps: ["KeePass", "KeePass", 3, " Bitwarden "], sendScreenshots: "maybe" },
     brain: { chat: { provider: "groq", model: "" }, idle: { provider: "nope", model: "x" }, vision: { provider: "ollama", model: "" } },
   });
@@ -25,10 +25,11 @@ test("missing or broken settings fall back to the defaults", () => {
   assert.equal(s.tts.seed, 0);
   assert.equal(s.listen.mode, "wake-word");
   assert.equal(s.listen.followUpSeconds, 60);
+  assert.equal(s.listen.pauseMs, 2500);
   assert.equal(s.listen.wakeWord, "ehi lumi");
   assert.deepEqual(s.perception.pauseInApps, ["KeePass", "Bitwarden"]);
   assert.equal(s.perception.sendScreenshots, "ask");
-  assert.equal(s.brain.chat.model, "llama-3.3-70b-versatile", "empty model: the service's first suggestion");
+  assert.equal(s.brain.chat.model, "openai/gpt-oss-120b", "empty model: the service's first suggestion");
   assert.equal(s.brain.idle.provider, DEFAULT_SETTINGS.brain.idle.provider);
   assert.deepEqual(s.brain.vision, { provider: "ollama", model: "" }, "vision may stay empty (= the chat model)");
 });
@@ -72,4 +73,17 @@ test("the window keeps the face in place and the bubble on screen", () => {
   assert.equal(high.bounds.x + high.layout.face.x, 100);
   const clamped = clampAnchor({ x: -5000, y: 99_999 }, 1, work);
   assert.ok(clamped.x >= -160 && clamped.y <= 1040);
+});
+
+test("models a service retired are replaced on load", () => {
+  const s = sanitizeSettings({
+    brain: {
+      chat: { provider: "groq", model: "llama-3.3-70b-versatile" },
+      idle: { provider: "ollama", model: "llama-3.3-70b-versatile" },
+      vision: { provider: "groq", model: "meta-llama/llama-4-scout-17b-16e-instruct" },
+    },
+  });
+  assert.deepEqual(s.brain.chat, { provider: "groq", model: "openai/gpt-oss-120b" });
+  assert.equal(s.brain.idle.model, "llama-3.3-70b-versatile", "only that service's models");
+  assert.deepEqual(s.brain.vision, { provider: "groq", model: "qwen/qwen3.8-27b" });
 });

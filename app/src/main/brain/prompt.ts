@@ -6,7 +6,8 @@
 // goes into the user message built by buildContext.
 import type { DiaryEntry, Fact, Reminder, Settings, Sociability } from "../../shared/types";
 import type { ActivitySnapshot } from "../activity";
-import type { ConversationEntry } from "./memory";
+import type { ConversationEntry, Episode } from "./memory";
+import type { RecallHit } from "./recall";
 
 export interface Situation {
   now: Date;
@@ -17,10 +18,13 @@ export interface Situation {
   screen: string;
   /** look_at_screen is possible (a vision model is configured and screenshots are allowed). */
   vision: "always" | "ask" | "never";
+  /** Voices Lumi recognizes (besides the user's), one per line; empty when none or off. */
+  voices?: string;
 }
 
 export type Trigger =
-  | { kind: "message"; text: string; via: "voice" | "text" }
+  /** `speaker`: a voice other than the user's said it (its name or "Voce N"). */
+  | { kind: "message"; text: string; via: "voice" | "text"; speaker?: string }
   | { kind: "tick" }
   | { kind: "noticed"; what: string }
   | { kind: "back"; minutesAway: number }
@@ -63,6 +67,9 @@ export function buildSystemPrompt(settings: Settings): string {
 # Memory and reminders
 - Use remember for durable facts about the user, one short Italian sentence each; kind "note" for things that only matter today. Use forget when something is wrong or the user asks.
 - Weave what you remember into the conversation naturally.
+- <earlier> summarizes today's older conversation; <recalled> holds pieces of past conversations that may relate to the user's words (use them only if they really fit). When the user refers to something past you can't find in context, call recall before answering.
+- Lines from other people (friends in a call, someone else in the room) carry their name: they are not talking to you unless they say so.
+- You recognize voices: <voices> lists the ones you know. Unknown voices are called "Voce N". When the user tells you who a voice is ("quello che ha parlato è Marco", "questa è mia sorella Giulia"), call name_voice. If a known person turns out to be someone else, rename them.
 - When asked to remind something, call set_reminder and confirm briefly. Due reminders are announced automatically.
 
 # What you are
@@ -83,6 +90,10 @@ export interface ContextInput {
   facts: Fact[];
   reminders: Reminder[];
   diary: DiaryEntry[];
+  /** Today's older conversation, summarized. */
+  episodes?: Episode[];
+  /** Past pieces related to the user's message. */
+  recalled?: RecallHit[];
   conversation: ConversationEntry[];
   trigger: Trigger;
 }
@@ -108,6 +119,8 @@ export function buildContext(input: ContextInput): string {
 
   out.push("", "<screen>", s.screen.trim() || "(nothing perceived: screen perception is off or paused)", "</screen>");
 
+  if (s.voices?.trim()) out.push("", "<voices>", s.voices.trim(), "</voices>");
+
   const durable = input.facts.filter((f) => f.kind !== "note");
   const notes = input.facts.filter((f) => f.kind === "note");
   out.push("", "<memory>");
@@ -128,13 +141,29 @@ export function buildContext(input: ContextInput): string {
     out.push("</diary>");
   }
 
+  const today = s.now.toDateString();
+  const when = (iso: string) => {
+    const at = new Date(iso);
+    return at.toDateString() === today ? formatTime(at) : `${formatDay(at)} ${formatTime(at)}`;
+  };
+
+  if (input.episodes?.length) {
+    out.push("", "<earlier>");
+    for (const e of input.episodes) out.push(`[${when(e.start)}-${formatTime(new Date(e.end))}] ${e.summary}`);
+    out.push("</earlier>");
+  }
+
+  if (input.recalled?.length) {
+    out.push("", "<recalled>");
+    for (const h of input.recalled) out.push(`[${h.doc.kind === "diary" ? h.doc.at : when(h.doc.at)}] ${h.doc.text.replace(/\n/g, " | ")}`);
+    out.push("</recalled>");
+  }
+
   out.push("", "<recent_conversation>");
   if (!input.conversation.length) out.push("(nothing yet)");
-  const today = s.now.toDateString();
   for (const e of input.conversation) {
-    const at = new Date(e.at);
-    const when = at.toDateString() === today ? formatTime(at) : `${formatDay(at)} ${formatTime(at)}`;
-    out.push(`[${when}] ${e.who === "user" ? user : "You"}: ${e.text}${e.interrupted ? " [interrotto]" : ""}`);
+    const who = e.who === "lumi" ? "You" : e.who === "user" ? user : `${e.name || "Someone else"}${e.via ? ` (${e.via})` : ""}`;
+    out.push(`[${when(e.at)}] ${who}: ${e.text}${e.interrupted ? " [interrotto]" : ""}`);
   }
   out.push("</recent_conversation>");
 
@@ -145,6 +174,8 @@ export function buildContext(input: ContextInput): string {
 function describeTrigger(trigger: Trigger, user: string): string {
   switch (trigger.kind) {
     case "message":
+      if (trigger.speaker)
+        return `${trigger.speaker} - a voice that is not ${user}'s, heard at the microphone - said to you (speech recognition, may contain small errors): «${trigger.text}»\nAnswer them; ${user} is probably there too.`;
       return trigger.via === "voice"
         ? `${user} said to you (speech recognition, may contain small errors): «${trigger.text}»\nAnswer them.`
         : `${user} typed to you in the chat box: «${trigger.text}»\nAnswer them.`;

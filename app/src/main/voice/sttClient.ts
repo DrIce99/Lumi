@@ -16,6 +16,8 @@ export interface SttFinal {
   durationMs: number;
   ms: number;
   error?: string;
+  /** Speaker embedding of the utterance, when asked for and measurable. */
+  voiceprint?: number[];
 }
 
 export interface SttHandlers {
@@ -43,9 +45,9 @@ export class SttClient {
     );
   }
 
-  start(id: number, options: { vocabulary: string[]; partials: boolean }, handlers: SttHandlers): boolean {
+  start(id: number, options: { vocabulary: string[]; partials: boolean; voiceprint?: boolean }, handlers: SttHandlers): boolean {
     this.sessions.set(id, handlers);
-    const sent = this.socket.sendJson({ type: "start", id, vocabulary: options.vocabulary, partials: options.partials });
+    const sent = this.socket.sendJson({ type: "start", id, vocabulary: options.vocabulary, partials: options.partials, voiceprint: options.voiceprint ?? false });
     if (!sent) this.sessions.delete(id);
     return sent;
   }
@@ -81,6 +83,7 @@ export class SttClient {
         durationMs: Number(data.durationMs) || 0,
         ms: Number(data.ms) || 0,
         ...(typeof data.error === "string" ? { error: data.error } : {}),
+        ...(Array.isArray(data.voiceprint) && data.voiceprint.every((x) => typeof x === "number") ? { voiceprint: data.voiceprint as number[] } : {}),
       });
     }
   }

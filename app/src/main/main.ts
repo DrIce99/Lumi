@@ -1,6 +1,7 @@
 // Entry point: wires the face, perception, brain, voice and UI together.
 import { app, BrowserWindow, dialog, globalShortcut, powerMonitor, screen, shell } from "electron";
 import { writeFileSync } from "node:fs";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 import { join } from "node:path";
 import type { Emotion } from "../shared/emotions";
 import { toEmotion } from "../shared/emotions";
@@ -35,6 +36,10 @@ import { TeeSpeech } from "./teeSpeech";
 import { LumiTray } from "./tray";
 import { Clips } from "./voice/clips";
 import { GroqStt } from "./voice/groqStt";
+import { Speakers, voiceLabel } from "./voice/speakers";
+import { AppAudioClient, type AppUtterance } from "./voice/appAudio";
+import { meaningless } from "./voice/endpoint";
+import { matchWakeWord } from "./voice/wakeWord";
 import { PushToTalk } from "./voice/pushToTalk";
 import { SttClient } from "./voice/sttClient";
 import { TurnManager, type SttBackend } from "./voice/turns";
@@ -71,6 +76,15 @@ function engineKey(s: Settings): string {
 function start(): void {
   const dataDir = app.getPath("userData");
   initLog(join(dataDir, "logs"));
+  if (process.env.LUMI_DEBUG_LAG === "1") {
+    // The click-through mouse hook runs on this thread: any block here stalls the system pointer
+    const lag = monitorEventLoopDelay({ resolution: 5 });
+    lag.enable();
+    setInterval(() => {
+      log.info(`Main thread delay: p50 ${(lag.percentile(50) / 1e6).toFixed(1)} ms, p99 ${(lag.percentile(99) / 1e6).toFixed(1)} ms, max ${(lag.max / 1e6).toFixed(1)} ms`);
+      lag.reset();
+    }, 5000);
+  }
   log.info(`Lumi ${app.getVersion()} (Electron ${process.versions.electron}), data in ${dataDir}`);
   serveAppScheme(join(__dirname, ".."));
 
@@ -79,6 +93,29 @@ function start(): void {
   const apiKeys = new ApiKeyStore(dataDir);
   const services = new Services(settings, apiKeys);
   const memory = new Memory(join(dataDir, "memory.json"));
+  const speakers = new Speakers(join(dataDir, "voices.json"));
+
+  /** Who said an utterance at the microphone: the user, or another voice (by name or "Voce N"). */
+  function micSpeaker(print: number[] | undefined): { other: string | null } {
+    if (!print || !settings().voices.enabled) return { other: null };
+    const found = speakers.identify(print, "mic");
+    log.info(`Voice at the microphone: ${found.status}${found.voice ? ` ${found.voice.id}` : ""} (${found.similarity.toFixed(2)})`);
+    // Uncertain is given the benefit of the doubt: it is most likely the user
+    if (!found.voice || found.voice.owner || found.status === "uncertain") return { other: null };
+    return { other: voiceLabel(found.voice) };
+  }
+
+  /** The voices Lumi knows besides the user's, for the prompt. */
+  function voicesSummary(): string {
+    if (!settings().voices.enabled) return "";
+    return speakers
+      .voices()
+      .filter((v) => !v.owner)
+      .sort((a, b) => b.lastHeard.localeCompare(a.lastHeard))
+      .slice(0, 12)
+      .map((v) => `${voiceLabel(v)}${v.name ? "" : " (name unknown)"}: heard ${v.via.map((x) => (x === "mic" ? "at the microphone" : `on ${x}`)).join(" and ")}, last ${v.lastHeard.slice(0, 16).replace("T", " ")}`)
+      .join("\n");
+  }
   const stateFile = join(dataDir, "window.json");
   const windowState = readJson<WindowState>(stateFile) ?? {};
   const activity = new Activity(() => powerMonitor.getSystemIdleTime());
@@ -170,9 +207,9 @@ function start(): void {
   });
 
   /** A spoken request for Lumi: if the answer is slow to start, a filler covers the wait. */
-  function heard(text: string): void {
+  function heard(text: string, speaker?: string): void {
     const asked = Date.now();
-    void brain.handle({ kind: "message", text, via: "voice" });
+    void brain.handle({ kind: "message", text, via: "voice", ...(speaker ? { speaker } : {}) });
     if (!settings().listen.fillers) return;
     setTimeout(() => {
       if (brain.answering() && lastSentenceAt < asked && voice.ready() && clips.play("filler")) mood.set({ thinking: true });
@@ -200,14 +237,22 @@ function start(): void {
     const engine = sidecar.status().engines.find((e) => e.kind === "stt");
     return engine && (engine.state === "ready" || engine.state === "loading" || engine.state === "idle") ? sidecarBackend : null;
   }
+  /** A call Lumi listens to is going on (set once the app audio client exists). */
+  let inCall = () => false;
   const turns = new TurnManager({
     settings,
     stt: () => (visible && !settings().doNotDisturb ? sttBackend() : null),
     micControl: (control) => face.micControl(control),
-    utterance: (text) => {
+    utterance: (text, print) => {
       if (process.env.LUMI_DEBUG_HEAR) log.info(`Heard: ${text}`);
       else log.perception(`Heard: ${text}`);
-      heard(text);
+      const { other } = micSpeaker(print);
+      if (other && settings().voices.onlyMe) {
+        // Someone else in the room: context for Lumi, not a request
+        memory.addMessage("other", text, false, { name: other });
+        return;
+      }
+      heard(text, other ?? undefined);
     },
     interrupt: () => {
       voice.stopAll();
@@ -234,6 +279,7 @@ function start(): void {
     backchannel: () => {
       if (settings().listen.backchannel && voice.ready() && !voice.busy()) clips.play("backchannel");
     },
+    inCall: () => inCall(),
     acknowledge: () => {
       if (voice.ready() && !voice.busy()) clips.play("wake");
     },
@@ -304,7 +350,18 @@ function start(): void {
       if (fg?.rect) ids.add(screen.getDisplayMatching(screen.screenToDipRect(null, fg.rect)).id);
       return screen.getAllDisplays().filter((d) => ids.has(d.id));
     },
-    active: () => visible && perception.watching(),
+    active: () => visible && perception.watching() && sidecar.endpoint() !== null,
+    grab: async (displays) => {
+      const regions = displays.map((d) => screen.dipToScreenRect(null, d.bounds));
+      const { data, headers } = await sidecar.requestBinary("/screen/luma", { regions, size: 640 });
+      let offset = 0;
+      return (headers.get("x-sizes") ?? "").split(",").map((size) => {
+        const [width, height] = size.split("x").map(Number);
+        const luma = data.subarray(offset, offset + width * height);
+        offset += width * height;
+        return { width, height, luma };
+      });
+    },
     onChanges: (list) => perception.onChanges(list),
   });
   const uia = new UiaClient(
@@ -325,6 +382,41 @@ function start(): void {
     void brain.handle({ kind: "noticed", what: `a notification just appeared: "${text.slice(0, 200)}"` });
   };
   const updateUia = () => uia.set(sidecar.endpoint() !== null && settings().perception.enabled && settings().perception.uia);
+
+  // ---- other apps' audio (a Discord call) ----
+  const appAudio = new AppAudioClient(() => sidecar.socketUrl("/apps"), {
+    heard: (u) => heardInApp(u),
+    status: (apps) => {
+      log.info(`App audio: ${Object.entries(apps).map(([app, state]) => `${app} ${state}`).join(", ") || "off"}`);
+    },
+  });
+  const updateAppAudio = () => {
+    const s = settings();
+    const on = s.appAudio.enabled && sidecar.endpoint() !== null && !s.doNotDisturb;
+    appAudio.set(on ? s.appAudio.apps : null, s.stt.vocabulary);
+  };
+  inCall = () => appAudio.active();
+  sidecar.on("ready", updateAppAudio);
+  sidecar.on("down", () => appAudio.set(null));
+
+  /** Someone spoke in a listened app: context for Lumi, or a request when they call it by name. */
+  function heardInApp(u: AppUtterance): void {
+    if (meaningless(u.text)) return;
+    let name = `Qualcuno su ${u.app}`;
+    if (u.voiceprint && settings().voices.enabled) {
+      // The user's own voice doesn't come back from the call: never the owner
+      const found = speakers.identify(u.voiceprint, u.app, { exclude: (v) => !!v.owner });
+      if (found.voice && found.status !== "uncertain") name = voiceLabel(found.voice);
+    }
+    log.perception(`Heard on ${u.app} (${name}): ${u.text}`);
+    const wake = matchWakeWord(u.text, settings().listen.wakeWord);
+    const named = wake.matched || /\blumi\b/i.test(u.text);
+    if (named && wake.rest !== "") {
+      void brain.handle({ kind: "message", text: u.text, via: "voice", speaker: `${name} (su ${u.app})` });
+      return;
+    }
+    memory.addMessage("other", u.text, false, { name, via: u.app });
+  }
   sidecar.on("ready", updateUia);
   sidecar.on("down", () => uia.set(false));
 
@@ -352,7 +444,10 @@ function start(): void {
         if (looking) mood.setEmotion("pensiero", 0.5, 3000);
       },
     },
-    new Vision(),
+    new Vision(async (display, maxSide) => {
+      const { data } = await sidecar.requestBinary("/screen/jpeg", { region: screen.dipToScreenRect(null, display.bounds), size: maxSide }, 10_000);
+      return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+    }),
   );
 
   // ---- the mind ----
@@ -373,6 +468,12 @@ function start(): void {
       if (minutes) autonomy.scheduleIn(minutes);
     },
     backOff: (minutes) => autonomy.backOff(minutes),
+    nameVoice: (which, name) => {
+      if (!settings().voices.enabled) return "Voice recognition is off in the settings.";
+      if (which.trim().toLowerCase() === "tu" || which.trim().toLowerCase() === "user") return "That is the user's own voice: it needs no name.";
+      const voice = speakers.rename(which, name);
+      return voice ? `${which} is now called ${voice.name}.` : `There is no voice called ${which}. Known voices: ${speakers.voices().filter((v) => !v.owner).map((v) => voiceLabel(v)).join(", ") || "none"}.`;
+    },
   };
   const brain = new Brain(host);
   const autonomy = new Autonomy(
@@ -421,6 +522,7 @@ function start(): void {
       voice: voice.ready(),
       screen: perception.summary(),
       vision: settings().perception.sendScreenshots,
+      voices: voicesSummary(),
     };
   }
 
@@ -629,6 +731,8 @@ function start(): void {
       facts: memory.facts(),
       reminders: memory.reminders(),
       diary: memory.diary(),
+      appAudioStatus: appAudio.statuses,
+      knownVoices: speakers.voices().map((v) => ({ id: v.id, label: voiceLabel(v, settings().userName), owner: !!v.owner, via: v.via, samples: v.samples, lastHeard: v.lastHeard })),
       dataPath: dataDir,
       sidecar: sidecar.status(),
       gpu,
@@ -689,6 +793,11 @@ function start(): void {
       },
       clearMemory: () => {
         memory.clear();
+        speakers.clear();
+        return snapshot();
+      },
+      forgetVoice: (id) => {
+        speakers.forget(id);
         return snapshot();
       },
       openDataFolder: () => void shell.openPath(dataDir),
@@ -708,6 +817,7 @@ function start(): void {
     if (JSON.stringify(next.tts) !== JSON.stringify(prev.tts)) prepareClips();
     if (next.muted && !prev.muted) voice.stopAll();
     if (JSON.stringify(next.perception) !== JSON.stringify(prev.perception)) updateUia();
+    if (JSON.stringify(next.appAudio) !== JSON.stringify(prev.appAudio) || next.doNotDisturb !== prev.doNotDisturb || next.stt.vocabulary !== prev.stt.vocabulary) updateAppAudio();
     turns.refresh();
     tray.refresh();
   });
@@ -724,19 +834,21 @@ function start(): void {
     writeJson(stateFile, windowState);
     memory.touch();
     memory.flush();
+    speakers.flush();
     pushToTalk.unregister();
     globalShortcut.unregisterAll();
     turns.dispose();
     perception.stop();
     changes.stop();
     uia.set(false);
+    appAudio.set(null);
     gazeOverlay?.dispose();
     autonomy.stop();
     bubbles.dispose();
     mood.dispose();
     voice.stopAll();
     sidecarStt.close();
-    void sidecar.stop().finally(() => app.quit());
+    void Promise.all([sidecar.stop(), memory.archived()]).finally(() => app.quit());
   });
 
   /** Starts the local Ollama server when one of the brain choices needs it. */

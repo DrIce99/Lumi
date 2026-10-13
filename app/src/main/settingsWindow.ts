@@ -16,6 +16,7 @@ export interface SettingsBackend {
   pickVoiceFile(window: BrowserWindow): Promise<string | null>;
   forgetFact(id: string): SettingsSnapshot;
   clearMemory(): SettingsSnapshot;
+  forgetVoice(id: string): SettingsSnapshot;
   openDataFolder(): void;
   restartSidecar(): Promise<SettingsSnapshot>;
 }
@@ -54,6 +55,7 @@ export class SettingsWindow {
     handle(IPC.settingsPickVoice, () => backend.pickVoiceFile(this.win!));
     handle(IPC.settingsForget, (id) => backend.forgetFact(String(id)));
     handle(IPC.settingsClear, () => backend.clearMemory());
+    handle(IPC.settingsForgetVoice, (id) => backend.forgetVoice(String(id)));
     handle(IPC.settingsOpenData, () => backend.openDataFolder());
     handle(IPC.settingsRestartSidecar, () => backend.restartSidecar());
   }

@@ -94,6 +94,17 @@ export const TOOLS: ToolSpec[] = [
     },
   },
   {
+    name: "recall",
+    description:
+      "Search your memory of past conversations (older than <recent_conversation>, also weeks ago) when the user refers to something you don't see in context ('ti ricordi quando...', 'cosa ti avevo detto di...'). The results come back to you.",
+    parameters: {
+      type: "object",
+      properties: { query: { type: "string", description: "A few keywords, e.g. 'dentista appuntamento' or 'progetto Marco'." } },
+      required: ["query"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "set_reminder",
     description:
       "Schedule a reminder that you will say out loud later, when the user asks ('ricordami tra 20 minuti...', 'alle 15 ho una call'). Confirm briefly with say.",
@@ -107,6 +118,20 @@ export const TOOLS: ToolSpec[] = [
         text: { type: "string", description: "What to tell the user when it is time, in Italian." },
       },
       required: ["when", "text"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "name_voice",
+    description:
+      "Give a name to a voice you recognize, when the user tells you who it is: 'Voce 3' becomes 'Marco'. Use 'tu' for the user's own voice if they say a voice is theirs.",
+    parameters: {
+      type: "object",
+      properties: {
+        voice: { type: "string", description: "The voice as you know it now: 'Voce 3', or its current name." },
+        name: { type: "string", description: "Who it is, e.g. 'Marco'." },
+      },
+      required: ["voice", "name"],
       additionalProperties: false,
     },
   },
@@ -128,7 +153,9 @@ export type ToolCall =
   | { name: "look_at_screen"; focus?: string }
   | { name: "remember"; fact: string; kind: FactKind }
   | { name: "forget"; id: string }
+  | { name: "recall"; query: string }
   | { name: "set_reminder"; due: Date; text: string }
+  | { name: "name_voice"; voice: string; person: string }
   | { name: "stay_quiet"; minutes?: number };
 
 /** Parses `when` ("+20", "20", "15:30", "2026-10-14 09:00") into a date after `now`; null when unreadable. */
@@ -196,6 +223,15 @@ export function parseToolCall(name: string, input: unknown, now = new Date()): T
     case "forget": {
       const id = text(o.id, 20);
       return id ? { name, id } : null;
+    }
+    case "recall": {
+      const query = text(o.query ?? o.text, 300);
+      return query ? { name, query } : null;
+    }
+    case "name_voice": {
+      const voice = text(o.voice, 60);
+      const who = text(o.name, 40);
+      return voice && who ? { name, voice, person: who } : null;
     }
     case "set_reminder": {
       const due = parseWhen(o.when ?? o.minutes, now);
