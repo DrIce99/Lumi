@@ -15,6 +15,7 @@ export const IPC = {
   audioChunk: "audio:chunk",
   audioEnd: "audio:end",
   audioStop: "audio:stop",
+  audioLocal: "audio:local",
   micControl: "mic:control",
   // face window -> main
   ready: "face:ready",
@@ -40,6 +41,7 @@ export const IPC = {
   settingsForget: "settings:forget",
   settingsClear: "settings:clear",
   settingsForgetVoice: "settings:forget-voice",
+  settingsDiscordToken: "settings:discord-token",
   settingsOpenData: "settings:open-data",
   settingsRestartSidecar: "settings:restart-sidecar",
   // main -> settings window

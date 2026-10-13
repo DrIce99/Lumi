@@ -17,6 +17,7 @@ export interface SettingsBackend {
   forgetFact(id: string): SettingsSnapshot;
   clearMemory(): SettingsSnapshot;
   forgetVoice(id: string): SettingsSnapshot;
+  setDiscordToken(token: string): SettingsSnapshot;
   openDataFolder(): void;
   restartSidecar(): Promise<SettingsSnapshot>;
 }
@@ -56,6 +57,7 @@ export class SettingsWindow {
     handle(IPC.settingsForget, (id) => backend.forgetFact(String(id)));
     handle(IPC.settingsClear, () => backend.clearMemory());
     handle(IPC.settingsForgetVoice, (id) => backend.forgetVoice(String(id)));
+    handle(IPC.settingsDiscordToken, (token) => backend.setDiscordToken(String(token ?? "")));
     handle(IPC.settingsOpenData, () => backend.openDataFolder());
     handle(IPC.settingsRestartSidecar, () => backend.restartSidecar());
   }

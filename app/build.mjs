@@ -21,6 +21,15 @@ const jobs = [
   }),
   build({
     ...common,
+    entryPoints: ["src/discord/bot.ts"],
+    outfile: "dist/discord/bot.js",
+    platform: "node",
+    format: "cjs",
+    // discord.js, @discordjs/voice (with the native DAVE module) and opusscript stay in node_modules
+    packages: "external",
+  }),
+  build({
+    ...common,
     entryPoints: ["src/preload/face.ts", "src/preload/settings.ts", "src/preload/debug.ts"],
     outdir: "dist/preload",
     platform: "node",

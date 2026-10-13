@@ -234,6 +234,11 @@ export class FaceWindow {
     this.send(IPC.audioStop, { fadeMs });
   }
 
+  /** Lumi's voice through the speakers, or muted here because it goes to a Discord call. */
+  audioLocal(local: boolean): void {
+    this.send(IPC.audioLocal, { local });
+  }
+
   micControl(control: MicControl): void {
     this.send(IPC.micControl, control);
   }

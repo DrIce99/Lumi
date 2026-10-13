@@ -55,6 +55,7 @@ face.setLevelSource(() => player.level());
 api.onAudioBegin((msg) => player.begin(msg));
 api.onAudioChunk((msg) => player.chunk(msg));
 api.onAudioEnd(({ id }) => player.end(id));
+api.onAudioLocal(({ local }) => player.setLocal(local));
 api.onAudioStop(({ fadeMs }) => {
   player.stop(fadeMs);
   setTimeout(() => face.setTalking(player.active), fadeMs + 20);

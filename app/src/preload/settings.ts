@@ -14,6 +14,7 @@ const bridge: SettingsBridge = {
   forgetFact: (id) => ipcRenderer.invoke(IPC.settingsForget, id),
   clearMemory: () => ipcRenderer.invoke(IPC.settingsClear),
   forgetVoice: (id) => ipcRenderer.invoke(IPC.settingsForgetVoice, id),
+  setDiscordToken: (token) => ipcRenderer.invoke(IPC.settingsDiscordToken, token),
   openDataFolder: () => ipcRenderer.invoke(IPC.settingsOpenData),
   restartSidecar: () => ipcRenderer.invoke(IPC.settingsRestartSidecar),
   onStatus: (cb) => {

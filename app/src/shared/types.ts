@@ -69,6 +69,12 @@ export interface Settings {
     /** At the microphone, answer only the owner's voice (others are heard as context). */
     onlyMe: boolean;
   };
+  /** Lumi's voice in Discord: a bot follows the user into voice channels and speaks there. */
+  discord: {
+    enabled: boolean;
+    /** The user on Discord: numeric id (Developer Mode -> Copy User ID) or username. The bot joins their channel. */
+    userId: string;
+  };
   /** Listening to other apps (a Discord call): their audio is transcribed on this computer. */
   appAudio: {
     enabled: boolean;
@@ -121,6 +127,7 @@ export const DEFAULT_SETTINGS: Settings = {
     micDevice: "",
   },
   voices: { enabled: true, onlyMe: false },
+  discord: { enabled: false, userId: "" },
   appAudio: { enabled: false, apps: ["Discord"] },
   face: { scale: 1, color: "#F5F3EE", subtitles: false },
   perception: {
@@ -297,6 +304,7 @@ export interface FaceBridge {
   onAudioEnd(cb: (msg: { id: number }) => void): void;
   /** Stop everything playing or queued, fading out (barge-in). */
   onAudioStop(cb: (msg: { fadeMs: number }) => void): void;
+  onAudioLocal(cb: (msg: { local: boolean }) => void): void;
   onMicControl(cb: (control: MicControl) => void): void;
   ready(): void;
   setInteractive(interactive: boolean): void;
@@ -356,6 +364,7 @@ export interface SettingsSnapshot {
   knownVoices: KnownVoice[];
   /** Listened apps and their state ("in ascolto", "chiusa", "errore: ..."). */
   appAudioStatus: Record<string, string>;
+  discord: { state: string; detail: string; token: "env" | "saved" | "none" };
 }
 
 export interface KnownVoice {
@@ -385,6 +394,8 @@ export interface SettingsBridge {
   forgetFact(id: string): Promise<SettingsSnapshot>;
   clearMemory(): Promise<SettingsSnapshot>;
   forgetVoice(id: string): Promise<SettingsSnapshot>;
+  /** Saves the Discord bot token (empty: removes it). */
+  setDiscordToken(token: string): Promise<SettingsSnapshot>;
   openDataFolder(): Promise<void>;
   restartSidecar(): Promise<SettingsSnapshot>;
   onStatus(cb: (status: SidecarStatus) => void): void;

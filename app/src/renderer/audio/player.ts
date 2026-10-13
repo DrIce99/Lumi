@@ -38,6 +38,8 @@ export class Player {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private analyser: AnalyserNode | null = null;
+  private output: GainNode | null = null;
+  private local = true;
   private readonly queue: Utterance[] = [];
   private nextFree = 0;
   private readonly samples = new Float32Array(1024);
@@ -126,12 +128,23 @@ export class Player {
     const master = ctx.createGain();
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 1024;
+    // After the analyser: muting the speakers keeps the talk pulse going
+    const output = ctx.createGain();
+    output.gain.value = this.local ? 1 : 0;
     master.connect(analyser);
-    analyser.connect(ctx.destination);
+    analyser.connect(output);
+    output.connect(ctx.destination);
     this.ctx = ctx;
     this.master = master;
     this.analyser = analyser;
+    this.output = output;
     return ctx;
+  }
+
+  /** Plays through the speakers (true) or only "virtually" (false: Lumi's voice goes to a Discord call). */
+  setLocal(local: boolean): void {
+    this.local = local;
+    if (this.output && this.ctx) this.output.gain.setTargetAtTime(local ? 1 : 0, this.ctx.currentTime, 0.02);
   }
 
   /** Schedules what can be played: only the first sentence in the queue plays. */

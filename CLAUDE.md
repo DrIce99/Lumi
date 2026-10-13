@@ -200,6 +200,18 @@ Work one roadmap phase at a time; finish each with checks green.
   the capturing process, so tests must play from a process outside the
   sidecar's tree (PowerShell SoundPlayer), not a Python child.
 
+- Discord: `src/discord/bot.ts` (discord.js + @discordjs/voice 0.19, DAVE
+  through @snazzah/davey, Opus through opusscript: no native module to
+  rebuild for Electron; aes-256-gcm comes from Electron's crypto) runs in
+  a `utilityProcess` (gateway, Opus and encryption off the main thread).
+  It joins deafened (send only: receiving had DAVE bugs in 0.19) and
+  follows the user's voice state. Main tees Lumi's audio (`AudioOut` in
+  main.ts) to the face window and the bot; while the bot is in a channel
+  the renderer mutes its output *after* the analyser (`audioLocal`), so
+  the talk pulse, playback events and barge-in keep working. Bots can't
+  join DM calls. Lumi's voice heard back through app audio is dropped as
+  echo while the bot is live.
+
 ## Debug aids (env vars)
 
 `LUMI_SIDECAR_URL` (+ `LUMI_SIDECAR_TOKEN`), `LUMI_DEBUG_GAZE=1` (overlay
@@ -209,7 +221,7 @@ of candidates and target), `LUMI_DEBUG_PERCEPTION=1`,
 `LUMI_DEBUG_HEAR=<file.wav>` (PCM16 WAV fed to the turn manager as if
 spoken with push-to-talk: tests STT → brain → TTS without a microphone),
 `LUMI_DEBUG_CAPTURE=<prefix>` (PNG frames of the face window),
-`LUMI_DEBUG_LAG=1` (logs main-thread delay every 5 s and each capture's
+`DISCORD_BOT_TOKEN` (instead of the saved token), `LUMI_DEBUG_LAG=1` (logs main-thread delay every 5 s and each capture's
 time and changes), `LUMI_DEBUG_VISIBLE=1` (no content protection: real screenshots show the
 face, to check it on screen),
 `LUMI_DEBUG_SETTINGS=<tab>` (opens the settings on a tab; captured with

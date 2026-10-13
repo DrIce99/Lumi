@@ -371,6 +371,11 @@ function fill(next: SettingsSnapshot): void {
   $("subtitles").checked = s.face.subtitles;
   $("voicesEnabled").checked = s.voices.enabled;
   $("onlyMe").checked = s.voices.onlyMe;
+  $("discordEnabled").checked = s.discord.enabled;
+  $("discordUserId").value = s.discord.userId;
+  $("discordToken").value = "";
+  $<HTMLElement>("discordTokenState").textContent = next.discord.token === "saved" ? "(salvato)" : next.discord.token === "env" ? "(da DISCORD_BOT_TOKEN)" : "(manca)";
+  $<HTMLElement>("discordStatus").textContent = DISCORD_STATE[next.discord.state] ? `Adesso: ${DISCORD_STATE[next.discord.state]}${next.discord.detail ? ` - ${next.discord.detail}` : ""}.` : "";
   $("appAudioEnabled").checked = s.appAudio.enabled;
   $<HTMLTextAreaElement>("appAudioApps").value = s.appAudio.apps.join("\n");
   const appStatus = Object.entries(next.appAudioStatus);
@@ -468,6 +473,7 @@ function collect(): Settings {
     launchAtLogin: $("launchAtLogin").checked,
     face: { scale: num("scale", s.face.scale), color: $("color").value, subtitles: $("subtitles").checked },
     voices: { enabled: $("voicesEnabled").checked, onlyMe: $("onlyMe").checked },
+    discord: { enabled: $("discordEnabled").checked, userId: $("discordUserId").value.trim() },
     appAudio: {
       enabled: $("appAudioEnabled").checked,
       apps: $<HTMLTextAreaElement>("appAudioApps")
@@ -525,6 +531,13 @@ function collect(): Settings {
   };
 }
 
+const DISCORD_STATE: Record<string, string> = {
+  connecting: "si collega",
+  online: "online, aspetta che entri in un canale vocale",
+  "in-channel": "nel canale",
+  error: "errore",
+};
+
 /** Typed keys to store and keys marked for removal. */
 function keyChanges(): Partial<Record<ProviderId, string>> {
   const changes: Partial<Record<ProviderId, string>> = {};
@@ -539,6 +552,8 @@ function keyChanges(): Partial<Record<ProviderId, string>> {
 async function save(announce = true): Promise<void> {
   try {
     const keys = keyChanges();
+    const token = $("discordToken").value.trim();
+    if (token) await api.setDiscordToken(token);
     fill(await api.save(collect(), keys));
     for (const id of Object.keys(keys)) {
       const input = $(`key-${id}`);

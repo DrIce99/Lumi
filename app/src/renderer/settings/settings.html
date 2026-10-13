@@ -155,6 +155,20 @@
         <label class="check"><input id="voicesEnabled" type="checkbox" /> Riconosci le voci (l'impronta della voce resta su questo PC)</label>
         <label class="check"><input id="onlyMe" type="checkbox" /> Al microfono rispondi solo alla mia voce</label>
 
+        <h2>Lumi su Discord</h2>
+        <label class="check"><input id="discordEnabled" type="checkbox" /> Porta la voce di Lumi nelle chiamate Discord (un bot ti segue nei canali vocali dei server)</label>
+        <div class="grid2">
+          <label class="field">
+            <span>Token del bot <output id="discordTokenState"></output></span>
+            <input id="discordToken" type="password" autocomplete="off" placeholder="incolla il token per salvarlo o sostituirlo" />
+          </label>
+          <label class="field">
+            <span>Tu su Discord (ID utente o nome utente)</span>
+            <input id="discordUserId" type="text" maxlength="60" placeholder="es. 123456789012345678 oppure drice" />
+          </label>
+        </div>
+        <small class="hint">Il bot entra nel canale vocale in cui ti trovi e parla con la voce di Lumi; tu la senti in Discord come gli altri (sul PC non suona due volte). Funziona solo nei canali vocali dei server, non nelle chiamate private. Usa le cuffie: altrimenti il microfono riprende la voce di Lumi dalle casse. <span id="discordStatus"></span></small>
+
         <h2>Audio delle app</h2>
         <label class="check"><input id="appAudioEnabled" type="checkbox" /> Ascolta anche l'audio di queste app (per esempio i tuoi amici su Discord)</label>
         <label class="field">

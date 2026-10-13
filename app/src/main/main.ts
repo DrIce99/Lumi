@@ -37,13 +37,14 @@ import { LumiTray } from "./tray";
 import { Clips } from "./voice/clips";
 import { GroqStt } from "./voice/groqStt";
 import { Speakers, voiceLabel } from "./voice/speakers";
+import { botScript, DiscordToken, DiscordVoice } from "./discordVoice";
 import { AppAudioClient, type AppUtterance } from "./voice/appAudio";
 import { meaningless } from "./voice/endpoint";
 import { matchWakeWord } from "./voice/wakeWord";
 import { PushToTalk } from "./voice/pushToTalk";
 import { SttClient } from "./voice/sttClient";
-import { TurnManager, type SttBackend } from "./voice/turns";
-import { Voice } from "./voice/voice";
+import { isEcho, TurnManager, type SttBackend } from "./voice/turns";
+import { Voice, type AudioOut } from "./voice/voice";
 import { readWav, toFrames16k } from "./voice/wavInput";
 import { Vision } from "./vision";
 import { FaceWindow, type Point } from "./window";
@@ -168,7 +169,39 @@ function start(): void {
     externalToken: process.env.LUMI_SIDECAR_TOKEN,
   });
   let lastSentenceAt = 0;
-  const voice = new Voice(sidecar, face, settings, {
+  // ---- Lumi's voice in Discord calls ----
+  const discordToken = new DiscordToken(join(dataDir, "discord.bin"));
+  const discordVoice = new DiscordVoice(botScript(app.getAppPath()), (status) => {
+    // In the channel the user hears Lumi in Discord: the speakers stay quiet (the eyes keep talking)
+    face.audioLocal(status.state !== "in-channel");
+  });
+  const updateDiscord = () => {
+    const s = settings().discord;
+    const token = discordToken.get();
+    const missing = !s.enabled ? "" : !token ? "manca il token del bot" : !s.userId ? "manca il tuo ID o nome utente Discord" : "";
+    discordVoice.configure(s.enabled && token && s.userId ? { token, userId: s.userId } : null, missing);
+  };
+  /** Lumi's audio: to the face window, and to the Discord call while the bot is in it. */
+  const audioOut: AudioOut = {
+    audioBegin: (msg) => {
+      face.audioBegin(msg);
+      discordVoice.begin(msg);
+    },
+    audioChunk: (msg) => {
+      face.audioChunk(msg);
+      discordVoice.chunk(msg.id, new Uint8Array(msg.pcm), msg.sampleRate);
+    },
+    audioEnd: (id) => {
+      face.audioEnd(id);
+      discordVoice.end(id);
+    },
+    audioStop: (fadeMs) => {
+      face.audioStop(fadeMs);
+      discordVoice.cut();
+    },
+  };
+
+  const voice = new Voice(sidecar, audioOut, settings, {
     sentenceStart: (sentence) => {
       lastSentenceAt = Date.now();
       mood.setEmotion(sentence.emotion, sentence.intensity);
@@ -186,9 +219,9 @@ function start(): void {
   const clips = new Clips(
     voice.tts,
     {
-      begin: (msg) => face.audioBegin(msg),
-      chunk: (id, pcm, sampleRate) => face.audioChunk({ id, pcm: pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength) as ArrayBuffer, sampleRate }),
-      end: (id) => face.audioEnd(id),
+      begin: (msg) => audioOut.audioBegin(msg),
+      chunk: (id, pcm, sampleRate) => audioOut.audioChunk({ id, pcm: pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength) as ArrayBuffer, sampleRate }),
+      end: (id) => audioOut.audioEnd(id),
     },
     settings,
     join(dataDir, "cache", "clips"),
@@ -395,7 +428,8 @@ function start(): void {
     const on = s.appAudio.enabled && sidecar.endpoint() !== null && !s.doNotDisturb;
     appAudio.set(on ? s.appAudio.apps : null, s.stt.vocabulary);
   };
-  inCall = () => appAudio.active();
+  // A call: friends heard in an app, or the bot sitting in the user's voice channel
+  inCall = () => appAudio.active() || discordVoice.live();
   sidecar.on("ready", updateAppAudio);
   sidecar.on("down", () => appAudio.set(null));
 
@@ -408,6 +442,8 @@ function start(): void {
       const found = speakers.identify(u.voiceprint, u.app, { exclude: (v) => !!v.owner });
       if (found.voice && found.status !== "uncertain") name = voiceLabel(found.voice);
     }
+    // Lumi's own voice coming back from the call the bot is in
+    if (discordVoice.live() && isEcho(u.text, memory.recentConversation(6).filter((e) => e.who === "lumi").map((e) => e.text).join(" "))) return;
     log.perception(`Heard on ${u.app} (${name}): ${u.text}`);
     const wake = matchWakeWord(u.text, settings().listen.wakeWord);
     const named = wake.matched || /\blumi\b/i.test(u.text);
@@ -732,6 +768,7 @@ function start(): void {
       reminders: memory.reminders(),
       diary: memory.diary(),
       appAudioStatus: appAudio.statuses,
+      discord: { ...discordVoice.status(), token: discordToken.source() },
       knownVoices: speakers.voices().map((v) => ({ id: v.id, label: voiceLabel(v, settings().userName), owner: !!v.owner, via: v.via, samples: v.samples, lastHeard: v.lastHeard })),
       dataPath: dataDir,
       sidecar: sidecar.status(),
@@ -800,6 +837,15 @@ function start(): void {
         speakers.forget(id);
         return snapshot();
       },
+      setDiscordToken: (token) => {
+        try {
+          discordToken.set(token);
+        } catch (err) {
+          log.warn("Saving the Discord token failed", err);
+        }
+        updateDiscord();
+        return snapshot();
+      },
       openDataFolder: () => void shell.openPath(dataDir),
       restartSidecar: async () => {
         await sidecar.restart();
@@ -817,6 +863,7 @@ function start(): void {
     if (JSON.stringify(next.tts) !== JSON.stringify(prev.tts)) prepareClips();
     if (next.muted && !prev.muted) voice.stopAll();
     if (JSON.stringify(next.perception) !== JSON.stringify(prev.perception)) updateUia();
+    if (JSON.stringify(next.discord) !== JSON.stringify(prev.discord)) updateDiscord();
     if (JSON.stringify(next.appAudio) !== JSON.stringify(prev.appAudio) || next.doNotDisturb !== prev.doNotDisturb || next.stt.vocabulary !== prev.stt.vocabulary) updateAppAudio();
     turns.refresh();
     tray.refresh();
@@ -842,6 +889,7 @@ function start(): void {
     changes.stop();
     uia.set(false);
     appAudio.set(null);
+    discordVoice.dispose();
     gazeOverlay?.dispose();
     autonomy.stop();
     bubbles.dispose();
@@ -867,6 +915,7 @@ function start(): void {
   autonomy.start();
   registerHotkeys();
   void sidecar.start();
+  updateDiscord();
   if (settings().launchAtLogin) applyLoginItem();
   setInterval(() => memory.touch(), 5 * 60_000);
   setInterval(() => {

@@ -76,6 +76,13 @@ const strings = (v: unknown, fallback: string[], maxItems: number, maxLength: nu
   Array.isArray(v)
     ? [...new Set(v.filter((x): x is string => typeof x === "string").map((x) => x.trim().slice(0, maxLength)).filter(Boolean))].slice(0, maxItems)
     : fallback;
+/** A Discord user: a numeric id (17-20 digits), or a username ("@drice", "drice", old "Name#1234"). */
+export function discordUser(value: string): string {
+  const v = value.trim().replace(/^<@!?(\d+)>$/, "$1").replace(/^@/, "");
+  if (/^\d{15,22}$/.test(v)) return v;
+  if (/^[\p{L}\p{N}_.]{2,32}(#\d{4})?$/u.test(v)) return v.toLowerCase();
+  return "";
+}
 const color = (v: unknown, fallback: string) => (typeof v === "string" && /^#[0-9a-f]{6}$/i.test(v.trim()) ? v.trim().toUpperCase() : fallback);
 
 function brainChoice(v: unknown, fallback: BrainChoice, allowEmptyModel = false): BrainChoice {
@@ -98,6 +105,7 @@ export function sanitizeSettings(input: unknown): Settings {
   const face = obj(raw.face);
   const voices = obj(raw.voices);
   const appAudio = obj(raw.appAudio);
+  const discord = obj(raw.discord);
   const perception = obj(raw.perception);
   return {
     profile: oneOf(raw.profile, PROFILES, d.profile),
@@ -138,6 +146,10 @@ export function sanitizeSettings(input: unknown): Settings {
     voices: {
       enabled: bool(voices.enabled, d.voices.enabled),
       onlyMe: bool(voices.onlyMe, d.voices.onlyMe),
+    },
+    discord: {
+      enabled: bool(discord.enabled, d.discord.enabled),
+      userId: discordUser(str(discord.userId, "", 60)),
     },
     appAudio: {
       enabled: bool(appAudio.enabled, d.appAudio.enabled),

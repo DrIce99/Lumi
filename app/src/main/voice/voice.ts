@@ -6,6 +6,9 @@ import type { EngineStatus, PlaybackEvent, Settings } from "../../shared/types";
 import { log } from "../log";
 import type { Sidecar } from "../sidecar";
 import type { FaceWindow } from "../window";
+
+/** Where Lumi's audio goes: the face window, and with it a Discord call when one is joined. */
+export type AudioOut = Pick<FaceWindow, "audioBegin" | "audioChunk" | "audioEnd" | "audioStop">;
 import { VoiceSpeech, type Sentence, type SpeechReactions } from "./speechOut";
 import { TtsClient } from "./ttsClient";
 
@@ -36,7 +39,7 @@ export class Voice {
 
   constructor(
     private readonly sidecar: Sidecar,
-    private readonly face: FaceWindow,
+    private readonly face: AudioOut,
     private readonly settings: () => Settings,
     private readonly hooks: VoiceHooks,
   ) {

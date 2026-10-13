@@ -24,6 +24,7 @@ const bridge: FaceBridge = {
   onAudioChunk: listen(IPC.audioChunk),
   onAudioEnd: listen(IPC.audioEnd),
   onAudioStop: listen(IPC.audioStop),
+  onAudioLocal: listen(IPC.audioLocal),
   onMicControl: listen(IPC.micControl),
   ready: () => ipcRenderer.send(IPC.ready),
   setInteractive: (interactive) => ipcRenderer.send(IPC.interactive, interactive),
