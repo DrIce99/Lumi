@@ -14,6 +14,7 @@ import {
   type BubbleChunk,
   type BubbleEnd,
   type BubbleStart,
+  type FaceContrast,
   type FaceGesture,
   type FaceLayout,
   type FaceState,
@@ -49,6 +50,7 @@ export class FaceWindow {
   private color: string;
   private layout: FaceLayout;
   private drag: { dx: number; dy: number; timer: NodeJS.Timeout } | null = null;
+  private lastContrast: FaceContrast | null = null;
 
   constructor(
     private readonly handlers: FaceWindowHandlers,
@@ -110,6 +112,7 @@ export class FaceWindow {
       });
     on(IPC.ready, () => {
       this.sendLayout();
+      if (this.lastContrast) this.send(IPC.contrast, this.lastContrast);
       handlers.ready();
     });
     on(IPC.interactive, (_e, interactive) => this.win.setIgnoreMouseEvents(interactive !== true, { forward: true }));
@@ -200,6 +203,14 @@ export class FaceWindow {
 
   gesture(gesture: FaceGesture): void {
     this.send(IPC.gesture, gesture);
+  }
+
+  /** Shadow and border under the eyes; sent only when they change. */
+  contrast(contrast: FaceContrast): void {
+    const last = this.lastContrast;
+    if (last && last.shadow === contrast.shadow && last.border === contrast.border) return;
+    this.lastContrast = contrast;
+    this.send(IPC.contrast, contrast);
   }
 
   bubbleStart(msg: BubbleStart): void {

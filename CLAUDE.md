@@ -121,7 +121,8 @@ Work one roadmap phase at a time; finish each with checks green.
 ## Testing
 
 - Pure modules (`attention`, `reading`, `chunker`, `endpoint`,
-  `normalize_it`, emotion mapping) get unit tests. Providers and the
+  `normalize_it`, emotion mapping; later `glare`, `patterns`, memory
+  `search`) get unit tests. Providers and the
   sidecar are mocked in app tests; sidecar engines are mocked in pytest
   except tests marked `@pytest.mark.model` (skipped by default).
 
@@ -211,6 +212,113 @@ Work one roadmap phase at a time; finish each with checks green.
   the talk pulse, playback events and barge-in keep working. Bots can't
   join DM calls. Lumi's voice heard back through app audio is dropped as
   echo while the bot is live.
+- Adaptive outline (`perception/backdrop.ts`, pure): the mean luma behind
+  the face box, read once a second from the change detector's frames of
+  Lumi's monitor (`ChangeDetector.onFrames`, no extra capture; content
+  protection keeps our window out of them), picks one of three
+  shadow/border opacity bands with 0.03 hysteresis; no sample for 3 s =
+  middle band. Main sends `face:contrast` only on change, the renderer
+  eases it over 400 ms. `LUMI_DEBUG_VISIBLE=1` puts the face itself in
+  the captures, so the measure is wrong while it is set. Canvas shadow
+  blur/offset ignore the transform: multiply by devicePixelRatio.
+- Expression timing: emotion travels with each sentence (`AudioBegin`,
+  the sentence id is the sequence). The renderer player sends a "lead"
+  playback event 120 ms before a sentence's scheduled start (for the next
+  sentence while the current one still plays); `VoiceSpeech` applies the
+  emotion and gaze on "lead", or on "start" if no lead came, once per
+  sentence and never after an abort. Answer emotion fades 1.5-3 s after
+  speaking ends (`Mood`); barge-in clears it (`mood.clearEmotion()`), the
+  turn manager already sets listening → "ascolto". Missing or unknown
+  emotions are guessed from the text (`guessEmotion` in
+  `shared/emotions.ts`: cue words matched whole, then "?!" / "!"), in
+  `parseToolCall`, in streamed say calls (per sentence) and for plain-text
+  answers; an explicit emotion always wins. Mid-text `[emotion]` tags are
+  not used: one say call per emotion.
+- Lid cuts: `EyeShape.lidTop/lidAngle/cheek` cut the capsule with a
+  straight, possibly slanted lid from above (sad: outer side lower, angry:
+  inner side lower) and a curved cheek from below (happy). Drawn on an
+  offscreen layer; the border is that layer stamped in 8 directions and
+  tinted black, so glow, shadow and border follow the cut shape.
+
+## Planned features (not built yet; roadmap phases 9-11)
+
+Decisions already taken for the next phases. Nothing here exists in the
+code yet; when a piece lands, move its notes to the sections above.
+
+- Glare (`perception/glare.ts`, pure): luminance jump on a 64x36
+  thumbnail of the watched display, Rec. 709 on linearized values. The
+  thumbnail comes from the sidecar like every other capture (never
+  `desktopCapturer`). Glare overrides expressions except speaking, where
+  it plays at 60%.
+- Vision becomes a separate local model (top-level `vision` setting
+  replacing `brain.vision`, Ollama, default `qwen3-vl:8b`,
+  `keep_alive: "2m"`). The brain never receives images: it gets
+  `{ description, texts, regions }` text from `perception/vision.ts`.
+  Direct image upload to a remote brain only if `sendScreenshots` allows
+  it (default becomes `never`). Vision `regions` (0-1000 normalized)
+  become gaze candidates.
+- Wake word: openWakeWord in the sidecar (`/wake`, CPU), mic opened once
+  and shared with VAD, replacing transcript spotting in
+  `voice/wakeWord.ts`. 1.5 s ring buffer so "Lumi, <question>" in one
+  breath reaches STT. Raise threshold 30% while Lumi is speaking; 2
+  consecutive frames above threshold to fire. The "lumi" model is trained
+  from synthetic samples made with our own TTS engines
+  (`sidecar/wake/train.py`); trained models live in the models cache, not
+  git.
+- Command bar (`commandbar.ts`): pre-created hidden window,
+  `globalShortcut` (`Ctrl+Alt+L`), `backgroundMaterial: 'acrylic'` on
+  Windows 11 with a solid fallback; restore focus to the previous window
+  on close.
+
+### Memory (`main/brain/memory/`, phase 10)
+
+Replaces `archive.jsonl` + `brain/memory.ts` + `recall.ts`; the existing
+archive, episodes and facts are imported into the raw log.
+
+- Goal: remember everything for years, prioritize what matters, forget
+  only on explicit request. Memories never go into model weights.
+- One SQLite file (`%APPDATA%\Lumi\memory.db`, `better-sqlite3` +
+  `sqlite-vec` + FTS5). Four layers: raw message log (append-only), hybrid
+  index (FTS5 + vectors), extracted facts, hierarchical summaries
+  (day → week → month).
+- Text is the source of truth; vectors are a rebuildable index. Every
+  vector row stores its embedding model name; on model change re-embed in
+  the background and search only vectors of the current model meanwhile.
+- Embeddings via Ollama (`bge-m3` default) from an async queue: never block
+  a conversation turn on embedding. Without Ollama, sidecar CPU embeddings;
+  without either, FTS only.
+- Search: date/kind filters first, FTS5 and vector top-50 in parallel,
+  Reciprocal Rank Fusion, then rerank with the Generative Agents score
+  (relevance + exponential recency decay + importance). Importance only
+  reorders, it never discards. `search.ts` is pure and unit-tested.
+- Prompt budget ~1500 tokens: facts with importance >= 8 always included,
+  other memories only when relevant. The model can also call
+  `search_memory({ query, from, to, kind })`.
+- Facts and summaries store `source_ids` (message ids). A contradicting new
+  fact sets `superseded_by` on the old one instead of duplicating it.
+- Forget is a cascade with user confirmation (`forget({ query })`): search
+  all layers, show matches, delete rows + vectors + FTS entries + facts
+  derived only from them, regenerate summaries/facts that cited them,
+  `VACUUM`, regenerate backups. Never delete memory outside this flow.
+- Fact extraction and nightly reflection default to a local model, so the
+  full history never leaves the machine.
+
+### Habits (`main/brain/habits/`, phase 11)
+
+- `events.ts` logs foreground app changes, commands to Lumi, accepted or
+  rejected proposals, session start/end (table `events` in `memory.db`,
+  same forget policy).
+- `patterns.ts` is deterministic, no LLM: time recurrences (30-min slot x
+  weekday) and consecutive-event pairs (simple Markov chain). A pattern
+  becomes a hypothesis at >= 5 occurrences and >= 70% frequency. Pure and
+  unit-tested.
+- `reflection.ts` runs when the PC is idle (night, or 30 min idle on AC):
+  daily/weekly/monthly summaries, names habits, stores them as facts of kind
+  `abitudine` with a confidence.
+- `triggers.ts` proposes, never executes: accept raises confidence, reject
+  lowers it, archive below 0.3, at most one proposal per 20 min, none in
+  "Non disturbare", calls or heavy typing. Auto-actions only for harmless
+  actions the user enabled explicitly in settings.
 
 ## Debug aids (env vars)
 

@@ -3,7 +3,8 @@
 // order, their chunks scheduled back to back without gaps; a short pause
 // separates sentences. stop() fades out (barge-in) and reports how much of
 // the current sentence was heard. The analyser gives the speech level that
-// makes the eyes pulse.
+// makes the eyes pulse. Each sentence is announced ("lead") a little before
+// it plays, so its emotion reaches the face ahead of the voice, as in people.
 import type { AudioBegin, AudioChunk, PlaybackEvent } from "../../shared/types";
 import { pcm16ToFloat, rms } from "./rms";
 
@@ -11,6 +12,8 @@ import { pcm16ToFloat, rms } from "./rms";
 const SENTENCE_GAP = 0.06;
 /** Scheduling headroom for the first chunk, seconds. */
 const START_LEAD = 0.03;
+/** The face changes expression this long before the voice, seconds. */
+const EXPRESSION_LEAD = 0.12;
 
 interface Utterance {
   id: number;
@@ -20,6 +23,8 @@ interface Utterance {
   rate: number;
   complete: boolean;
   started: boolean;
+  /** The "lead" event was scheduled. */
+  led: boolean;
   startAt: number;
   scheduledEnd: number;
   playing: number;
@@ -61,6 +66,7 @@ export class Player {
       rate: 24_000,
       complete: false,
       started: false,
+      led: false,
       startAt: 0,
       scheduledEnd: 0,
       playing: 0,
@@ -176,6 +182,7 @@ export class Player {
           at = Math.max(ctx.currentTime + START_LEAD, this.nextFree);
           u.started = true;
           u.startAt = at;
+          this.announce(u, at);
           const delay = Math.max(0, (at - ctx.currentTime) * 1000);
           setTimeout(() => {
             if (this.queue[0] === u) {
@@ -197,8 +204,22 @@ export class Player {
         };
         source.start(at);
       }
+      // The next sentence will start right after this one: announce it early
+      const next = this.queue[1];
+      if (next && u.complete && next.pending.length) this.announce(next, u.scheduledEnd + SENTENCE_GAP);
       return;
     }
+  }
+
+  /** Sends "lead" for a sentence that will start at `at` (AudioContext time). */
+  private announce(u: Utterance, at: number): void {
+    if (u.led || !this.ctx) return;
+    u.led = true;
+    const delay = Math.max(0, (at - EXPRESSION_LEAD - this.ctx.currentTime) * 1000);
+    setTimeout(() => {
+      // Dropped by an interruption meanwhile: nothing to anticipate
+      if (this.queue.includes(u)) this.hooks.event({ id: u.id, type: "lead" });
+    }, delay);
   }
 
   private finishIfDone(u: Utterance): void {

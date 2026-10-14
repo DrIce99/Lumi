@@ -6,7 +6,7 @@
 // message carrying the situation, the screen, memory and recent
 // conversation. Within a moment the loop only continues after
 // look_at_screen, whose screenshot the model needs to see.
-import type { Emotion } from "../../shared/emotions";
+import { guessEmotion, type Emotion } from "../../shared/emotions";
 import { PROVIDERS } from "../../shared/providers";
 import { FACT_KINDS, type FactKind, type Settings } from "../../shared/types";
 import { log } from "../log";
@@ -307,7 +307,7 @@ export class Brain {
         // Plain text counts as speech only when answering: some open models
         // reply in text instead of calling say, but in autonomous moments
         // that text is often just their reasoning.
-        if (!ran.said && isMessage && result.text) says.push({ text: result.text, emotion: "neutra", intensity: 0.6 });
+        if (!ran.said && isMessage && result.text) says.push({ text: result.text, ...guessEmotion(result.text) });
         speech.live(says.map((s) => ({ ...s, complete: true })));
         if (!ran.followUp) {
           // Small models sometimes only act after a message: give them one more round to answer

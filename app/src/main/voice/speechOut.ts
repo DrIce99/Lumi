@@ -1,9 +1,10 @@
 // A moment's speech, spoken: the say calls stream in, the chunker cuts them
 // into sentences, each sentence goes to the TTS as soon as it is complete,
 // its audio streams to the face window, and playback reports back. The
-// emotion and gaze of each sentence are applied when it starts playing.
+// emotion and gaze of each sentence are applied when the face window says it
+// is about to play ("lead", ~120 ms ahead), never when the text is generated.
 // Interrupted speech reports only what the user actually heard.
-import { clampIntensity, toEmotion, type Emotion } from "../../shared/emotions";
+import { clampIntensity, guessEmotion, toEmotion, type Emotion } from "../../shared/emotions";
 import type { AudioBegin, PlaybackEvent } from "../../shared/types";
 import type { SayCall, SpeechSink } from "../brain/brain";
 import type { LiveSay } from "../brain/providers/types";
@@ -24,7 +25,7 @@ export interface VoiceOutput {
 }
 
 export interface SpeechReactions {
-  /** A sentence starts playing. */
+  /** A sentence is about to play (or starts, if no lead came): its emotion and gaze apply now. */
   sentenceStart(sentence: Sentence): void;
   /** The speech started or ended (face talking, listening for barge-in). */
   speaking(active: boolean): void;
@@ -67,6 +68,8 @@ interface SayState {
   /** Sentences waiting for the emotion (it normally arrives before the text). */
   waiting: string[];
   complete: boolean;
+  /** The call came without an emotion: each sentence gets one guessed from its text. */
+  guess: boolean;
 }
 
 export class VoiceSpeech implements SpeechSink {
@@ -75,6 +78,8 @@ export class VoiceSpeech implements SpeechSink {
   private finished = false;
   private aborted = false;
   private speakingNow = false;
+  /** Sentences whose emotion already reached the face. */
+  private readonly expressed = new Set<number>();
   private resolveDone!: (heard: { text: string; interrupted: boolean }) => void;
   private readonly heard: Promise<{ text: string; interrupted: boolean }>;
 
@@ -121,13 +126,15 @@ export class VoiceSpeech implements SpeechSink {
     if (!s) return false;
     // A sentence shown as text instead has nothing more to report
     if (s.state === "failed") return true;
-    if (event.type === "start") {
+    if (event.type === "lead") {
+      this.express(s);
+    } else if (event.type === "start") {
       if (s.state === "synth") s.state = "playing";
       if (!this.speakingNow) {
         this.speakingNow = true;
         this.react.speaking(true);
       }
-      this.react.sentenceStart(s);
+      this.express(s);
     } else {
       s.totalMs = event.totalMs;
       s.playedMs = event.playedMs;
@@ -135,6 +142,12 @@ export class VoiceSpeech implements SpeechSink {
       this.checkDone();
     }
     return true;
+  }
+
+  private express(s: Sentence): void {
+    if (this.aborted || this.expressed.has(s.id)) return;
+    this.expressed.add(s.id);
+    this.react.sentenceStart(s);
   }
 
   /** What was heard so far (complete sentences plus the heard part of an interrupted one). */
@@ -148,7 +161,7 @@ export class VoiceSpeech implements SpeechSink {
   private feed(index: number, say: LiveSay, final: boolean): void {
     let state = this.says[index];
     if (!state) {
-      state = { chunker: new SentenceChunker(index === 0 ? DEFAULT_CHUNKER : { ...DEFAULT_CHUNKER, firstCommaAfter: DEFAULT_CHUNKER.commaAfter }), fed: "", intensity: 0.6, waiting: [], complete: false };
+      state = { chunker: new SentenceChunker(index === 0 ? DEFAULT_CHUNKER : { ...DEFAULT_CHUNKER, firstCommaAfter: DEFAULT_CHUNKER.commaAfter }), fed: "", intensity: 0.6, waiting: [], complete: false, guess: false };
       this.says[index] = state;
     }
     if (state.complete) return;
@@ -169,20 +182,21 @@ export class VoiceSpeech implements SpeechSink {
     if (say.complete || final) {
       state.complete = true;
       sentences.push(...state.chunker.flush());
-      // The emotion is part of a complete call; a model that left it out speaks neutrally
-      state.emotion ??= "neutra";
+      // The emotion is part of a complete call; for a model that left it out, the text decides
+      if (!state.emotion) state.guess = true;
     }
     state.waiting.push(...sentences);
-    if (!state.emotion) return;
+    if (!state.emotion && !state.guess) return;
     for (const sentence of state.waiting.splice(0)) this.speak(index, sentence, state);
   }
 
   private speak(say: number, text: string, state: SayState): void {
+    const guessed = state.emotion ? null : guessEmotion(text);
     const sentence: Sentence = {
       id: this.nextId(),
       text,
-      emotion: state.emotion ?? "neutra",
-      intensity: state.intensity,
+      emotion: state.emotion ?? guessed?.emotion ?? "neutra",
+      intensity: guessed?.intensity ?? state.intensity,
       look: state.look,
       say,
       state: "synth",

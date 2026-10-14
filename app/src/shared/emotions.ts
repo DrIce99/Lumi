@@ -53,6 +53,35 @@ export function toEmotion(value: unknown): Emotion | null {
   return SYNONYMS[key] ?? null;
 }
 
+/** Words or phrases (lowercase), matched whole: "grande" but not "grandezza". */
+function words(...list: string[]): RegExp {
+  return new RegExp(String.raw`(?<!\p{L})(?:${list.join("|")})(?!\p{L})`, "u");
+}
+
+/** Cues for guessEmotion, checked in this order (the first match wins). */
+const CUES: { emotion: Emotion; intensity: number; re: RegExp }[] = [
+  { emotion: "tristezza", intensity: 0.5, re: words("mi dispiace", "purtroppo", "peccato", "che triste", "condoglianze", "che brutto") },
+  { emotion: "rabbia", intensity: 0.4, re: words("uffa", "che rabbia", "che fastidio", "insopportabile", "che nervi") },
+  { emotion: "imbarazzo", intensity: 0.4, re: words("oops", "ops", "scusa", "scusami", "che imbarazzo", "ehm") },
+  { emotion: "sorpresa", intensity: 0.5, re: words("wow", "incredibile", "non ci credo", "accidenti", "caspita", String.raw`davvero\?`) },
+  { emotion: "gioia", intensity: 0.6, re: words("evviva", "evvai", "fantastico", "che bello", "bellissim[oa]", "ottimo", "perfetto", "(?:ah){2,}", "(?:ha){2,}") },
+  { emotion: "pensiero", intensity: 0.4, re: words("hm+", "mh+", "vediamo", "chissà", "non saprei", "forse") },
+];
+
+/**
+ * A light guess of the emotion of a sentence, from its punctuation and a
+ * few cue words, for when the model didn't give one. An explicit emotion
+ * always wins over this.
+ */
+export function guessEmotion(text: string): { emotion: Emotion; intensity: number } {
+  const t = text.toLowerCase();
+  for (const cue of CUES) if (cue.re.test(t)) return { emotion: cue.emotion, intensity: cue.intensity };
+  // "?!" or "!?": astonishment
+  if (/\?\s*!|!\s*\?/.test(t)) return { emotion: "sorpresa", intensity: 0.5 };
+  if (t.includes("!")) return { emotion: "gioia", intensity: 0.35 };
+  return { emotion: "neutra", intensity: 0.6 };
+}
+
 /** Keeps intensities in 0..1; a missing one is a moderate 0.6. */
 export function clampIntensity(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0.6;

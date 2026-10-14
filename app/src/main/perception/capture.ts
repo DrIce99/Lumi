@@ -35,6 +35,8 @@ export class ChangeDetector {
       /** One frame per display, in the same order. */
       grab: (displays: Display[]) => Promise<Frame[]>;
       onChanges: (changes: Change[]) => void;
+      /** Every grabbed frame, for other readers of the screen (the backdrop behind the face). */
+      onFrames?: (displays: Display[], frames: Frame[]) => void;
     },
   ) {}
 
@@ -65,6 +67,7 @@ export class ChangeDetector {
       const t0 = performance.now();
       const frames = await this.options.grab(displays);
       const t1 = performance.now();
+      this.options.onFrames?.(displays, frames);
       const changes: Change[] = [];
       displays.forEach((display, d) => {
         const frame = frames[d];

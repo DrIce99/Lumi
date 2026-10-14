@@ -99,6 +99,44 @@ test("streamed text that gets rewritten doesn't repeat or garble what was said",
   );
 });
 
+test("the face gets a sentence's emotion when the window announces it (lead), once, and never after an interruption", () => {
+  const t = speech();
+  t.s.final([
+    { text: "Che bello vederti!", emotion: "gioia", intensity: 0.8 },
+    { text: "Ma ora devo andare.", emotion: "tristezza", intensity: 0.5 },
+  ]);
+  const [first, second, third] = t.requests;
+  assert.equal(third, undefined);
+  assert.deepEqual(t.started, [], "nothing when the text is generated");
+  t.s.playback({ id: first.id, type: "lead" });
+  assert.deepEqual(t.started, ["Che bello vederti!|gioia"]);
+  assert.deepEqual(t.speaking, [], "the voice is not playing yet");
+  t.s.playback({ id: first.id, type: "start" });
+  assert.deepEqual(t.started, ["Che bello vederti!|gioia"], "not again on start");
+  assert.deepEqual(t.speaking, [true]);
+  // Without a lead, start applies it
+  t.s.playback({ id: second.id, type: "start" });
+  assert.deepEqual(t.started, ["Che bello vederti!|gioia", "Ma ora devo andare.|tristezza"]);
+
+  const u = speech();
+  u.s.final([{ text: "Prima frase. Seconda frase.", emotion: "sorpresa", intensity: 0.7 }]);
+  u.s.playback({ id: u.requests[0].id, type: "start" });
+  u.s.abort();
+  u.s.playback({ id: u.requests[1].id, type: "lead" });
+  assert.deepEqual(u.started, ["Prima frase.|sorpresa"]);
+});
+
+test("a say without an emotion gets one guessed from each sentence", () => {
+  const t = speech();
+  t.s.live([{ text: "Mi dispiace tanto. Però domani", complete: false }]);
+  assert.equal(t.requests.length, 0, "waits: the emotion may still come");
+  t.s.live([{ text: "Mi dispiace tanto. Però domani andrà meglio!", complete: true }]);
+  assert.deepEqual(
+    t.requests.map((r) => `${r.text}|${r.emotion}`),
+    ["Mi dispiace tanto.|tristezza", "Però domani andrà meglio!|gioia"],
+  );
+});
+
 test("an interruption keeps only what was heard", async () => {
   const t = speech();
   t.s.final([{ text: "Questa è la prima frase. Questa è la seconda frase, molto più lunga della prima.", emotion: "neutra", intensity: 0.6 }]);

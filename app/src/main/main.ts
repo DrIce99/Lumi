@@ -20,6 +20,7 @@ import { readJson, writeJson } from "./jsonStore";
 import { initLog, log } from "./log";
 import { Mood } from "./mood";
 import { ensureOllama } from "./ollama";
+import { Backdrop, meanLuminance, rectInFrame } from "./perception/backdrop";
 import { ChangeDetector } from "./perception/capture";
 import { foregroundWindow, systemCaret } from "./perception/desktop";
 import { Perception, type OcrLine } from "./perception/perception";
@@ -290,6 +291,7 @@ function start(): void {
     interrupt: () => {
       voice.stopAll();
       brain.interrupt();
+      mood.clearEmotion();
     },
     speaking: () => voice.busy(),
     setListening: (listening) => mood.set({ listening }),
@@ -374,6 +376,10 @@ function start(): void {
     },
     screenBounds: () => lumiDisplay().bounds,
   });
+  // Shadow and border under the eyes follow the brightness behind the face;
+  // without fresh frames (perception off or paused) they go back to the middle values
+  const backdrop = new Backdrop();
+  setInterval(() => face.contrast(backdrop.contrast(Date.now())), 1000).unref();
   const changes = new ChangeDetector({
     fps: () => settings().perception.captureFps,
     // The monitor with the active window, plus the one Lumi is on
@@ -396,6 +402,15 @@ function start(): void {
       });
     },
     onChanges: (list) => perception.onChanges(list),
+    onFrames: (displays, frames) => {
+      if (!settings().face.adaptiveShadow || !backdrop.wantsSample(Date.now()) || face.isDragging()) return;
+      const i = displays.findIndex((d) => d.id === lumiDisplay().id);
+      const frame = frames[i];
+      const region = frame && rectInFrame(face.faceRect(), displays[i].bounds, frame);
+      if (!region) return;
+      backdrop.sample(meanLuminance(frame, region), Date.now());
+      face.contrast(backdrop.contrast(Date.now()));
+    },
   });
   const uia = new UiaClient(
     () => sidecar.socketUrl("/uia"),

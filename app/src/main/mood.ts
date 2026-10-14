@@ -1,5 +1,5 @@
 // The face's state as the main process sees it: the current emotion (set by
-// what Lumi says, fading back to neutral after a while) plus the
+// what Lumi says, fading back to neutral 1.5-3 s after the answer) plus the
 // conversation flags (listening, thinking, speaking) and drowsiness.
 import { clampIntensity, type Emotion } from "../shared/emotions";
 import type { FaceState } from "../shared/types";
@@ -17,8 +17,10 @@ export class Mood {
   constructor(
     private readonly send: (state: FaceState) => void,
     private readonly now: () => number = () => Date.now(),
+    private readonly random: () => number = Math.random,
   ) {
-    this.timer = setInterval(() => this.expire(), 1000);
+    this.timer = setInterval(() => this.expire(), 250);
+    this.timer.unref?.();
   }
 
   dispose(): void {
@@ -35,9 +37,22 @@ export class Mood {
 
   set(flags: Partial<MoodFlags>): void {
     this.flags = { ...this.flags, ...flags };
-    // The emotion of an answer outlives the answer by a few seconds only
-    if (flags.speaking === false && this.emotion !== "neutra") this.until = Math.min(this.until, this.now() + 4000);
+    // The emotion of an answer outlives the answer by 1.5-3 s only
+    if (flags.speaking === false && this.emotion !== "neutra") this.until = this.now() + 1500 + this.random() * 1500;
     this.emit();
+  }
+
+  /** Lumi was interrupted: the emotion of the cut answer goes at once (the face listens). */
+  clearEmotion(): void {
+    this.emotion = "neutra";
+    this.intensity = 0.6;
+    this.until = 0;
+    this.emit();
+  }
+
+  /** Runs the expiry check now (tests drive the clock). */
+  tick(): void {
+    this.expire();
   }
 
   state(): FaceState {

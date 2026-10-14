@@ -5,6 +5,7 @@ export const IPC = {
   state: "face:state",
   gaze: "face:gaze",
   gesture: "face:gesture",
+  contrast: "face:contrast",
   bubbleStart: "face:bubble-start",
   bubbleChunk: "face:bubble-chunk",
   bubbleEnd: "face:bubble-end",

@@ -369,6 +369,7 @@ function fill(next: SettingsSnapshot): void {
   $("doNotDisturb").checked = s.doNotDisturb;
   $("muted").checked = s.muted;
   $("subtitles").checked = s.face.subtitles;
+  $("adaptiveShadow").checked = s.face.adaptiveShadow;
   $("voicesEnabled").checked = s.voices.enabled;
   $("onlyMe").checked = s.voices.onlyMe;
   $("discordEnabled").checked = s.discord.enabled;
@@ -471,7 +472,7 @@ function collect(): Settings {
     muted: $("muted").checked,
     chatHotkey: $("chatHotkey").value,
     launchAtLogin: $("launchAtLogin").checked,
-    face: { scale: num("scale", s.face.scale), color: $("color").value, subtitles: $("subtitles").checked },
+    face: { scale: num("scale", s.face.scale), color: $("color").value, subtitles: $("subtitles").checked, adaptiveShadow: $("adaptiveShadow").checked },
     voices: { enabled: $("voicesEnabled").checked, onlyMe: $("onlyMe").checked },
     discord: { enabled: $("discordEnabled").checked, userId: $("discordUserId").value.trim() },
     appAudio: {

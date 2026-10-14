@@ -81,7 +81,13 @@ export interface Settings {
     /** Executable names, e.g. "Discord". */
     apps: string[];
   };
-  face: { scale: number; color: string; subtitles: boolean };
+  face: {
+    scale: number;
+    color: string;
+    subtitles: boolean;
+    /** Shadow and border under the eyes follow the brightness behind the face (needs perception). */
+    adaptiveShadow: boolean;
+  };
   perception: {
     enabled: boolean;
     ocr: OcrEngine;
@@ -129,7 +135,7 @@ export const DEFAULT_SETTINGS: Settings = {
   voices: { enabled: true, onlyMe: false },
   discord: { enabled: false, userId: "" },
   appAudio: { enabled: false, apps: ["Discord"] },
-  face: { scale: 1, color: "#F5F3EE", subtitles: false },
+  face: { scale: 1, color: "#F5F3EE", subtitles: false, adaptiveShadow: true },
   perception: {
     enabled: true,
     ocr: "windows",
@@ -202,6 +208,12 @@ export interface GazeCommand {
   pursuit: boolean;
 }
 
+/** Opacity (0..1) of the dark shadow and border under the eyes. */
+export interface FaceContrast {
+  shadow: number;
+  border: number;
+}
+
 export interface FaceState {
   expression: Expression;
   intensity: number;
@@ -259,6 +271,8 @@ export interface AudioChunk {
 }
 
 export type PlaybackEvent =
+  /** The sentence starts in EXPRESSION_LEAD_MS (or right away, if it was scheduled later than that): the face anticipates the voice. */
+  | { id: number; type: "lead" }
   | { id: number; type: "start" }
   | { id: number; type: "end"; playedMs: number; totalMs: number; interrupted: boolean };
 
@@ -292,6 +306,7 @@ export interface FaceBridge {
   onState(cb: (state: FaceState) => void): void;
   onGaze(cb: (gaze: GazeCommand) => void): void;
   onGesture(cb: (gesture: FaceGesture) => void): void;
+  onContrast(cb: (contrast: FaceContrast) => void): void;
   onBubbleStart(cb: (msg: BubbleStart) => void): void;
   onBubbleChunk(cb: (msg: BubbleChunk) => void): void;
   onBubbleEnd(cb: (msg: BubbleEnd) => void): void;

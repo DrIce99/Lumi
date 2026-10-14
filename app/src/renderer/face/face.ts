@@ -3,7 +3,7 @@
 // additively. The canvas animates at display rate only while something
 // moves, then sleeps until the next blink or eye movement is due.
 import type { Expression } from "../../shared/emotions";
-import type { FaceGesture, FaceLayout, FaceState, GazeCommand } from "../../shared/types";
+import type { FaceContrast, FaceGesture, FaceLayout, FaceState, GazeCommand } from "../../shared/types";
 import { Blinker } from "./blink";
 import { EXPRESSION_DEFS, NEUTRAL_SHAPE, shapeFor, transitionMs, type EyeShape } from "./expressions";
 import { GazeController } from "./gaze";
@@ -18,6 +18,13 @@ const BLINK_MIN = 0.1;
 /** Talk pulse: ±5% height following the speech level. */
 const TALK_PULSE = 0.05;
 const GESTURE_MS: Record<FaceGesture, number> = { nod: 520, shake: 460, bounce: 480, tremble: 380 };
+/** Shadow and border opacity until main measures the backdrop (its middle band). */
+const DEFAULT_CONTRAST: FaceContrast = { shadow: 0.3, border: 0.18 };
+/** Contrast changes ease in this long. */
+const CONTRAST_MS = 400;
+/** Soft shadow under each eye, px at scale 1. */
+const SHADOW_BLUR = 6;
+const SHADOW_OFFSET_Y = 1;
 
 export interface EyeGeometry {
   cx: number;
@@ -26,6 +33,10 @@ export interface EyeGeometry {
   height: number;
   /** Radians, canvas convention (positive = clockwise). */
   angle: number;
+  /** Lid and cheek cuts, see EyeShape. */
+  lidTop: number;
+  lidAngle: number;
+  cheek: number;
 }
 
 export function effectiveExpression(state: FaceState): Expression {
@@ -52,6 +63,12 @@ export class Face {
   private raf = 0;
   private wakeTimer: number | undefined;
   private readonly ctx: CanvasRenderingContext2D;
+  /** The eyes alone, and their grown silhouette for the border (offscreen). */
+  private readonly layer = offscreen();
+  private readonly outline = offscreen();
+  private dpr = 1;
+  private readonly shadow = new Tween(DEFAULT_CONTRAST.shadow);
+  private readonly border = new Tween(DEFAULT_CONTRAST.border);
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -94,6 +111,14 @@ export class Face {
 
   setGaze(command: GazeCommand): void {
     this.gaze.setCommand(command, performance.now());
+    this.wake();
+  }
+
+  /** How strongly the eyes are outlined, from the brightness behind the face. */
+  setContrast(contrast: FaceContrast): void {
+    const now = performance.now();
+    this.shadow.set(contrast.shadow, CONTRAST_MS, now);
+    this.border.set(contrast.border, CONTRAST_MS, now);
     this.wake();
   }
 
@@ -175,6 +200,9 @@ export class Face {
         width,
         height,
         angle: side * tilt,
+        lidTop: clamp(v("lidTop"), 0, 0.9),
+        lidAngle: v("lidAngle"),
+        cheek: clamp(v("cheek"), 0, 0.9),
       };
     };
     return [make(-1), make(1)];
@@ -209,10 +237,10 @@ export class Face {
           x += 2.6 * Math.sin(t * Math.PI * 4) * fade;
           break;
         case "bounce":
-          y -= 4 * Math.abs(Math.sin(t * Math.PI * 2)) * fade;
+          y -= 5 * Math.abs(Math.sin(t * Math.PI * 2)) * fade;
           break;
         case "tremble":
-          x += 0.9 * Math.sin(now * 0.09 + g.seed) * fade;
+          x += 1.2 * Math.sin(now * 0.09 + g.seed) * fade;
           break;
       }
     }
@@ -232,6 +260,8 @@ export class Face {
       this.gaze.active(now) ||
       this.gestures.length > 0 ||
       now - this.bounceAt < 240 ||
+      this.shadow.active(now) ||
+      this.border.active(now) ||
       Object.values(this.shape).some((t) => t.active(now))
     );
   }
@@ -269,36 +299,132 @@ export class Face {
 
   private resize(): void {
     const dpr = window.devicePixelRatio || 1;
+    this.dpr = dpr;
     const { windowWidth, windowHeight } = this.layout;
     this.canvas.style.width = `${windowWidth}px`;
     this.canvas.style.height = `${windowHeight}px`;
-    this.canvas.width = Math.round(windowWidth * dpr);
-    this.canvas.height = Math.round(windowHeight * dpr);
-    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    for (const c of [this.canvas, this.layer.canvas, this.outline.canvas]) {
+      c.width = Math.round(windowWidth * dpr);
+      c.height = Math.round(windowHeight * dpr);
+    }
   }
 
   private draw(now: number): void {
-    const ctx = this.ctx;
-    const { windowWidth, windowHeight, scale, color } = this.layout;
-    ctx.clearRect(0, 0, windowWidth, windowHeight);
-    for (const eye of this.eyes(now)) {
-      ctx.save();
-      ctx.translate(eye.cx, eye.cy);
-      ctx.rotate(eye.angle);
-      ctx.beginPath();
-      ctx.roundRect(-eye.width / 2, -eye.height / 2, eye.width, eye.height, Math.min(eye.width, eye.height) / 2);
-      ctx.fillStyle = color;
-      // A soft dark outline keeps the eyes visible on light backgrounds...
-      ctx.shadowColor = "rgba(0, 0, 0, 0.55)";
-      ctx.shadowBlur = 2.5 * scale;
-      ctx.fill();
-      // ...and a warm glow on dark ones
-      ctx.shadowColor = withAlpha(color, 0.55);
-      ctx.shadowBlur = 7 * scale;
-      ctx.fill();
-      ctx.restore();
+    const { scale, color } = this.layout;
+    const dpr = this.dpr;
+    // Canvas shadows ignore the transform: blur and offset are in device pixels
+    const px = scale * dpr;
+    // Only the face box (plus room for the glow) changes
+    const f = this.layout.face;
+    const margin = 14 * scale;
+    const box = {
+      x: Math.max(0, Math.floor((f.x - margin) * dpr)),
+      y: Math.max(0, Math.floor((f.y - margin) * dpr)),
+      width: Math.ceil((f.width + 2 * margin) * dpr),
+      height: Math.ceil((f.height + 2 * margin) * dpr),
+    };
+
+    // 1. The eyes, lids and cheeks cut away, on their own layer
+    const layer = this.layer;
+    layer.setTransform(1, 0, 0, 1, 0, 0);
+    layer.clearRect(box.x, box.y, box.width, box.height);
+    layer.setTransform(dpr, 0, 0, dpr, 0, 0);
+    layer.fillStyle = color;
+    this.eyes(now).forEach((eye, i) => {
+      layer.save();
+      layer.translate(eye.cx, eye.cy);
+      layer.rotate(eye.angle);
+      if (eye.lidTop > 0.001 || eye.cheek > 0.001) {
+        layer.beginPath();
+        lidPath(layer, eye, i === 0 ? -1 : 1);
+        layer.clip();
+      }
+      layer.beginPath();
+      layer.roundRect(-eye.width / 2, -eye.height / 2, eye.width, eye.height, Math.min(eye.width, eye.height) / 2);
+      layer.fill();
+      layer.restore();
+    });
+
+    // 2. The border: the eye shapes grown by one line width, in black
+    const border = this.border.value(now);
+    const outline = this.outline;
+    const d = Math.max(0.75, scale) * dpr;
+    outline.setTransform(1, 0, 0, 1, 0, 0);
+    outline.clearRect(box.x, box.y, box.width, box.height);
+    if (border > 0.001) {
+      for (const [dx, dy] of OUTLINE_DIRS) blit(outline, layer.canvas, box, dx * d, dy * d);
+      outline.globalCompositeOperation = "source-in";
+      outline.fillStyle = "#000";
+      outline.fillRect(box.x, box.y, box.width, box.height);
+      outline.globalCompositeOperation = "source-over";
     }
+
+    // 3. Composite: a warm glow (visible on dark backgrounds), the border, then
+    // the eyes over a soft dark shadow, stronger the brighter the backdrop
+    const ctx = this.ctx;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    ctx.shadowColor = withAlpha(color, 0.55);
+    ctx.shadowBlur = 7 * px;
+    blit(ctx, layer.canvas, box);
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
+    if (border > 0.001) {
+      ctx.globalAlpha = border;
+      blit(ctx, outline.canvas, box);
+      ctx.globalAlpha = 1;
+    }
+    ctx.shadowColor = `rgba(0, 0, 0, ${this.shadow.value(now)})`;
+    ctx.shadowBlur = SHADOW_BLUR * px;
+    ctx.shadowOffsetY = SHADOW_OFFSET_Y * px;
+    blit(ctx, layer.canvas, box);
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
   }
+}
+
+/** Eight directions, to grow a shape by stamping it around itself. */
+const OUTLINE_DIRS: [number, number][] = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+  [0.7, 0.7],
+  [-0.7, 0.7],
+  [0.7, -0.7],
+  [-0.7, -0.7],
+];
+
+/** Copies a region of `src` (device pixels) to the same place in `ctx`, shifted by dx, dy. */
+function blit(ctx: CanvasRenderingContext2D, src: HTMLCanvasElement, box: { x: number; y: number; width: number; height: number }, dx = 0, dy = 0): void {
+  ctx.drawImage(src, box.x, box.y, box.width, box.height, box.x + dx, box.y + dy, box.width, box.height);
+}
+
+/**
+ * The part of an eye that stays visible (eye-local coordinates, after the
+ * tilt): below a straight lid, possibly slanted, and above a cheek that
+ * curves up in the middle.
+ */
+export function lidPath(ctx: Pick<CanvasRenderingContext2D, "moveTo" | "lineTo" | "quadraticCurveTo" | "closePath">, eye: EyeGeometry, side: -1 | 1): void {
+  const half = eye.height / 2;
+  const m = eye.width / 2 + 2;
+  // A lid barely lowered can't be slanted much (it would cut the corners of an open eye)
+  const slope = Math.tan((eye.lidAngle * Math.PI) / 180) * Math.min(1, eye.lidTop * 8);
+  // Positive angles drop the lid on the inner side (toward the other eye)
+  const lidAt = (x: number) => -half + eye.lidTop * eye.height + slope * (-side * x);
+  const edge = half - eye.cheek * eye.height * 0.35;
+  const middle = half - eye.cheek * eye.height;
+  ctx.moveTo(-m, lidAt(-m));
+  ctx.lineTo(m, lidAt(m));
+  ctx.lineTo(m, edge);
+  // The control point that puts the curve's midpoint at `middle`
+  ctx.quadraticCurveTo(0, 2 * middle - edge, -m, edge);
+  ctx.closePath();
+}
+
+function offscreen(): CanvasRenderingContext2D {
+  return document.createElement("canvas").getContext("2d")!;
 }
 
 /** `#rrggbb` with an alpha, as an rgba() color. */

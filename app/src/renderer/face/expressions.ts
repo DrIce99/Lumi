@@ -19,6 +19,12 @@ export interface EyeShape {
   lid: number;
   /** Height change of the right eye only (thinking: one eye smaller). */
   asym: number;
+  /** Fraction of the eye cut away from the top by a straight lid (sad, angry, sleepy). */
+  lidTop: number;
+  /** Degrees; positive drops the lid toward the nose (angry), negative toward the outside (sad). */
+  lidAngle: number;
+  /** Fraction of the eye cut away from the bottom by a curved cheek (happy). */
+  cheek: number;
 }
 
 export interface ExpressionDef {
@@ -37,7 +43,7 @@ export interface ExpressionDef {
   blinkPauseMs?: number;
 }
 
-export const NEUTRAL_SHAPE: EyeShape = { width: 1, height: 1, y: 0, tilt: 0, spread: 0, lid: 0, asym: 0 };
+export const NEUTRAL_SHAPE: EyeShape = { width: 1, height: 1, y: 0, tilt: 0, spread: 0, lid: 0, asym: 0, lidTop: 0, lidAngle: 0, cheek: 0 };
 
 const def = (shape: Partial<EyeShape>, rest: Partial<Omit<ExpressionDef, "shape">> = {}): ExpressionDef => ({
   shape: { ...NEUTRAL_SHAPE, ...shape },
@@ -50,14 +56,17 @@ const def = (shape: Partial<EyeShape>, rest: Partial<Omit<ExpressionDef, "shape"
 
 export const EXPRESSION_DEFS: Record<Expression, ExpressionDef> = {
   neutra: def({}),
-  gioia: def({ width: 1.16, height: 0.76, y: 3 }, { onset: "bounce", blinkRate: 1.1 }),
-  tristezza: def({ width: 0.94, height: 0.8, y: 5, tilt: 11 }, { gazeBias: { x: 0, y: 0.75 }, blinkRate: 0.8, saccadeRate: 0.5 }),
-  sorpresa: def({ width: 1.1, height: 1.2, y: -2 }, { blinkPauseMs: 1400, saccadeRate: 0.4 }),
-  rabbia: def({ width: 0.84, height: 0.86, y: 1, tilt: -11, spread: -1.5 }, { saccadeRate: 0.7 }),
-  pensiero: def({ height: 0.97, asym: -0.14 }, { gazeBias: { x: 0.75, y: -0.75 }, saccadeRate: 0.35 }),
-  imbarazzo: def({ width: 0.95, height: 0.88, y: 2 }, { avert: true, onset: "tremble", blinkRate: 1.4 }),
-  sonno: def({ height: 0.94, y: 2, lid: 0.5 }, { blinkRate: 0.45, saccadeRate: 0.3 }),
-  ascolto: def({ height: 1.06, y: -1 }, { saccadeRate: 0.25 }),
+  // Happy eyes: the cheeks push the bottom up into an arch
+  gioia: def({ width: 1.2, height: 0.84, y: 3, cheek: 0.42 }, { onset: "bounce", blinkRate: 1.1 }),
+  // Sad: lids drop on the outer side
+  tristezza: def({ width: 0.94, height: 0.82, y: 6, tilt: 10, lidTop: 0.3, lidAngle: -26 }, { gazeBias: { x: 0, y: 0.85 }, blinkRate: 0.8, saccadeRate: 0.5 }),
+  sorpresa: def({ width: 1.14, height: 1.28, y: -3 }, { blinkPauseMs: 1400, saccadeRate: 0.4 }),
+  // Angry: lids drop toward the nose, a frown
+  rabbia: def({ width: 0.86, height: 0.88, y: 1.5, tilt: -8, spread: -2.5, lidTop: 0.32, lidAngle: 30 }, { saccadeRate: 0.7 }),
+  pensiero: def({ height: 0.95, asym: -0.2, lidTop: 0.12 }, { gazeBias: { x: 0.8, y: -0.8 }, saccadeRate: 0.35 }),
+  imbarazzo: def({ width: 0.93, height: 0.86, y: 3, cheek: 0.22 }, { avert: true, onset: "tremble", blinkRate: 1.4 }),
+  sonno: def({ height: 0.94, y: 2, lidTop: 0.52 }, { blinkRate: 0.45, saccadeRate: 0.3 }),
+  ascolto: def({ height: 1.1, y: -1.5 }, { saccadeRate: 0.25 }),
 };
 
 /**
@@ -67,7 +76,7 @@ export const EXPRESSION_DEFS: Record<Expression, ExpressionDef> = {
 export function shapeFor(expression: Expression, intensity: number): EyeShape {
   const target = EXPRESSION_DEFS[expression].shape;
   if (expression === "neutra") return { ...target };
-  const k = 0.35 + 0.65 * Math.min(1, Math.max(0, intensity));
+  const k = 0.45 + 0.55 * Math.min(1, Math.max(0, intensity));
   const out = { ...NEUTRAL_SHAPE };
   for (const key of Object.keys(out) as (keyof EyeShape)[]) {
     out[key] = NEUTRAL_SHAPE[key] + (target[key] - NEUTRAL_SHAPE[key]) * k;
@@ -82,6 +91,8 @@ export function transitionMs(from: EyeShape, to: EyeShape): number {
     Math.abs(from.height - to.height) +
     Math.abs(from.y - to.y) / 10 +
     Math.abs(from.tilt - to.tilt) / 20 +
-    Math.abs(from.lid - to.lid);
+    Math.abs(from.lid - to.lid) +
+    Math.abs(from.lidTop - to.lidTop) +
+    Math.abs(from.cheek - to.cheek);
   return Math.round(150 + Math.min(1, change / 0.6) * 150);
 }

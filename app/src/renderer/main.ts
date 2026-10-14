@@ -224,6 +224,7 @@ api.onLayout((next) => {
 api.onState((state) => face.setState(state));
 api.onGaze((gaze) => face.setGaze(gaze));
 api.onGesture((gesture) => face.gesture(gesture));
+api.onContrast((contrast) => face.setContrast(contrast));
 api.onBubbleStart((msg) => bubble.start(msg));
 api.onBubbleChunk((msg) => bubble.chunk(msg));
 api.onBubbleEnd((msg) => bubble.end(msg));

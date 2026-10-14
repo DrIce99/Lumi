@@ -140,11 +140,14 @@ test("expressions: every expression is defined and intensity scales the change",
   assert.deepEqual(shapeFor("neutra", 1), NEUTRAL_SHAPE);
   const full = shapeFor("sorpresa", 1);
   const mild = shapeFor("sorpresa", 0);
-  assert.ok(Math.abs(full.height - 1.2) < 1e-9 && Math.abs(full.width - 1.1) < 1e-9);
+  assert.ok(Math.abs(full.height - 1.28) < 1e-9 && Math.abs(full.width - 1.14) < 1e-9);
   assert.ok(mild.height > 1 && mild.height < full.height);
   assert.ok(shapeFor("tristezza", 1).tilt > 0, "sad eyes lean outward");
   assert.ok(shapeFor("rabbia", 1).tilt < 0, "angry eyes lean inward");
-  assert.ok(Math.abs(shapeFor("sonno", 1).lid - 0.5) < 1e-9, "sleepy: half closed");
+  assert.ok(Math.abs(shapeFor("sonno", 1).lidTop - 0.52) < 1e-9, "sleepy: lids half down");
+  assert.ok(shapeFor("rabbia", 1).lidAngle > 0 && shapeFor("rabbia", 1).lidTop > 0, "angry lids drop toward the nose");
+  assert.ok(shapeFor("tristezza", 1).lidAngle < 0 && shapeFor("tristezza", 1).lidTop > 0, "sad lids drop outward");
+  assert.ok(shapeFor("gioia", 1).cheek > 0 && shapeFor("gioia", 1).lidTop === 0, "happy: cut from below");
   const ms = transitionMs(NEUTRAL_SHAPE, full);
   assert.ok(ms >= 150 && ms <= 300);
   assert.equal(transitionMs(NEUTRAL_SHAPE, NEUTRAL_SHAPE), 150);

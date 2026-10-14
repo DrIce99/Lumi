@@ -1,7 +1,7 @@
 // Tools offered to the model and validation of the inputs it sends. Every
 // input is checked here before anything runs: open models often send
 // values that don't match the schema.
-import { clampIntensity, EMOTIONS, toEmotion, type Emotion } from "../../shared/emotions";
+import { clampIntensity, EMOTIONS, guessEmotion, toEmotion, type Emotion } from "../../shared/emotions";
 import { FACT_KINDS, type FactKind } from "../../shared/types";
 
 export interface ToolSpec {
@@ -202,8 +202,11 @@ export function parseToolCall(name: string, input: unknown, now = new Date()): T
       const value = text(o.text, 6000);
       if (!value) return null;
       const look = text(o.look, 200);
-      // Unknown emotions are not worth failing the whole speech for
-      return { name, text: value, emotion: toEmotion(o.emotion) ?? "neutra", intensity: clampIntensity(o.intensity), ...(look ? { look } : {}) };
+      // A missing or unknown emotion is not worth failing the whole speech for: the text decides
+      const emotion = toEmotion(o.emotion);
+      const guessed = emotion ? null : guessEmotion(value);
+      const intensity = guessed && typeof o.intensity !== "number" ? guessed.intensity : clampIntensity(o.intensity);
+      return { name, text: value, emotion: emotion ?? guessed!.emotion, intensity, ...(look ? { look } : {}) };
     }
     case "look_at": {
       const value = text(o.text, 200);

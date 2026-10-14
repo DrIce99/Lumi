@@ -159,6 +159,7 @@ export function sanitizeSettings(input: unknown): Settings {
       scale: Math.round(num(face.scale, d.face.scale, 0.5, 3) * 100) / 100,
       color: color(face.color, d.face.color),
       subtitles: bool(face.subtitles, d.face.subtitles),
+      adaptiveShadow: bool(face.adaptiveShadow, d.face.adaptiveShadow),
     },
     perception: {
       enabled: bool(perception.enabled, d.perception.enabled),
