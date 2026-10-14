@@ -4,7 +4,7 @@ import test from "node:test";
 import { meaningless, requiredSilenceMs, trailingIncomplete, turnEnded } from "../src/main/voice/endpoint";
 import { multipart, wav } from "../src/main/voice/groqStt";
 import type { SttHandlers } from "../src/main/voice/sttClient";
-import { isEcho, TurnManager, type Clock, type SttBackend, type TurnHost } from "../src/main/voice/turns";
+import { isEcho, TurnManager, type Clock, type SttBackend, type TurnHost, type WakeBackend } from "../src/main/voice/turns";
 import { distance, matchWakeWord } from "../src/main/voice/wakeWord";
 import { DEFAULT_SETTINGS, type ListenMode, type MicControl, type Settings } from "../src/shared/types";
 
@@ -64,7 +64,7 @@ class FakeStt implements SttBackend {
   }
 }
 
-function setup(mode: ListenMode, extra: Partial<Settings["listen"]> = {}, inCall = () => false) {
+function setup(mode: ListenMode, extra: Partial<Settings["listen"]> = {}, inCall = () => false, wake?: { backend: WakeBackend | null; allowed?: () => boolean }) {
   const clock = new FakeClock();
   const stt = new FakeStt();
   const settings: Settings = { ...DEFAULT_SETTINGS, listen: { ...DEFAULT_SETTINGS.listen, mode, ...extra } };
@@ -84,6 +84,7 @@ function setup(mode: ListenMode, extra: Partial<Settings["listen"]> = {}, inCall
     setListening: (on) => listening.push(on),
     recentSpeech: () => recent,
     inCall,
+    ...(wake ? { wake: () => wake.backend, wakeAllowed: wake.allowed ?? (() => true) } : {}),
   };
   const turns = new TurnManager(host, clock);
   return {
@@ -339,4 +340,91 @@ test("during a call, continuous listening waits for the wake word (the user is t
   call = false;
   say(3, "Apri il file di configurazione.");
   assert.equal(t.said[t.said.length - 1], "Apri il file di configurazione.", "after the call, continuous again");
+});
+
+function fakeWake() {
+  const log: string[] = [];
+  const backend: WakeBackend = {
+    reset: () => log.push("reset"),
+    audio: (pcm) => log.push(`audio ${pcm.byteLength}`),
+  };
+  return { backend, log };
+}
+
+test("wake word detector: nothing is transcribed until the name; then the last 1.5 s and the rest go to the recognizer", () => {
+  const w = fakeWake();
+  const t = setup("wake-word", {}, () => false, { backend: w.backend });
+  assert.equal(t.lastControl().autoStream, true, "speech is streamed, for the detector");
+  t.turns.mic({ type: "speech-start" });
+  for (let i = 0; i < 3; i++) t.frame();
+  assert.deepEqual(t.stt.log, [], "no speech recognition before the name");
+  assert.deepEqual(w.log, ["reset", "audio 1024", "audio 1024", "audio 1024"]);
+  // One frame above the threshold is not enough
+  t.turns.wakeScores([0.1, 0.7, 0.2]);
+  assert.deepEqual(t.stt.log, []);
+  t.turns.wakeScores([0.6, 0.8]);
+  assert.deepEqual(t.stt.log, ["start 1", "audio 1 1024", "audio 1 1024", "audio 1 1024"], "the buffered speech comes first");
+  assert.deepEqual(t.listening, [true]);
+  t.frame();
+  assert.equal(t.stt.log.at(-1), "audio 1 1024", "then the live speech");
+  t.turns.mic({ type: "speech-end", durationMs: 2000 });
+  t.clock.advance(1500);
+  t.stt.final(1, "Ehi Lumi, che ore sono?");
+  assert.deepEqual(t.said, ["che ore sono?"]);
+});
+
+test("wake word detector: speech without the name is dropped; the name alone waits 5 s for the request", () => {
+  const w = fakeWake();
+  const t = setup("wake-word", {}, () => false, { backend: w.backend });
+  t.turns.mic({ type: "speech-start" });
+  t.frame();
+  t.turns.wakeScores([0.1, 0.2]);
+  t.turns.mic({ type: "speech-end", durationMs: 800 });
+  t.clock.advance(1000);
+  t.turns.wakeScores([0.9, 0.9]);
+  assert.deepEqual(t.stt.log, [], "a late score after the segment was dropped doesn't open anything");
+
+  t.turns.mic({ type: "speech-start" });
+  t.frame();
+  t.turns.mic({ type: "speech-end", durationMs: 600 });
+  // The scores of the last frames arrive just after the end of the segment
+  t.turns.wakeScores([0.9, 0.95]);
+  assert.equal(t.stt.log[0], "start 1");
+  t.clock.advance(1500);
+  assert.ok(t.stt.log.join("|").includes("end 1"), "the turn ends after the pause");
+  t.stt.final(1, "Lumi");
+  assert.deepEqual(t.said, []);
+  t.turns.mic({ type: "speech-start" });
+  t.frame();
+  assert.ok(t.stt.log.join("|").includes("start 2"), "within the window the request is transcribed without the name");
+  t.clock.advance(6000);
+});
+
+test("wake word detector: a higher threshold while Lumi talks, which the name interrupts; asleep when locked or in another app's call", () => {
+  const w = fakeWake();
+  let allowed = true;
+  const t = setup("wake-word", { bargeIn: false }, () => false, { backend: w.backend, allowed: () => allowed });
+  t.setSpeaking(true);
+  t.turns.mic({ type: "speech-start" });
+  t.frame();
+  t.turns.wakeScores([0.6, 0.6]);
+  assert.deepEqual(t.stt.log, [], "0.6 is below 0.5 x 1.3");
+  t.turns.wakeScores([0.7, 0.7]);
+  assert.equal(t.interrupts(), 1);
+  assert.equal(t.stt.log[0], "start 1");
+
+  const u = setup("wake-word", {}, () => false, { backend: fakeWake().backend, allowed: () => allowed });
+  allowed = false;
+  u.turns.refresh();
+  assert.equal(u.lastControl().enabled, false, "the microphone closes");
+  u.turns.mic({ type: "speech-start" });
+  u.frame();
+  u.turns.wakeScores([0.9, 0.9]);
+  assert.deepEqual(u.stt.log, []);
+});
+
+test("without the wake word detector the name is still spotted in transcripts", () => {
+  const t = setup("wake-word", {}, () => false, { backend: null });
+  t.turns.mic({ type: "speech-start" });
+  assert.equal(t.stt.log[0], "start 1", "every utterance is transcribed");
 });

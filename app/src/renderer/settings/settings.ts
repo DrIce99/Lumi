@@ -400,6 +400,7 @@ function fill(next: SettingsSnapshot): void {
   $<HTMLSelectElement>("listenMode").value = s.listen.mode;
   $("hotkey").value = s.listen.hotkey;
   $("wakeWord").value = s.listen.wakeWord;
+  $("wakeThreshold").value = String(s.listen.wakeThreshold);
   $("followUpSeconds").value = String(s.listen.followUpSeconds);
   $("pauseMs").value = String(s.listen.pauseMs);
   $("bargeIn").checked = s.listen.bargeIn;
@@ -423,9 +424,11 @@ function fill(next: SettingsSnapshot): void {
   $("ocrFps").value = String(s.perception.ocrFps);
   $("uia").checked = s.perception.uia;
   $<HTMLSelectElement>("sendScreenshots").value = s.perception.sendScreenshots;
+  $<HTMLSelectElement>("localVisionProvider").value = s.vision.provider;
+  $("localVisionModel").value = s.vision.model;
   $<HTMLTextAreaElement>("pauseInApps").value = s.perception.pauseInApps.join("\n");
 
-  for (const id of ["scale", "followUpSeconds", "pauseMs", "speed", "volume", "captureFps", "ocrFps"]) $(id).dispatchEvent(new Event("input"));
+  for (const id of ["scale", "followUpSeconds", "pauseMs", "wakeThreshold", "speed", "volume", "captureFps", "ocrFps"]) $(id).dispatchEvent(new Event("input"));
 
   listItems(
     "facts",
@@ -497,12 +500,18 @@ function collect(): Settings {
       mode: $<HTMLSelectElement>("listenMode").value as Settings["listen"]["mode"],
       hotkey: $("hotkey").value,
       wakeWord: $("wakeWord").value,
+      wakeThreshold: Number($("wakeThreshold").value),
       followUpSeconds: num("followUpSeconds", s.listen.followUpSeconds),
       pauseMs: num("pauseMs", s.listen.pauseMs),
       bargeIn: $("bargeIn").checked,
       backchannel: $("backchannel").checked,
       fillers: $("fillers").checked,
       micDevice: $<HTMLSelectElement>("micDevice").value,
+    },
+    vision: {
+      ...s.vision,
+      provider: $<HTMLSelectElement>("localVisionProvider").value as Settings["vision"]["provider"],
+      model: $("localVisionModel").value.trim(),
     },
     stt: {
       engine: $<HTMLSelectElement>("sttEngine").value as SttEngine,
@@ -576,6 +585,7 @@ bindOutput("pauseMs", "pauseOut", (v) => `${(v / 1000).toLocaleString("it-IT", {
 bindOutput("followUpSeconds", "followUpOut", (v) => (v ? `${v} s` : "niente (serve sempre il tasto o la parola)"));
 bindOutput("speed", "speedOut", (v) => `×${v.toFixed(2)}`);
 bindOutput("volume", "volumeOut", (v) => `${Math.round(v * 100)}%`);
+bindOutput("wakeThreshold", "wakeThresholdOut", (v) => v.toFixed(2));
 bindOutput("captureFps", "captureFpsOut", (v) => String(v));
 bindOutput("ocrFps", "ocrFpsOut", (v) => v.toFixed(1));
 
@@ -584,6 +594,14 @@ for (const purpose of PURPOSES) {
   $<HTMLSelectElement>(`${purpose}Provider`).addEventListener("change", () => onProviderChange(purpose));
   $<HTMLButtonElement>(`${purpose}Detect`).addEventListener("click", () => void detectModels(purpose));
 }
+$<HTMLButtonElement>("localVisionDetect").addEventListener("click", async () => {
+  const hint = $<HTMLElement>("localVisionHint");
+  hint.textContent = "Cerco i modelli con la visione…";
+  await save(false);
+  const result = await api.listVisionModels($<HTMLSelectElement>("localVisionProvider").value as Settings["vision"]["provider"]);
+  $<HTMLDataListElement>("localVisionModels").replaceChildren(...result.models.map((m) => Object.assign(document.createElement("option"), { value: m })));
+  hint.textContent = result.ok && result.models.length ? `${result.message} Scegline uno dalla lista del campo modello.` : result.message;
+});
 $<HTMLSelectElement>("sttEngine").addEventListener("change", onSttEngineChange);
 $<HTMLSelectElement>("ttsEngine").addEventListener("change", onTtsEngineChange);
 $<HTMLSelectElement>("ttsModel").addEventListener("change", onTtsModelChange);

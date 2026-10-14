@@ -6,10 +6,17 @@
 // detects. The end of a turn combines the VAD silence with a semantic check
 // (endpoint.ts). If the user speaks over Lumi for more than ~300 ms
 // (barge-in), the voice and the model stop and the new utterance is heard.
+//
+// Wake word mode: with openWakeWord available (sidecar /wake), speech goes
+// only to the wake word detector until the name is heard; then the last
+// 1.5 s plus what follows reach the speech recognizer, so nothing said
+// before the name is ever transcribed. Without it, every utterance is
+// transcribed and the name is spotted in the text (wakeWord.ts).
 import type { ListenMode, MicControl, MicEvent, Settings } from "../../shared/types";
 import { meaningless, requiredSilenceMs, silenceRange } from "./endpoint";
 import type { SttFinal, SttHandlers } from "./sttClient";
 import { matchWakeWord } from "./wakeWord";
+import { PcmRing, WakeSpotter } from "./wakeSpotter";
 
 /** A speech recognizer: the sidecar (streaming, partials) or a remote service. */
 export interface SttBackend {
@@ -18,6 +25,13 @@ export interface SttBackend {
   audio(id: number, pcm: Uint8Array): void;
   end(id: number): void;
   cancel(id: number): void;
+}
+
+/** openWakeWord in the sidecar: scores come back through TurnManager.wakeScores(). */
+export interface WakeBackend {
+  /** A new speech segment begins. */
+  reset(): void;
+  audio(pcm: Uint8Array): void;
 }
 
 export interface Clock {
@@ -54,6 +68,10 @@ export interface TurnHost {
   acknowledge?(): void;
   /** The user is in a call Lumi listens to: "continuous" then waits for the wake word (they talk to their friends). */
   inCall?(): boolean;
+  /** The wake word detector, when ready (else the name is spotted in transcripts). */
+  wake?(): WakeBackend | null;
+  /** The wake word may listen now: not with the screen locked or while another app records (a call). */
+  wakeAllowed?(): boolean;
   log?(message: string): void;
 }
 
@@ -61,6 +79,8 @@ interface Session {
   id: number;
   startedAt: number;
   viaPtt: boolean;
+  /** Opened by the wake word detector: the name is (probably) at the start. */
+  viaWake: boolean;
   /** Wake word heard, follow-up window or continuous mode: this utterance is for Lumi. */
   addressed: boolean;
   /** Started while Lumi was speaking: becomes a barge-in once the speech is confirmed. */
@@ -86,8 +106,10 @@ const PTT_TAIL_MS = 150;
 /** Silence that closes a VAD segment (the VAD's redemption time). */
 const REDEMPTION_MS = 300;
 /** A wake word alone opens a short window for the actual request. */
-const WAKE_WINDOW_MS = 6000;
+const WAKE_WINDOW_MS = 5000;
 const MAX_TURN_MS = 60_000;
+/** After a speech segment ends, the wake word detector's last scores may still arrive this late. */
+const WAKE_LATE_MS = 400;
 
 /** Lumi's own voice coming back through the microphone (speakers without headphones). */
 export function isEcho(transcript: string, recent: string): boolean {
@@ -116,6 +138,14 @@ export class TurnManager {
   private wasSpeaking = false;
   private listeningOn = false;
   private ticker: unknown = null;
+  /** Speech is being checked for the wake word (no transcription yet). */
+  private spotting = false;
+  private readonly spotter = new WakeSpotter();
+  private readonly ring = new PcmRing();
+  /** The VAD hears speech right now. */
+  private vadSpeech = false;
+  /** Counts the segments checked for the wake word (a late stop must not end a newer one). */
+  private segment = 0;
 
   constructor(
     private readonly host: TurnHost,
@@ -143,6 +173,29 @@ export class TurnManager {
     this.host.micControl({ ...this.control(), enabled: false });
   }
 
+  /** openWakeWord scores for the speech sent with WakeBackend.audio(), in order. */
+  wakeScores(scores: number[]): void {
+    if (!this.spotting || this.session) return;
+    const speaking = this.host.speaking();
+    if (!this.spotter.push(scores, this.host.settings().listen.wakeThreshold, speaking)) return;
+    this.spotting = false;
+    this.host.log?.("Wake word heard");
+    // Calling Lumi by name while it talks interrupts it
+    if (speaking) this.host.interrupt();
+    const s = this.open({ viaPtt: false, addressed: true, overLumi: false, viaWake: true });
+    if (!s) return;
+    s.confirmed = true;
+    // The name and what was said with it, then the rest live
+    for (const chunk of this.ring.take()) this.onFrame(chunk);
+    if (!this.vadSpeech) {
+      s.speechActive = false;
+      s.silenceSince = this.clock.now();
+      this.scheduleEndCheck(s);
+    }
+    this.listen(true);
+    this.refresh();
+  }
+
   get listening(): boolean {
     return this.session !== null && (this.session.addressed || this.session.viaPtt);
   }
@@ -153,13 +206,14 @@ export class TurnManager {
     if (!this.host.stt()) return;
     this.pttHeld = true;
     if (this.host.speaking()) this.host.interrupt();
+    this.stopSpotting();
     if (this.session && !this.session.viaPtt) {
       // Already capturing (follow-up or barge-in): keep it, now driven by the key
       this.session.viaPtt = true;
       this.session.addressed = true;
       this.clearEndTimer(this.session);
     } else if (!this.session) {
-      this.open({ viaPtt: true, addressed: true, overLumi: false });
+      this.open({ viaPtt: true, addressed: true, overLumi: false, viaWake: false });
     }
     this.listen(true);
     this.refresh();
@@ -235,7 +289,8 @@ export class TurnManager {
     const available = this.host.stt() !== null;
     const speaking = this.host.speaking();
     const bargeIn = settings.listen.bargeIn && speaking;
-    const alwaysOn = mode === "continuous" || mode === "wake-word";
+    // The wake word sleeps with the screen locked and during other apps' calls
+    const alwaysOn = mode === "continuous" || (mode === "wake-word" && (this.host.wakeAllowed?.() ?? true));
     const enabled = available && (alwaysOn || this.pttHeld || bargeIn || this.followUp() || this.session !== null);
     return {
       enabled,
@@ -249,7 +304,7 @@ export class TurnManager {
 
   // ---------------- sessions ----------------
 
-  private open(flags: { viaPtt: boolean; addressed: boolean; overLumi: boolean }): Session | null {
+  private open(flags: { viaPtt: boolean; addressed: boolean; overLumi: boolean; viaWake: boolean }): Session | null {
     const stt = this.host.stt();
     if (!stt) return null;
     const s: Session = {
@@ -279,6 +334,7 @@ export class TurnManager {
   }
 
   private onSpeechStart(): void {
+    this.vadSpeech = true;
     const s = this.session;
     if (s) {
       // The user started again within the end-of-turn wait: same turn
@@ -292,7 +348,20 @@ export class TurnManager {
     const overLumi = speaking && this.host.settings().listen.bargeIn;
     const addressed = mode === "continuous" || this.followUp() || overLumi;
     if (!addressed && mode !== "wake-word") return;
-    this.open({ viaPtt: false, addressed, overLumi });
+    if (!addressed) {
+      if (!(this.host.wakeAllowed?.() ?? true)) return;
+      const wake = this.host.wake?.();
+      if (wake) {
+        // Only the wake word detector hears this, until the name is said
+        this.spotting = true;
+        this.segment++;
+        this.spotter.reset();
+        this.ring.clear();
+        wake.reset();
+        return;
+      }
+    }
+    this.open({ viaPtt: false, addressed, overLumi, viaWake: false });
     if (addressed && !overLumi) this.listen(true);
     this.refresh();
   }
@@ -311,6 +380,13 @@ export class TurnManager {
 
   private onFrame(pcm: Uint8Array): void {
     const s = this.session;
+    if (!s && this.spotting) {
+      const wake = this.host.wake?.();
+      if (!wake) return this.stopSpotting();
+      this.ring.push(pcm);
+      wake.audio(pcm);
+      return;
+    }
     if (!s || s.ending) return;
     const stt = this.host.stt();
     if (!stt) return;
@@ -322,6 +398,14 @@ export class TurnManager {
   }
 
   private onSpeechEnd(): void {
+    this.vadSpeech = false;
+    // A late score may still name Lumi: the detector gets a moment before the segment is dropped
+    if (this.spotting) {
+      const segment = this.segment;
+      this.clock.setTimeout(() => {
+        if (this.segment === segment) this.stopSpotting();
+      }, WAKE_LATE_MS);
+    }
     const s = this.session;
     if (!s || s.viaPtt || s.ending) return;
     s.speechActive = false;
@@ -334,6 +418,8 @@ export class TurnManager {
   }
 
   private onMisfire(): void {
+    this.vadSpeech = false;
+    this.stopSpotting();
     const s = this.session;
     // Too short to be speech (a click, a cough): drop the session it opened
     if (s && !s.viaPtt && !s.confirmed && !s.ending) this.drop(s);
@@ -417,20 +503,16 @@ export class TurnManager {
     if (result.error) this.host.log?.(`Speech recognition failed: ${result.error}`);
     if (!text) return this.refresh();
     const settings = this.host.settings();
-    if (!s.viaPtt && this.mode() === "wake-word" && !s.addressed) {
+    if (s.viaWake) {
+      // The detector heard the name: drop it from the request; the name alone waits for the request
+      const wake = matchWakeWord(text, settings.listen.wakeWord);
+      if (wake.matched) text = wake.rest;
+      if (!text || meaningless(text)) return this.awaitRequest();
+    } else if (!s.viaPtt && this.mode() === "wake-word" && !s.addressed) {
       const wake = matchWakeWord(text, settings.listen.wakeWord);
       if (!wake.matched) return this.refresh();
       text = wake.rest;
-      if (!text || meaningless(text)) {
-        // Just the name: the request comes next
-        this.wakeUntil = this.clock.now() + WAKE_WINDOW_MS;
-        this.listen(true);
-        this.host.acknowledge?.();
-        this.clock.setTimeout(() => {
-          if (!this.session && this.clock.now() >= this.wakeUntil) this.listen(false);
-        }, WAKE_WINDOW_MS + 50);
-        return this.refresh();
-      }
+      if (!text || meaningless(text)) return this.awaitRequest();
     } else if (this.mode() === "wake-word" && !s.viaPtt) {
       // Addressed by the wake word heard in a partial: drop the name from the request
       const wake = matchWakeWord(text, settings.listen.wakeWord);
@@ -445,6 +527,23 @@ export class TurnManager {
     this.wakeUntil = 0;
     this.host.utterance(text, result.voiceprint);
     this.refresh();
+  }
+
+  /** Just the name: a short "sì?" and a few seconds for the request, then back to rest. */
+  private awaitRequest(): void {
+    this.wakeUntil = this.clock.now() + WAKE_WINDOW_MS;
+    this.listen(true);
+    this.host.acknowledge?.();
+    this.clock.setTimeout(() => {
+      if (!this.session && this.clock.now() >= this.wakeUntil) this.listen(false);
+    }, WAKE_WINDOW_MS + 50);
+    this.refresh();
+  }
+
+  private stopSpotting(): void {
+    if (!this.spotting) return;
+    this.spotting = false;
+    this.ring.clear();
   }
 
   /** The listening mode in effect: during a call, "continuous" becomes "wake-word". */

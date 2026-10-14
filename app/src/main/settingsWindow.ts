@@ -3,7 +3,7 @@ import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from "electron";
 import { join } from "node:path";
 import { IPC } from "../shared/ipc";
 import { isProvider, type ProviderId } from "../shared/providers";
-import { PROFILES, type ConnectionReport, type Profile, type SettingsSnapshot, type SidecarStatus } from "../shared/types";
+import { PROFILES, VISION_PROVIDERS, type ConnectionReport, type Profile, type SettingsSnapshot, type SidecarStatus, type VisionProvider } from "../shared/types";
 import { log } from "./log";
 
 export interface SettingsBackend {
@@ -11,6 +11,7 @@ export interface SettingsBackend {
   save(settings: unknown, keys: Partial<Record<ProviderId, string>>): SettingsSnapshot;
   testConnection(): Promise<ConnectionReport[]>;
   listModels(provider: ProviderId): Promise<{ ok: boolean; models: string[]; message: string }>;
+  listVisionModels(provider: VisionProvider): Promise<{ ok: boolean; models: string[]; message: string }>;
   testVoice(text: string): Promise<ConnectionReport>;
   applyProfile(profile: Profile): SettingsSnapshot;
   pickVoiceFile(window: BrowserWindow): Promise<string | null>;
@@ -47,6 +48,10 @@ export class SettingsWindow {
     handle(IPC.settingsListModels, (provider) => {
       if (!isProvider(provider)) throw new Error("Unknown provider");
       return backend.listModels(provider);
+    });
+    handle(IPC.settingsListVisionModels, (provider) => {
+      if (!(VISION_PROVIDERS as readonly unknown[]).includes(provider)) throw new Error("Unknown provider");
+      return backend.listVisionModels(provider as VisionProvider);
     });
     handle(IPC.settingsTestVoice, (text) => backend.testVoice(typeof text === "string" ? text.slice(0, 500) : ""));
     handle(IPC.settingsProfile, (profile) => {

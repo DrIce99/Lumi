@@ -265,26 +265,37 @@ Work one roadmap phase at a time; finish each with checks green.
   `commandBar.reply`. While open, a "caret" attention candidate on the bar
   makes the eyes look at it.
 
-## Planned features (not built yet; roadmap phases 9-11)
+- Local vision (`perception/vision.ts` pure parts + clients,
+  `screenshots.ts` the chain): top-level `vision` setting (Ollama by
+  default, `qwen3-vl:8b`, `keep_alive: "2m"`, `format: "json"`; or an
+  OpenAI-compatible local server at `brain.customUrl`; or none). The brain
+  never receives images: it gets `{ description, texts, regions }` as
+  text; the OCR of the same area goes along as a hint. Regions (0-1000)
+  become screen rects: `Perception.seen()` adds them as grounding items
+  (look_at finds them by label) and glance candidates. The area is the
+  active window when it covers < 50% of its display. Without local vision
+  (or on failure): an online model (`brain.vision`) only if
+  `sendScreenshots` allows it (default now `never`), else the OCR text.
+  `look_at_screen` honors perception pauses. Attached bar images go
+  through the same chain.
+- Wake word: `sidecar/wake/detector.py` scores 80 ms chunks with
+  openWakeWord (models in `%APPDATA%\Lumi\models\wake`; feature models
+  and generic ones downloaded from the v0.5.1 release; `lumi.onnx` from
+  `wake/train.py`). The app sends the VAD's speech frames to `/wake`
+  (`voice/wakeClient.ts`) and decides in `voice/wakeSpotter.ts` (2 frames
+  >= `listen.wakeThreshold`, x1.3 while speaking). `TurnManager` keeps the
+  segment in a 1.5 s ring and opens STT only when the name fires (then
+  ring + live audio; late scores accepted for 400 ms after speech end);
+  without a ready model it falls back to transcript spotting. Asleep with
+  the screen locked or while another app records (`voice/micUse.ts`
+  parses `reg query` of the CapabilityAccessManager microphone store;
+  Lumi and `appAudio.apps` don't count). `LUMI_WAKE_MODEL` picks another
+  model (e.g. `hey_jarvis`) to try the flow.
+
+## Planned features (not built yet; roadmap phases 10-11)
 
 Decisions already taken for the next phases. Nothing here exists in the
 code yet; when a piece lands, move its notes to the sections above.
-
-- Vision becomes a separate local model (top-level `vision` setting
-  replacing `brain.vision`, Ollama, default `qwen3-vl:8b`,
-  `keep_alive: "2m"`). The brain never receives images: it gets
-  `{ description, texts, regions }` text from `perception/vision.ts`.
-  Direct image upload to a remote brain only if `sendScreenshots` allows
-  it (default becomes `never`). Vision `regions` (0-1000 normalized)
-  become gaze candidates.
-- Wake word: openWakeWord in the sidecar (`/wake`, CPU), mic opened once
-  and shared with VAD, replacing transcript spotting in
-  `voice/wakeWord.ts`. 1.5 s ring buffer so "Lumi, <question>" in one
-  breath reaches STT. Raise threshold 30% while Lumi is speaking; 2
-  consecutive frames above threshold to fire. The "lumi" model is trained
-  from synthetic samples made with our own TTS engines
-  (`sidecar/wake/train.py`); trained models live in the models cache, not
-  git.
 
 ### Memory (`main/brain/memory/`, phase 10)
 
@@ -348,6 +359,7 @@ spoken with push-to-talk: tests STT → brain → TTS without a microphone),
 `DISCORD_BOT_TOKEN` (instead of the saved token), `LUMI_DEBUG_LAG=1` (logs main-thread delay every 5 s and each capture's
 time and changes), `LUMI_DEBUG_VISIBLE=1` (no content protection: real screenshots show the
 face, to check it on screen),
+`LUMI_WAKE_MODEL=<name>` (wake word model, default `lumi`),
 `LUMI_DEBUG_SETTINGS=<tab>` (opens the settings on a tab; captured with
 LUMI_DEBUG_CAPTURE), `LUMI_DEBUG_BAR=1|<text>` (opens the command bar at
 startup, with that text typed; with LUMI_DEBUG_VISIBLE=1 a real screenshot

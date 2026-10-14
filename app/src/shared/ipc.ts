@@ -37,6 +37,7 @@ export const IPC = {
   settingsSave: "settings:save",
   settingsTest: "settings:test",
   settingsListModels: "settings:list-models",
+  settingsListVisionModels: "settings:list-vision-models",
   settingsTestVoice: "settings:test-voice",
   settingsProfile: "settings:profile",
   settingsPickVoice: "settings:pick-voice",

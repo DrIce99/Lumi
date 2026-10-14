@@ -85,6 +85,9 @@ class State:
     uia_enabled = False
     turn = SmartTurn()
     turn_state = "idle"
+    wake_state = "idle"
+    wake_model = ""
+    wake_error = ""
     gpu: dict | None = None
     gpu_at = 0.0
 
@@ -149,6 +152,8 @@ def health(_: None = Depends(http_auth)) -> dict:
         engines.append({"kind": "uia", "name": "UI Automation", "state": "error" if state.uia.error else "ready", **({"detail": state.uia.error} if state.uia.error else {})})
     if state.turn_state != "idle":
         engines.append({"kind": "turn", "name": "Smart Turn v3.2", "state": state.turn_state, "device": "cpu", **({"detail": state.turn.error} if state.turn.error else {})})
+    if state.wake_state != "idle":
+        engines.append({"kind": "wake", "name": f"openWakeWord ({state.wake_model})", "state": state.wake_state, "device": "cpu", **({"detail": state.wake_error} if state.wake_error else {})})
     return {
         "ok": True,
         "version": VERSION,
@@ -647,6 +652,56 @@ async def turn_load(_: None = Depends(http_auth)) -> dict:
     except Exception as err:
         return {"ok": False, "error": str(err)}
     return {"ok": True}
+
+
+# ---------------- wake word ----------------
+
+
+@app.websocket("/wake")
+async def wake_socket(ws: WebSocket) -> None:
+    """Wake word scores. The app sends {"model": "lumi"} first (answer: {"type": "ready", "model"}
+    or {"type": "error", "missing": bool, "error"}), then binary frames `[uint32 id][PCM 16-bit 16 kHz]`
+    with the speech the VAD hears, and {"reset": true} at each new speech segment. For every 80 ms
+    of audio the sidecar answers with a score: {"type": "scores", "scores": [...]}."""
+    if not await ws_accept(ws):
+        return
+    from wake.detector import WakeDetector, WakeModelMissing
+
+    detector = None
+    try:
+        while True:
+            message = await ws.receive()
+            if message["type"] == "websocket.disconnect":
+                break
+            if message.get("text") is not None:
+                try:
+                    data = json.loads(message["text"])
+                except ValueError:
+                    continue
+                if "model" in data:
+                    name = str(data["model"])[:40]
+                    try:
+                        if state.wake_state != "ready":
+                            state.wake_state = "loading"
+                        detector = await asyncio.to_thread(WakeDetector.load, name)
+                        state.wake_state, state.wake_model, state.wake_error = "ready", name, ""
+                        await ws.send_text(json.dumps({"type": "ready", "model": name}))
+                    except WakeModelMissing as err:
+                        state.wake_state, state.wake_model, state.wake_error = "missing", name, str(err)
+                        await ws.send_text(json.dumps({"type": "error", "missing": True, "error": str(err)}))
+                    except Exception as err:  # noqa: BLE001 - openwakeword missing, download failed...
+                        log.warning("Wake word model %s unavailable: %s", name, err)
+                        state.wake_state, state.wake_model, state.wake_error = "error", name, f"{type(err).__name__}: {err}"[:300]
+                        await ws.send_text(json.dumps({"type": "error", "missing": False, "error": state.wake_error}))
+                elif data.get("reset") and detector is not None:
+                    detector.reset()
+            elif message.get("bytes") is not None and detector is not None:
+                pcm = message["bytes"][4:]
+                scores = await asyncio.to_thread(detector.feed, pcm)
+                if scores:
+                    await ws.send_text(json.dumps({"type": "scores", "scores": [round(s, 4) for s in scores]}))
+    except (WebSocketDisconnect, RuntimeError):
+        pass
 
 
 # ---------------- UI Automation ----------------

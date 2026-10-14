@@ -26,6 +26,9 @@ export const OCR_ENGINES = ["windows", "rapidocr"] as const;
 export type OcrEngine = (typeof OCR_ENGINES)[number];
 
 export const SCREENSHOT_POLICIES = ["never", "ask", "always"] as const;
+/** Who looks at images on this PC: Ollama, an OpenAI-compatible local server (brain.customUrl), or nobody. */
+export const VISION_PROVIDERS = ["ollama", "custom", "none"] as const;
+export type VisionProvider = (typeof VISION_PROVIDERS)[number];
 export type ScreenshotPolicy = (typeof SCREENSHOT_POLICIES)[number];
 
 export const DEVICES = ["auto", "cuda", "cpu"] as const;
@@ -45,10 +48,22 @@ export interface Settings {
     chat: BrainChoice;
     /** Autonomous moments; can be a smaller or local model. */
     idle: BrainChoice;
-    /** Model for look_at_screen; an empty model means "the chat model". */
+    /**
+     * Online model that gets images when there is no local vision model and
+     * sendScreenshots allows it; an empty model means "the chat model".
+     */
     vision: BrainChoice;
     ollamaUrl: string;
     customUrl: string;
+  };
+  /** Local vision model: describes screenshots and attached images in words, so images never leave the PC. */
+  vision: {
+    provider: VisionProvider;
+    model: string;
+    /** Ollama keeps the model loaded this long after a look, then frees the VRAM. */
+    keepAlive: string;
+    /** Long side of the image sent to the model, px. */
+    maxSide: number;
   };
   stt: { engine: SttEngine; model: string; device: Device; vocabulary: string[] };
   tts: { engine: TtsEngine; model: string; voice: string; speed: number; volume: number; seed: number };
@@ -57,6 +72,8 @@ export interface Settings {
     /** Push-to-talk, held down (Electron accelerator syntax). */
     hotkey: string;
     wakeWord: string;
+    /** openWakeWord score that counts as the name (two frames in a row; 30% higher while Lumi talks). */
+    wakeThreshold: number;
     /** After an answer Lumi keeps listening this long without hotkey or wake word (0 = off). */
     followUpSeconds: number;
     /** Silence after a finished sentence before Lumi answers (longer when it sounds unfinished). */
@@ -129,12 +146,14 @@ export const DEFAULT_SETTINGS: Settings = {
     ollamaUrl: DEFAULT_OLLAMA_URL,
     customUrl: "",
   },
+  vision: { provider: "ollama", model: "qwen3-vl:8b", keepAlive: "2m", maxSide: 1344 },
   stt: { engine: "faster-whisper", model: "large-v3-turbo", device: "auto", vocabulary: [] },
   tts: { engine: "qwen3", model: "1.7B-CustomVoice", voice: "ryan", speed: 1, volume: 1, seed: 7 },
   listen: {
     mode: "push-to-talk",
     hotkey: "Control+Alt+Space",
     wakeWord: "ehi lumi",
+    wakeThreshold: 0.5,
     followUpSeconds: 8,
     pauseMs: 1000,
     bargeIn: true,
@@ -153,7 +172,7 @@ export const DEFAULT_SETTINGS: Settings = {
     ocrFps: 1.5,
     uia: true,
     pauseInApps: ["KeePass", "1Password", "Bitwarden"],
-    sendScreenshots: "ask",
+    sendScreenshots: "never",
   },
   sociability: "normale",
   doNotDisturb: false,
@@ -449,6 +468,8 @@ export interface SettingsBridge {
   save(settings: Settings, keys: Partial<Record<ProviderId, string>>): Promise<SettingsSnapshot>;
   testConnection(): Promise<ConnectionReport[]>;
   listModels(provider: ProviderId): Promise<{ ok: boolean; models: string[]; message: string }>;
+  /** Local models that can see (Ollama: only those with the vision capability). */
+  listVisionModels(provider: VisionProvider): Promise<{ ok: boolean; models: string[]; message: string }>;
   testVoice(text: string): Promise<ConnectionReport>;
   applyProfile(profile: Profile): Promise<SettingsSnapshot>;
   pickVoiceFile(): Promise<string | null>;

@@ -43,6 +43,8 @@ export function applyProfile(settings: Settings, profile: Profile): Settings {
       s.brain.chat = { provider: "groq", model: "openai/gpt-oss-120b" };
       s.brain.idle = { provider: "groq", model: "openai/gpt-oss-20b" };
       s.brain.vision = { provider: "gemini", model: "" };
+      // No GPU: no local vision, the OCR text only (unless screenshots are allowed online)
+      s.vision = { ...s.vision, provider: "none" };
       s.stt = { ...s.stt, engine: "groq", model: "whisper-large-v3-turbo", device: "cpu" };
       s.tts = { ...s.tts, engine: "kokoro", model: "v1.0", voice: "im_nicola" };
       break;
@@ -50,6 +52,7 @@ export function applyProfile(settings: Settings, profile: Profile): Settings {
       s.brain.chat = { provider: "groq", model: "openai/gpt-oss-120b" };
       s.brain.idle = { provider: "ollama", model: "qwen3" };
       s.brain.vision = { provider: "gemini", model: "" };
+      s.vision = { ...s.vision, provider: "ollama", model: "qwen3-vl:8b" };
       s.stt = { ...s.stt, engine: "faster-whisper", model: "large-v3-turbo", device: "auto" };
       s.tts = { ...s.tts, engine: "qwen3", model: "1.7B-CustomVoice", voice: "ryan" };
       break;
@@ -57,6 +60,7 @@ export function applyProfile(settings: Settings, profile: Profile): Settings {
       s.brain.chat = { provider: "ollama", model: "qwen3" };
       s.brain.idle = { provider: "ollama", model: "qwen3" };
       s.brain.vision = { provider: "ollama", model: "qwen2.5vl" };
+      s.vision = { ...s.vision, provider: "ollama", model: "qwen3-vl:8b" };
       s.stt = { ...s.stt, engine: "faster-whisper", model: "large-v3-turbo", device: "auto" };
       s.tts = { ...s.tts, engine: "qwen3", model: "1.7B-CustomVoice", voice: "ryan" };
       break;

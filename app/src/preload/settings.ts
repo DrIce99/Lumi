@@ -8,6 +8,7 @@ const bridge: SettingsBridge = {
   save: (settings, keys) => ipcRenderer.invoke(IPC.settingsSave, settings, keys),
   testConnection: () => ipcRenderer.invoke(IPC.settingsTest),
   listModels: (provider) => ipcRenderer.invoke(IPC.settingsListModels, provider),
+  listVisionModels: (provider) => ipcRenderer.invoke(IPC.settingsListVisionModels, provider),
   testVoice: (text) => ipcRenderer.invoke(IPC.settingsTestVoice, text),
   applyProfile: (profile) => ipcRenderer.invoke(IPC.settingsProfile, profile),
   pickVoiceFile: () => ipcRenderer.invoke(IPC.settingsPickVoice),

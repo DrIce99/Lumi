@@ -357,6 +357,17 @@ export class Perception {
     return `Looking at "${match.text.slice(0, 120)}".`;
   }
 
+  /**
+   * Things the vision model pointed out (screen DIP): look_at and say's
+   * `look` can find them by name, like OCR text, and the eyes glance at the
+   * first one now.
+   */
+  seen(regions: { label: string; rect: Rect }[]): void {
+    const now = this.now();
+    for (const r of regions) this.screenText.push({ item: { text: r.label, rect: r.rect }, at: now });
+    regions.forEach((r, i) => this.attention.add({ id: `vision:${i}`, kind: "text", rect: r.rect, salience: i === 0 ? 0.9 : 0.5, t: now }));
+  }
+
   /** Looks at a region of the screen. */
   lookAtRegion(region: string, holdMs = 5000): string {
     const user = this.host.userPoint();

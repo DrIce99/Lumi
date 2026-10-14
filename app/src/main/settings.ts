@@ -13,6 +13,7 @@ import {
   SOCIABILITY,
   STT_ENGINES,
   TTS_ENGINES,
+  VISION_PROVIDERS,
   type BrainChoice,
   type Settings,
 } from "../shared/types";
@@ -109,6 +110,7 @@ export function sanitizeSettings(input: unknown): Settings {
   const appAudio = obj(raw.appAudio);
   const discord = obj(raw.discord);
   const perception = obj(raw.perception);
+  const vision = obj(raw.vision);
   return {
     profile: oneOf(raw.profile, PROFILES, d.profile),
     userName: str(raw.userName, d.userName, 50).trim(),
@@ -119,6 +121,12 @@ export function sanitizeSettings(input: unknown): Settings {
       vision: brainChoice(brain.vision, d.brain.vision, true),
       ollamaUrl: str(brain.ollamaUrl, d.brain.ollamaUrl, 300).trim() || DEFAULT_OLLAMA_URL,
       customUrl: str(brain.customUrl, d.brain.customUrl, 300).trim(),
+    },
+    vision: {
+      provider: oneOf(vision.provider, VISION_PROVIDERS, d.vision.provider),
+      model: str(vision.model, d.vision.model, 120).trim(),
+      keepAlive: /^\d+[smh]?$/.test(str(vision.keepAlive, "", 10).trim()) ? str(vision.keepAlive, "", 10).trim() : d.vision.keepAlive,
+      maxSide: Math.round(num(vision.maxSide, d.vision.maxSide, 512, 2048)),
     },
     stt: {
       engine: oneOf(stt.engine, STT_ENGINES, d.stt.engine),
@@ -138,6 +146,7 @@ export function sanitizeSettings(input: unknown): Settings {
       mode: oneOf(listen.mode, LISTEN_MODES, d.listen.mode),
       hotkey: str(listen.hotkey, d.listen.hotkey, 60).trim(),
       wakeWord: str(listen.wakeWord, d.listen.wakeWord, 40).trim().toLowerCase() || d.listen.wakeWord,
+      wakeThreshold: Math.round(num(listen.wakeThreshold, d.listen.wakeThreshold, 0.1, 0.95) * 100) / 100,
       followUpSeconds: Math.round(num(listen.followUpSeconds, d.listen.followUpSeconds, 0, 60)),
       pauseMs: Math.round(num(listen.pauseMs, d.listen.pauseMs, 300, 2500) / 100) * 100,
       bargeIn: bool(listen.bargeIn, d.listen.bargeIn),

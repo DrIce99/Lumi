@@ -25,6 +25,8 @@ import { Mood } from "./mood";
 import { ensureOllama } from "./ollama";
 import { Backdrop, meanLuminance, rectInFrame } from "./perception/backdrop";
 import { ChangeDetector } from "./perception/capture";
+import { appName } from "./perception/context";
+import { listVisionModels } from "./perception/vision";
 import type { Frame } from "./perception/diff";
 import { GlareDetector, glareStats, thumbnail } from "./perception/glare";
 import { foregroundWindow, systemCaret } from "./perception/desktop";
@@ -36,7 +38,7 @@ import { Services } from "./services";
 import { SettingsStore } from "./settings";
 import { SettingsWindow } from "./settingsWindow";
 import { Sidecar } from "./sidecar";
-import { Screenshots } from "./screenshots";
+import { lookArea, Screenshots } from "./screenshots";
 import { BubbleSpeech, Bubbles } from "./speech";
 import { TeeSpeech } from "./teeSpeech";
 import { LumiTray } from "./tray";
@@ -47,6 +49,8 @@ import { botScript, DiscordToken, DiscordVoice } from "./discordVoice";
 import { AppAudioClient, type AppUtterance } from "./voice/appAudio";
 import { meaningless } from "./voice/endpoint";
 import { matchWakeWord } from "./voice/wakeWord";
+import { WakeClient } from "./voice/wakeClient";
+import { otherMicUsers, readMicUse, type MicUser } from "./voice/micUse";
 import { PushToTalk } from "./voice/pushToTalk";
 import { SttClient } from "./voice/sttClient";
 import { isEcho, TurnManager, type SttBackend } from "./voice/turns";
@@ -280,6 +284,37 @@ function start(): void {
   }
   /** A call Lumi listens to is going on (set once the app audio client exists). */
   let inCall = () => false;
+
+  // ---- wake word: openWakeWord in the sidecar (else the name is spotted in transcripts) ----
+  const wakeModel = process.env.LUMI_WAKE_MODEL || "lumi";
+  const wakeClient = new WakeClient(() => sidecar.socketUrl("/wake"), { scores: (scores) => turns.wakeScores(scores) });
+  /** Other apps recording now (a call): the wake word sleeps meanwhile. */
+  let micBusy: MicUser[] = [];
+  const wakeWanted = () => {
+    const s = settings();
+    return visible && !s.doNotDisturb && (s.listen.mode === "wake-word" || (s.listen.mode === "continuous" && inCall()));
+  };
+  function updateWake(): void {
+    wakeClient.set(wakeWanted() && sidecar.endpoint() !== null, wakeModel);
+  }
+  setInterval(() => {
+    updateWake();
+    if (!wakeWanted()) {
+      micBusy = [];
+      return;
+    }
+    void readMicUse().then((users) => {
+      const others = otherMicUsers(users, process.execPath, settings().appAudio.apps);
+      const before = micBusy.map((u) => u.name).join(", ");
+      micBusy = others;
+      const now = others.map((u) => u.name).join(", ");
+      if (now !== before) {
+        log.info(now ? `Wake word paused: the microphone is in use by ${now}` : "Wake word listening again");
+        turns.refresh();
+      }
+    });
+  }, 5000).unref();
+
   const turns = new TurnManager({
     settings,
     stt: () => (visible && !settings().doNotDisturb ? sttBackend() : null),
@@ -322,6 +357,8 @@ function start(): void {
       if (settings().listen.backchannel && voice.ready() && !voice.busy()) clips.play("backchannel");
     },
     inCall: () => inCall(),
+    wake: () => (wakeClient.ready ? wakeClient : null),
+    wakeAllowed: () => !activity.snapshot().locked && micBusy.length === 0,
     acknowledge: () => {
       if (voice.ready() && !voice.busy()) clips.play("wake");
     },
@@ -510,33 +547,59 @@ function start(): void {
   }
   sidecar.on("ready", updateUia);
   sidecar.on("down", () => uia.set(false));
+  sidecar.on("ready", updateWake);
+  sidecar.on("down", updateWake);
 
   // ---- vision: real screenshots, only on demand ----
+  let visionProblemAt = 0;
   const screenshots = new Screenshots(
     {
       settings,
-      visionModel: () => {
+      localVision: () => {
+        const v = settings().vision;
+        const b = settings().brain;
+        if (v.provider === "none" || !v.model) return null;
+        if (v.provider === "custom" && !b.customUrl) return null;
+        return { provider: v.provider, url: v.provider === "ollama" ? b.ollamaUrl : b.customUrl, model: v.model, keepAlive: v.keepAlive, fetch: services.fetch };
+      },
+      remoteModel: () => {
         const chosen = services.chosen("vision");
         return chosen ? { ...chosen, separate: services.separateVision() } : null;
       },
+      paused: () => perception.paused(),
       ask: async (question) => {
         if (!visible) setVisible(true);
         mood.setEmotion("imbarazzo", 0.4, 20_000);
         const choice = await bubbles.ask(question, [{ id: "yes", label: "Sì" }, { id: "no", label: "No" }], 20_000);
         return choice === "yes";
       },
-      display: () => {
+      area: () => {
         const fg = foregroundWindow();
-        const display = fg?.rect ? screen.getDisplayMatching(screen.screenToDipRect(null, fg.rect)) : screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+        const window = fg?.rect ? screen.screenToDipRect(null, fg.rect) : null;
+        const display = window ? screen.getDisplayMatching(window) : screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
         const index = screen.getAllDisplays().findIndex((d) => d.id === display.id) + 1;
-        return { display, label: `Screen ${index}` };
+        const crop = window && fg ? lookArea(window, display.bounds) : null;
+        return crop && fg ? { display, rect: crop, label: `the active window (${appName(fg.process)}) on screen ${index}` } : { display, rect: display.bounds, label: `screen ${index}` };
+      },
+      ocr: async (rect) => {
+        if (!sidecar.endpoint() || !voice.configured) return [];
+        const result = await sidecar.request<{ lines: OcrLine[] }>("/ocr", { region: screen.dipToScreenRect(null, rect), lang: "it" }, 8000);
+        return result.lines.map((l) => l.text);
+      },
+      seen: (regions) => perception.seen(regions),
+      visionProblem: (message) => {
+        // A hint now and then, not at every look
+        if (Date.now() - visionProblemAt < 10 * 60_000) return;
+        visionProblemAt = Date.now();
+        bubbles.say(message, { kind: "system" });
       },
       setLooking: (looking) => {
-        if (looking) mood.setEmotion("pensiero", 0.5, 3000);
+        // Loading the vision model can take a while: the eyes think meanwhile
+        if (looking) mood.setEmotion("pensiero", 0.5, 30_000);
       },
     },
-    new Vision(async (display, maxSide) => {
-      const { data } = await sidecar.requestBinary("/screen/jpeg", { region: screen.dipToScreenRect(null, display.bounds), size: maxSide }, 10_000);
+    new Vision(async (_display, maxSide, rect) => {
+      const { data } = await sidecar.requestBinary("/screen/jpeg", { region: screen.dipToScreenRect(null, rect), size: maxSide }, 10_000);
       return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
     }),
   );
@@ -617,7 +680,7 @@ function start(): void {
       activity: activity.snapshot(),
       voice: voice.ready(),
       screen: perception.summary(),
-      vision: settings().perception.sendScreenshots,
+      vision: settings().vision.provider !== "none" && settings().vision.model ? "local" : settings().perception.sendScreenshots,
       voices: voicesSummary(),
     };
   }
@@ -924,6 +987,20 @@ function start(): void {
         return reports;
       },
       listModels: (id) => services.listModels(id),
+      listVisionModels: async (provider) => {
+        if (provider === "none") return { ok: true, models: [], message: "" };
+        if (provider === "custom") return services.listModels("custom");
+        try {
+          const models = await listVisionModels(settings().brain.ollamaUrl, services.fetch);
+          return {
+            ok: true,
+            models,
+            message: models.length ? `${models.length} modelli con la visione.` : 'Nessun modello con la visione: scaricane uno, ad esempio "ollama pull qwen3-vl:8b".',
+          };
+        } catch {
+          return { ok: false, models: [], message: "Ollama non risponde: è installato e avviato?" };
+        }
+      },
       testVoice,
       applyProfile: (profile) => {
         settingsStore.replace({ ...applyProfile(settings(), profile), setupDone: true });
@@ -972,6 +1049,7 @@ function start(): void {
   settingsStore.onChange((next, prev) => {
     if (next.face.scale !== prev.face.scale || next.face.color !== prev.face.color) face.setAppearance(next.face.scale, next.face.color);
     if (next.chatHotkey !== prev.chatHotkey || next.listen.hotkey !== prev.listen.hotkey || next.listen.mode !== prev.listen.mode) registerHotkeys();
+    if (next.listen.mode !== prev.listen.mode || next.doNotDisturb !== prev.doNotDisturb) updateWake();
     if (next.launchAtLogin !== prev.launchAtLogin) applyLoginItem();
     if (engineKey(next) !== engineKey(prev)) void voice.configure();
     if (JSON.stringify(next.tts) !== JSON.stringify(prev.tts)) prepareClips();
@@ -1013,13 +1091,13 @@ function start(): void {
     void Promise.all([sidecar.stop(), memory.archived()]).finally(() => app.quit());
   });
 
-  /** Starts the local Ollama server when one of the brain choices needs it. */
+  /** Starts the local Ollama server when one of the brain choices (or the local vision) needs it. */
   const startOllamaIfUsed = () => {
     const b = settings().brain;
-    if ([b.chat, b.idle, b.vision].some((c) => c.provider === "ollama" && c.model)) void ensureOllama(b.ollamaUrl);
+    if ([b.chat, b.idle, b.vision].some((c) => c.provider === "ollama" && c.model) || (settings().vision.provider === "ollama" && settings().vision.model)) void ensureOllama(b.ollamaUrl);
   };
   settingsStore.onChange((next, prev) => {
-    if (JSON.stringify(next.brain) !== JSON.stringify(prev.brain)) startOllamaIfUsed();
+    if (JSON.stringify(next.brain) !== JSON.stringify(prev.brain) || JSON.stringify(next.vision) !== JSON.stringify(prev.vision)) startOllamaIfUsed();
   });
 
   startOllamaIfUsed();

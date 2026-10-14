@@ -112,7 +112,7 @@
           <small id="idleHint" class="hint"></small>
         </div>
         <div class="choice">
-          <h2>Visione (look_at_screen)</h2>
+          <h2>Immagini a un servizio online</h2>
           <div class="row">
             <select id="visionProvider" aria-label="Servizio per la visione"></select>
             <input id="visionModel" type="text" list="visionModels" placeholder="vuoto = il modello della conversazione" aria-label="Modello con visione" />
@@ -120,6 +120,7 @@
           </div>
           <datalist id="visionModels"></datalist>
           <small id="visionHint" class="hint"></small>
+          <small class="hint">Usato solo se manca la visione locale (scheda Schermo) e la regola sugli screenshot lo consente.</small>
         </div>
         <div class="row">
           <button id="test" type="button">Prova la connessione</button>
@@ -149,6 +150,11 @@
             <input id="wakeWord" type="text" maxlength="40" placeholder="ehi lumi" />
           </label>
         </div>
+        <label class="field">
+          <span>Sensibilità al nome: soglia <output id="wakeThresholdOut"></output></span>
+          <input id="wakeThreshold" type="range" min="0.1" max="0.95" step="0.05" />
+          <small class="hint">Più alta = scatta meno a vuoto ma serve dirlo più chiaro. Vale per il modello "lumi" di openWakeWord (sidecar/wake/train.py); senza, il nome si cerca nel testo trascritto.</small>
+        </label>
         <label class="field">
           <span>Dopo una risposta resta in ascolto per <output id="followUpOut"></output></span>
           <input id="followUpSeconds" type="range" min="0" max="30" step="1" />
@@ -291,8 +297,27 @@
           </label>
         </div>
         <label class="check"><input id="uia" type="checkbox" /> Segue il cursore del testo anche in Chrome, VS Code ed Electron (UI Automation)</label>
+        <div class="choice">
+          <h2>Visione locale</h2>
+          <p class="note">
+            Quando Lumi guarda lo schermo, o un'immagine che gli dai, la descrive un modello sul tuo PC: al servizio di IA
+            arriva solo il testo, mai l'immagine. Consigliato: <code>qwen3-vl:8b</code> (~6-8 GB di VRAM),
+            <code>qwen3-vl:2b</code> o <code>gemma3:4b</code> con poca VRAM.
+          </p>
+          <div class="row">
+            <select id="localVisionProvider" aria-label="Servizio per la visione locale">
+              <option value="ollama">Ollama</option>
+              <option value="custom">Server locale compatibile OpenAI</option>
+              <option value="none">Nessuna (solo il testo letto con l'OCR)</option>
+            </select>
+            <input id="localVisionModel" type="text" list="localVisionModels" placeholder="qwen3-vl:8b" aria-label="Modello di visione locale" />
+            <button id="localVisionDetect" type="button">Rileva modelli</button>
+          </div>
+          <datalist id="localVisionModels"></datalist>
+          <small id="localVisionHint" class="hint">Il modello si carica quando serve e libera la memoria video dopo 2 minuti.</small>
+        </div>
         <label class="field">
-          <span>Screenshot al servizio di IA</span>
+          <span>Screenshot a un servizio online (se manca la visione locale)</span>
           <select id="sendScreenshots">
             <option value="never">Mai</option>
             <option value="ask">Chiedi ogni volta</option>

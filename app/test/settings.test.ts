@@ -28,7 +28,7 @@ test("missing or broken settings fall back to the defaults", () => {
   assert.equal(s.listen.pauseMs, 2500);
   assert.equal(s.listen.wakeWord, "ehi lumi");
   assert.deepEqual(s.perception.pauseInApps, ["KeePass", "Bitwarden"]);
-  assert.equal(s.perception.sendScreenshots, "ask");
+  assert.equal(s.perception.sendScreenshots, "never", "images stay on the PC unless the user allows otherwise");
   assert.equal(s.brain.chat.model, "openai/gpt-oss-120b", "empty model: the service's first suggestion");
   assert.equal(s.brain.idle.provider, DEFAULT_SETTINGS.brain.idle.provider);
   assert.deepEqual(s.brain.vision, { provider: "ollama", model: "" }, "vision may stay empty (= the chat model)");

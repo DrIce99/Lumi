@@ -38,8 +38,9 @@ gpu = [
 chatterbox = ["chatterbox-tts>=0.1.7", "faster-qwen3-tts>=0.5.4", "torch==2.11.0", "torchaudio==2.11.0"]
 # whisper.cpp for PCs without a GPU
 whispercpp = ["pywhispercpp>=1.5"]
-# openWakeWord, for a trained "Ehi Lumi" model (otherwise the wake word is
-# spotted in the transcripts)
+# openWakeWord, for the "lumi" wake word model (otherwise the wake word is
+# spotted in the transcripts). Training it (wake/train.py) also needs the
+# gpu extra (torch) and a TTS engine.
 wakeword = ["openwakeword>=0.6"]
 
 [dependency-groups]

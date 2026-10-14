@@ -17,8 +17,8 @@ export interface Situation {
   voice: boolean;
   /** Short perception summary (active app, focus, text read on screen), at most ~1500 characters. */
   screen: string;
-  /** look_at_screen is possible (a vision model is configured and screenshots are allowed). */
-  vision: "always" | "ask" | "never";
+  /** How look_at_screen sees: a local model, or an online one per the screenshot policy. */
+  vision: "local" | "always" | "ask" | "never";
   /** Voices Lumi recognizes (besides the user's), one per line; empty when none or off. */
   voices?: string;
 }
@@ -117,7 +117,15 @@ export function buildContext(input: ContextInput): string {
   if (settings.userName) out.push(`User's name (from settings): ${settings.userName}`);
   out.push(`Your voice: ${s.voice ? "on - the user hears what you say" : "off - what you say appears as text"}`);
   out.push(
-    `Screenshots (look_at_screen): ${s.vision === "never" ? "not allowed by the user" : s.vision === "ask" ? "allowed, the user is asked first" : "allowed"}`,
+    `Screenshots (look_at_screen): ${
+      s.vision === "local"
+        ? "seen by a model on this computer (nothing leaves it); you get its description"
+        : s.vision === "never"
+          ? "no image: you get the text the local OCR reads"
+          : s.vision === "ask"
+            ? "sent online, the user is asked first"
+            : "sent online"
+    }`,
   );
   out.push(`Sociability wanted by the user: ${SOCIABILITY_TEXT[settings.sociability]}`);
   out.push("</situation>");

@@ -279,22 +279,26 @@ microfono ─► AEC del browser ─► VAD (Silero) ─► STT in streaming ─
 
 ### Attivazione per nome
 
-**Oggi** il nome viene cercato nelle trascrizioni (`voice/wakeWord.ts`, ricerca approssimata), così "Ehi Lumi" funziona senza addestrare un modello.
+Un riconoscitore dedicato gira **sempre in locale** e consuma poco: STT e LLM restano spenti finché il nome non viene riconosciuto, e nulla di quello che dici prima del nome viene trascritto.
 
-**Previsto (fase 9.6)**: un riconoscitore dedicato che gira **sempre in locale** e consuma poco, così STT e LLM restano spenti finché il nome non viene riconosciuto.
-
-- **Motore**: openWakeWord nel sidecar (ONNX su CPU), con lo stream audio del microfono a 16 kHz inviato in blocchi da 80 ms tramite il WebSocket `/wake`. È lo stesso flusso del VAD, quindi il microfono si apre una volta sola. Prima si prova il flusso con un modello openWakeWord generico, poi si addestra "Lumi".
+- **Motore**: openWakeWord nel sidecar (ONNX su CPU, extra `wakeword`). L'app manda al WebSocket `/wake` il parlato che il VAD sente (lo stesso flusso, il microfono si apre una volta sola); il sidecar risponde con un punteggio ogni 80 ms e l'app decide quando scatta (`voice/wakeSpotter.ts`).
+- **Senza modello**: finché `lumi.onnx` non esiste (o openWakeWord non è installato), il nome si cerca nelle trascrizioni (`voice/wakeWord.ts`, ricerca approssimata), così "Ehi Lumi" funziona anche senza addestrare nulla; il sidecar riprova a caricare il modello ogni minuto. Per provare il flusso prima dell'addestramento: `LUMI_WAKE_MODEL=hey_jarvis` usa un modello generico di openWakeWord (si dice "Hey Jarvis").
 - **Modello del nome**: openWakeWord si allena con **campioni sintetici**, e qui il TTS di Lumi diventa utile. Lo script `sidecar/wake/train.py`:
   1. genera 2.000–5.000 pronunce di "Lumi" / "Ehi Lumi" con tutte le voci disponibili (Qwen3-TTS, Chatterbox, Kokoro), variando velocità, intonazione ed emozione;
   2. aggiunge rumore, riverbero e audio di sottofondo;
   3. usa come negativi parole simili ("lume", "Luigi", "lumaca", "lui mi"…) e parlato italiano generico;
-  4. produce `lumi.onnx` nella cache dei modelli (`%APPDATA%\Lumi\models\wake`), non nel repository.
+  4. calcola le caratteristiche con i modelli di openWakeWord, addestra una piccola rete e produce `lumi.onnx` (più `lumi.json` con richiamo e falsi positivi sui clip di verifica) nella cache dei modelli (`%APPDATA%\Lumi\models\wake`), non nel repository.
 
-  Facoltativo: 20–30 registrazioni della tua voce migliorano molto la precisione.
+  ```bash
+  uv sync --extra wakeword --extra gpu
+  uv run python -m wake.train --engines qwen3,kokoro --count 3000 [--user-dir registrazioni] [--noise-dir rumori] [--negatives-dir parlato]
+  ```
+
+  Facoltativo: 20–30 registrazioni della tua voce (`--user-dir`) migliorano molto la precisione.
 - **Falsi positivi**: "Lumi" è corto (due sillabe) e rischia di scattare a vuoto. Per questo è prevista anche "Ehi Lumi" e la soglia di attivazione si regola nelle impostazioni. Per scattare non basta un picco: servono almeno 2 fotogrammi consecutivi sopra soglia. Mentre Lumi parla la soglia sale del 30%, per evitare che si attivi da sola sentendo la propria voce.
 - **Frase unica**: se dici "Lumi, che ore sono?" tutto di seguito, l'audio dei 1,5 s precedenti (buffer circolare) viene passato all'STT. Così la domanda non si perde e non serve aspettare un segnale.
-- **Reazione**: appena riconosce il nome, gli occhi si aprono un po' di più e guardano verso di te, e si sente un breve "mh?" opzionale dalla cache. Se entro 5 s non dici nulla, Lumi torna a riposo.
-- **Quando è disattivata**: in "Non disturbare", con lo schermo bloccato e mentre usi il microfono in un'altra app per una chiamata (rilevata quando il dispositivo di input è in uso esclusivo o quando è aperta un'app di riunioni presente in `pauseInApps`).
+- **Reazione**: appena riconosce il nome, gli occhi passano all'espressione di ascolto (più aperti, verso di te). Se hai detto solo il nome si sente un breve "sì?" dalla cache e Lumi aspetta la richiesta per 5 s, poi torna a riposo. Se lo chiami mentre parla, si interrompe.
+- **Quando è disattivata**: in "Non disturbare", con lo schermo bloccato e mentre un'altra app usa il microfono (una chiamata). L'uso del microfono si legge ogni 5 s dal registro della privacy di Windows (`voice/micUse.ts`); non contano Lumi stesso e le app che Lumi ascolta già (per esempio Discord: lì chiamarlo per nome è il modo di parlargli durante la chiamata). Il push-to-talk funziona sempre.
 
 ### Barra dei comandi
 
@@ -331,7 +335,7 @@ Tool esposti al modello:
 
 - `say({ text, emotion, intensity, look? })`
 - `look_at({ text | region })`
-- `look_at_screen({ focus? })` (oggi screenshot al modello `brain.vision`; previsto: passa dal modello di [visione locale](#visione-locale))
+- `look_at_screen({ focus? })` (passa dal modello di [visione locale](#visione-locale))
 - `remember({ fact, kind })`
 - `recall({ query })` (ricerca nell'archivio della conversazione)
 - `forget({ id })` (previsto: `forget({ query })`, che avvia il flusso di oblio con conferma)
@@ -343,8 +347,6 @@ Tool esposti al modello:
 ---
 
 ## Visione locale
-
-> Prevista (fase 9.5). Oggi `look_at_screen` manda lo screenshot al modello scelto in `brain.vision`, che può essere remoto.
 
 Le immagini (screenshot, immagini allegate dalla barra o trascinate sugli occhi) vengono analizzate da un **modello di visione che gira sul PC**, separato dal cervello. **Il cervello riceve solo il testo che il modello di visione produce, mai l'immagine.** In questo modo puoi usare Groq o Gemini per conversare, perché sono veloci, senza che lo schermo esca dal computer.
 
@@ -358,7 +360,7 @@ look_at_screen({ question })
         { description, texts[], regions[{ label, rect }] }  ──►  cervello (solo testo)
 ```
 
-- **Servizio**: Ollama (`/api/chat` con `images`), con un'impostazione `vision` propria e indipendente da `brain`. Facoltativo: qualsiasi server locale compatibile OpenAI, come LM Studio o llama.cpp.
+- **Servizio**: Ollama (`/api/chat` con `images`, `format: "json"`), con un'impostazione `vision` propria e indipendente da `brain` (Impostazioni → Schermo → Visione locale). In alternativa un server locale compatibile OpenAI, come LM Studio o llama.cpp (l'indirizzo è quello del servizio compatibile nella scheda Cervello). Il codice è in `perception/vision.ts` (prompt, lettura della risposta, client) e `screenshots.ts` (la catena).
 - **Modelli consigliati**:
 
   | VRAM libera | Modello | Note |
@@ -370,9 +372,11 @@ look_at_screen({ question })
   "Rileva modelli" mostra solo i modelli Ollama con la capacità `vision`.
 - **Prompt**: viene inviata la domanda del cervello, più il testo OCR della stessa immagine come aiuto (riduce gli errori di lettura dei modelli piccoli). Si chiede una risposta JSON con `description` (in italiano, al massimo 120 parole), `texts` (testi rilevanti) e `regions` (al massimo 5, con coordinate normalizzate 0–1000). Qwen3-VL restituisce le coordinate in modo affidabile.
 - **Sguardo**: le `regions` diventano candidati per il modulo di attenzione. Così Lumi guarda la cosa che sta descrivendo anche quando non contiene testo, come un grafico o un'immagine.
-- **Ridimensionamento**: lato lungo al massimo 1.344 px prima dell'invio, ritagliando la finestra attiva quando basta. È più veloce e, per i modelli piccoli, spesso anche più preciso.
+- **Ridimensionamento**: lato lungo al massimo 1.344 px prima dell'invio (`vision.maxSide`). Se la finestra attiva occupa meno di metà del suo monitor si cattura solo lei, altrimenti tutto il monitor. È più veloce e, per i modelli piccoli, spesso anche più preciso.
+- **Pause**: come la percezione, `look_at_screen` non guarda nelle app di `pauseInApps`, nelle finestre in incognito, con lo schermo bloccato o in "Non disturbare".
 - **Memoria video**: il modello di visione viene caricato su richiesta, con `keep_alive: "2m"`, e libera la VRAM per TTS e STT quando non serve. Al primo uso dopo un po' di inattività c'è un ritardo di caricamento, durante il quale gli occhi fanno l'espressione di pensiero.
-- **Senza modello locale**: se `vision.provider` è `none` oppure il modello non è disponibile, `look_at_screen` restituisce solo OCR + UIA. L'immagine viene inviata al cervello remoto solo se `sendScreenshots` lo consente esplicitamente, e mai per impostazione predefinita.
+- **Senza modello locale**: se `vision.provider` è `none` oppure il modello non risponde, `look_at_screen` restituisce il testo letto dall'OCR locale. L'immagine va a un servizio online (`brain.vision`, nella scheda Cervello "Immagini a un servizio online") solo se `sendScreenshots` lo consente esplicitamente (`ask` o `always`), e mai per impostazione predefinita. Se il modello manca, un fumetto lo dice (al massimo ogni 10 minuti) con il comando `ollama pull` da usare.
+- **Immagini allegate** alla barra dei comandi: stessa catena, il modello locale prima.
 
 ---
 
@@ -550,7 +554,7 @@ Vocabolario personalizzato: una lista di parole (nomi, termini tecnici) passata 
 
 Le cifre sono indicative e vanno verificate sul proprio PC.
 
-| Profilo | Cervello | STT | TTS | Visione locale (prevista) | VRAM |
+| Profilo | Cervello | STT | TTS | Visione locale | VRAM |
 | --- | --- | --- | --- | --- | --- |
 | **Leggero** (nessuna GPU) | Groq / Gemini | Groq Whisper | Kokoro (CPU) | solo OCR | 0 |
 | **Bilanciato** (8–12 GB) | Groq / Gemini | faster-whisper turbo | Qwen3-TTS 1.7B | `qwen3-vl:8b` su richiesta | circa 6 GB, picchi di 12 GB durante la visione |
@@ -581,7 +585,7 @@ lumi/
 │  │  │  ├─ reading.ts         simulazione della lettura (puro, testato)
 │  │  │  ├─ glare.ts           rilevamento abbagliamento (puro, testato)
 │  │  │  ├─ backdrop.ts        luminanza dietro il volto → ombra adattiva (puro, testato)
-│  │  │  ├─ vision.ts          look_at_screen → visione locale (Ollama; previsto)
+│  │  │  ├─ vision.ts          visione locale: prompt, risposta JSON, client Ollama/OpenAI
 │  │  │  └─ context.ts         riassunto percettivo per il prompt
 │  │  ├─ brain/
 │  │  │  ├─ brain.ts  prompt.ts  tools.ts  memory.ts  recall.ts
@@ -615,7 +619,7 @@ lumi/
 │  ├─ tts/                     base.py  qwen3.py  chatterbox.py  kokoro.py
 │  ├─ ocr/                     winocr_engine.py  rapidocr_engine.py
 │  ├─ uia/                     focus.py  caret.py  (eventi UIA)
-│  ├─ wake/                    detector.py  train.py  (openWakeWord, dati sintetici dal TTS; previsto)
+│  ├─ wake/                    detector.py  train.py  (openWakeWord, dati sintetici dal TTS)
 │  ├─ text/                    normalize_it.py
 │  ├─ pyproject.toml
 │  └─ tests/
@@ -641,7 +645,7 @@ Il sidecar ascolta solo su `127.0.0.1`, con una porta casuale e un token generat
 | `POST /screen/jpeg` | HTTP | rettangolo di un monitor → JPEG per `look_at_screen` |
 | `/apps` | WS | `{ apps: ["Discord"] }` → `{ type: "status", apps }` e, per ogni frase sentita in quelle app, `{ type: "heard", app, text, voiceprint }` |
 | `/uia` | WS | → eventi `{ focus, caret, selection }` con rettangoli |
-| `/wake` (previsto) | WS | PCM 16 kHz a blocchi da 80 ms → `{ wake, score, preroll_ms }` |
+| `/wake` | WS | `{ model: "lumi" }` → `{ type: "ready" }` (o `{ type: "error", missing }`); poi `[id][PCM 16 kHz]` del parlato e `{ reset: true }` a ogni frase → `{ type: "scores", scores }`, uno ogni 80 ms |
 | `POST /tts/batch` | HTTP | testo lungo → file audio (modalità audiolibro) |
 
 ---
@@ -683,17 +687,17 @@ Il sidecar ascolta solo su `127.0.0.1`, con una porta casuale e un token generat
 }
 ```
 
-Sono previste e arrivano con le rispettive fasi della roadmap: le sezioni `vision` (sostituirà `brain.vision`), `memory` e `habits`, la chiave `wakeThreshold`, e il nuovo default `sendScreenshots: "never"`.
+Le sezioni `memory` e `habits` sono previste e arrivano con le rispettive fasi della roadmap. `brain.vision` resta come modello online per le immagini, usato solo senza visione locale e se `sendScreenshots` lo consente.
 
 ---
 
 ## Privacy
 
 - **OCR, UIA e catture restano sul PC.** Oggi al servizio di IA arriva solo il riassunto testuale breve del contesto percettivo e, con `look_at_screen`, lo screenshot. Con Ollama non esce nulla.
-- **Con la [visione locale](#visione-locale)** (prevista) anche le immagini restano sul PC: le analizza il modello locale e al servizio remoto arriva solo testo (il riassunto percettivo e le descrizioni prodotte localmente).
-- `sendScreenshots`: `never` | `ask` (Lumi chiede prima, con un fumetto) | `always`. Con la visione locale varrà solo per l'invio diretto di immagini al cervello remoto quando manca un modello locale, con `never` come default.
+- **Con la [visione locale](#visione-locale)** anche le immagini restano sul PC: le analizza il modello locale e al servizio remoto arriva solo testo (il riassunto percettivo e le descrizioni prodotte localmente).
+- `sendScreenshots`: `never` (predefinito) | `ask` (Lumi chiede prima, con un fumetto) | `always`. Vale solo per l'invio di immagini a un servizio online quando manca la visione locale.
 - **Memoria ed eventi** (previsti, `memory.db`) restano sul PC. Al cervello arrivano solo i ricordi pertinenti alla domanda (al massimo `promptBudgetTokens`). Estrazione dei fatti e riflessione notturna usano per impostazione predefinita un modello locale, così l'intero storico non viene mai inviato a un servizio remoto. L'oblio cancella anche vettori, fatti, riassunti e backup derivati.
-- **Il nome viene riconosciuto in locale** (con openWakeWord, previsto): finché non chiami Lumi, l'audio del microfono non viene trascritto, né salvato, né inviato.
+- **Il nome viene riconosciuto in locale** (con openWakeWord e il modello `lumi`): finché non chiami Lumi, l'audio del microfono non viene trascritto, né salvato, né inviato. Senza il modello addestrato il nome si cerca nelle trascrizioni locali, quindi il parlato viene trascritto (sul PC, o con Groq se è il motore scelto).
 - La percezione si **ferma da sola** nelle app indicate in `pauseInApps`, nelle finestre in incognito e con lo schermo bloccato.
 - Sui piani gratuiti alcuni servizi (per esempio Gemini) possono usare i dati inviati per migliorare i propri modelli: verificane le condizioni prima di usarli con dati di lavoro.
 - **Clonazione della voce**: usa solo la tua voce o voci per cui hai il consenso.
@@ -722,8 +726,8 @@ Ogni fase si chiude con `npm run check` e `pytest` verdi e una prova manuale.
    2. ~~[Espressione sincronizzata con la voce](#espressione-sincronizzata-con-la-voce)~~ (fatto).
    3. ~~[Barra dei comandi](#barra-dei-comandi) con `Ctrl+Alt+L`~~ (fatto).
    4. ~~[Abbagliamento](#abbagliamento)~~ (fatto).
-   5. [Visione locale](#visione-locale) con Ollama e `qwen3-vl`, poi le `regions` come candidati di sguardo.
-   6. [Attivazione per nome](#attivazione-per-nome) con openWakeWord: prima con un modello generico per provare il flusso, poi l'addestramento di "Lumi" con `train.py`.
+   5. ~~[Visione locale](#visione-locale)~~ (fatto).
+   6. ~~[Attivazione per nome](#attivazione-per-nome) con openWakeWord~~ (fatto; il modello "lumi" va addestrato con `train.py`).
 10. **Memoria a lungo termine** ([dettagli](#memoria-a-lungo-termine)): prima `db.ts` + log + FTS + `search_memory` per date, poi coda di embedding e ricerca ibrida, poi fatti, riassunti e infine oblio a cascata. Importare nel log `archive.jsonl`, episodi e fatti esistenti.
 11. **Abitudini** ([dettagli](#abitudini-e-proattività)): log degli eventi, `patterns.ts` con i test, riflessione notturna, trigger con limite e confidenza.
 12. **Audiolibri**: `POST /tts/batch`, import di `.txt`/`.epub`, capitoli, voci diverse per i dialoghi, esportazione `.m4b`.
@@ -758,5 +762,6 @@ Variabili di debug (stesso stile di Pixel Pet):
 - `LUMI_DEBUG_SAY="testo|emozione"`: fa parlare Lumi senza LLM.
 - `LUMI_DEBUG_CAPTURE=<prefisso>`: salva in PNG i fotogrammi del volto.
 - `LUMI_DEBUG_BAR=1` (o un testo, `\n` per andare a capo): apre la barra dei comandi all'avvio, con quel testo nel campo.
+- `LUMI_WAKE_MODEL=<nome>`: il modello della parola di attivazione (predefinito `lumi`; `hey_jarvis`, `alexa` o `hey_mycroft` sono modelli generici di openWakeWord, per provare il flusso).
 
 Log in `%APPDATA%\Lumi\logs\`.
