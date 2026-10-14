@@ -3,6 +3,7 @@
 import { join } from "node:path";
 import { DEFAULT_OLLAMA_URL, isProvider, PROVIDERS, RETIRED_MODELS, type ProviderId } from "../shared/providers";
 import {
+  BAR_REPLIES,
   DEFAULT_SETTINGS,
   DEVICES,
   LISTEN_MODES,
@@ -103,6 +104,7 @@ export function sanitizeSettings(input: unknown): Settings {
   const tts = obj(raw.tts);
   const listen = obj(raw.listen);
   const face = obj(raw.face);
+  const commandBar = obj(raw.commandBar);
   const voices = obj(raw.voices);
   const appAudio = obj(raw.appAudio);
   const discord = obj(raw.discord);
@@ -174,6 +176,10 @@ export function sanitizeSettings(input: unknown): Settings {
     doNotDisturb: bool(raw.doNotDisturb, d.doNotDisturb),
     muted: bool(raw.muted, d.muted),
     chatHotkey: str(raw.chatHotkey, d.chatHotkey, 60).trim(),
+    commandBar: {
+      reply: oneOf(commandBar.reply, BAR_REPLIES, d.commandBar.reply),
+      useSelection: bool(commandBar.useSelection, d.commandBar.useSelection),
+    },
     launchAtLogin: bool(raw.launchAtLogin, d.launchAtLogin),
     setupDone: bool(raw.setupDone, d.setupDone),
   };

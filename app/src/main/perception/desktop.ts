@@ -36,6 +36,9 @@ interface Api {
   QueryFullProcessImageNameW(process: Handle, flags: number, buffer: Buffer, size: number[]): boolean;
   CloseHandle(handle: Handle): boolean;
   GetCurrentProcessId(): number;
+  SetForegroundWindow(hwnd: Handle): boolean;
+  IsWindow(hwnd: Handle): boolean;
+  DwmSetWindowAttribute(hwnd: bigint, attribute: number, value: number[], size: number): number;
 }
 
 interface GuiThreadInfo {
@@ -51,6 +54,8 @@ interface GuiThreadInfo {
 }
 
 const DWMWA_EXTENDED_FRAME_BOUNDS = 9;
+const DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+const DWMWCP_ROUND = 2;
 const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 const GUI_THREAD_INFO_SIZE = 72;
 
@@ -91,6 +96,9 @@ function load(): Api | null {
       QueryFullProcessImageNameW: kernel32.func("bool __stdcall QueryFullProcessImageNameW(void *hProcess, uint32_t dwFlags, _Out_ void *lpExeName, _Inout_ uint32_t *lpdwSize)"),
       CloseHandle: kernel32.func("bool __stdcall CloseHandle(void *hObject)"),
       GetCurrentProcessId: kernel32.func("uint32_t __stdcall GetCurrentProcessId()"),
+      SetForegroundWindow: user32.func("bool __stdcall SetForegroundWindow(void *hWnd)"),
+      IsWindow: user32.func("bool __stdcall IsWindow(void *hWnd)"),
+      DwmSetWindowAttribute: dwmapi.func("int32_t __stdcall DwmSetWindowAttribute(intptr_t hwnd, uint32_t dwAttribute, _In_ int32_t *pvAttribute, uint32_t cbAttribute)"),
     };
   } catch (err) {
     log.warn("Can't read the desktop through koffi: caret, foreground window and push-to-talk release won't work", err);
@@ -143,6 +151,41 @@ export function foregroundWindow(): ForegroundWindow | null {
   } catch (err) {
     log.warn("Reading the foreground window failed", err);
     return null;
+  }
+}
+
+/** The raw foreground window, to give it the focus back later (any process, Lumi's too). */
+export function foregroundHandle(): unknown {
+  const w = load();
+  if (!w) return null;
+  try {
+    return w.GetForegroundWindow() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Brings a window from foregroundHandle() back to the foreground; false when it is gone. */
+export function focusWindow(handle: unknown): boolean {
+  const w = load();
+  if (!w || !handle) return false;
+  try {
+    return w.IsWindow(handle) && w.SetForegroundWindow(handle);
+  } catch (err) {
+    log.warn("Restoring the focus failed", err);
+    return false;
+  }
+}
+
+/** Windows 11 rounds the corners of a frameless window only when asked. `hwnd`: BrowserWindow.getNativeWindowHandle(). */
+export function roundCorners(hwnd: Buffer): void {
+  const w = load();
+  if (!w) return;
+  try {
+    const value = hwnd.length >= 8 ? hwnd.readBigUInt64LE(0) : BigInt(hwnd.readUInt32LE(0));
+    w.DwmSetWindowAttribute(value, DWMWA_WINDOW_CORNER_PREFERENCE, [DWMWCP_ROUND], 4);
+  } catch (err) {
+    log.warn("Rounding the window corners failed", err);
   }
 }
 

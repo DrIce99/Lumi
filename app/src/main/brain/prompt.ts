@@ -4,7 +4,8 @@
 // with the tool list it forms a stable prefix that local servers can cache.
 // Everything that changes every moment (time, screen, memory, conversation)
 // goes into the user message built by buildContext.
-import type { DiaryEntry, Fact, Reminder, Settings, Sociability } from "../../shared/types";
+import type { BarContext, DiaryEntry, Fact, Reminder, Settings, Sociability } from "../../shared/types";
+import type { Attachment } from "../attachments";
 import type { ActivitySnapshot } from "../activity";
 import type { ConversationEntry, Episode } from "./memory";
 import type { RecallHit } from "./recall";
@@ -23,8 +24,12 @@ export interface Situation {
 }
 
 export type Trigger =
-  /** `speaker`: a voice other than the user's said it (its name or "Voce N"). */
-  | { kind: "message"; text: string; via: "voice" | "text"; speaker?: string }
+  /**
+   * `speaker`: a voice other than the user's said it (its name or "Voce N").
+   * From the command bar ("bar"): `context` is the text selected in another
+   * app when it opened, `attachments` the dropped files, already read.
+   */
+  | { kind: "message"; text: string; via: "voice" | "text" | "bar"; speaker?: string; context?: BarContext; attachments?: Attachment[] }
   | { kind: "tick" }
   | { kind: "noticed"; what: string }
   | { kind: "back"; minutesAway: number }
@@ -176,9 +181,9 @@ function describeTrigger(trigger: Trigger, user: string): string {
     case "message":
       if (trigger.speaker)
         return `${trigger.speaker} - a voice that is not ${user}'s, heard at the microphone - said to you (speech recognition, may contain small errors): «${trigger.text}»\nAnswer them; ${user} is probably there too.`;
-      return trigger.via === "voice"
-        ? `${user} said to you (speech recognition, may contain small errors): «${trigger.text}»\nAnswer them.`
-        : `${user} typed to you in the chat box: «${trigger.text}»\nAnswer them.`;
+      if (trigger.via === "voice") return `${user} said to you (speech recognition, may contain small errors): «${trigger.text}»\nAnswer them.`;
+      if (trigger.via === "text") return `${user} typed to you in the chat box: «${trigger.text}»\nAnswer them.`;
+      return describeBarMessage(trigger, user);
     case "tick":
       return "Autonomous moment: nobody asked you anything. Decide what to do, if anything (usually stay_quiet).";
     case "noticed":
@@ -190,6 +195,30 @@ function describeTrigger(trigger: Trigger, user: string): string {
         ? "This is the very first time you wake up on this computer. Introduce yourself in one or two short sentences, warmly; you don't know the user yet."
         : `The app just started and you are waking up. You last saw ${user} ${formatHours(trigger.hoursAway)} ago. Greet them briefly, or stay_quiet.`;
   }
+}
+
+/** Selected text sent along with a bar message, at most. */
+export const MAX_CONTEXT_CHARS = 4000;
+
+function describeBarMessage(trigger: Extract<Trigger, { kind: "message" }>, user: string): string {
+  const out = [`${user} typed to you in the command bar: «${trigger.text}»`];
+  if (trigger.context) {
+    const where = trigger.context.app ? ` in ${trigger.context.app}` : "";
+    const text = trigger.context.text.length > MAX_CONTEXT_CHARS ? `${trigger.context.text.slice(0, MAX_CONTEXT_CHARS)}…` : trigger.context.text;
+    out.push(`They had this text selected${where} when they opened the bar; "this", "it" and the like refer to it:`, "<selection>", text, "</selection>");
+  }
+  for (const a of trigger.attachments ?? []) out.push(`Attached file «${a.name}»:`, "<file>", a.content, "</file>");
+  out.push("Answer them.");
+  return out.join("\n");
+}
+
+/** How a message is kept in the conversation history: the typed text, plus what came with it. */
+export function messageForHistory(trigger: Extract<Trigger, { kind: "message" }>): string {
+  const extras = [
+    ...(trigger.context ? [`testo selezionato: «${trigger.context.text.replace(/\s+/g, " ").slice(0, 120)}»`] : []),
+    ...(trigger.attachments ?? []).map((a) => `allegato: ${a.name}`),
+  ];
+  return extras.length ? `${trigger.text} [${extras.join("; ")}]` : trigger.text;
 }
 
 function formatDateTime(d: Date): string {

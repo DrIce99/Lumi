@@ -236,9 +236,24 @@ Work one roadmap phase at a time; finish each with checks green.
   not used: one say call per emotion.
 - Lid cuts: `EyeShape.lidTop/lidAngle/cheek` cut the capsule with a
   straight, possibly slanted lid from above (sad: outer side lower, angry:
-  inner side lower) and a curved cheek from below (happy). Drawn on an
+  inner side lower) and a straight cheek line from below (`cheek`,
+  `cheekAngle`; happy: outer side higher). Lines only, no curves. Drawn on an
   offscreen layer; the border is that layer stamped in 8 directions and
   tinted black, so glow, shadow and border follow the cut shape.
+- Command bar (`main/commandbar.ts`, page in `renderer/commandbar/`):
+  pre-created hidden window, toggled by `chatHotkey` (Ctrl+Alt+L; the face
+  chat stays on the eye click). Acrylic + DWM rounded corners on Windows 11
+  22H2+ (`supportsAcrylic`, `roundCorners` in desktop.ts), a transparent
+  window with a dark panel otherwise. It reads the foreground window and
+  the UIA selection (`Perception.selection()`, honors pauses and password
+  fields) *before* taking the focus, and gives the focus back on close
+  (`focusWindow`). It doesn't close on blur (dragging a file from Explorer
+  blurs it). Dropped files: paths via `webUtils.getPathForFile` in the
+  preload, read in main by `attachments.ts` (text clipped, images
+  described in words by `Screenshots.describeImage`). The message goes to
+  the brain as `{ via: "bar", context, attachments }`; replies follow
+  `commandBar.reply`. While open, a "caret" attention candidate on the bar
+  makes the eyes look at it.
 
 ## Planned features (not built yet; roadmap phases 9-11)
 
@@ -265,10 +280,6 @@ code yet; when a piece lands, move its notes to the sections above.
   from synthetic samples made with our own TTS engines
   (`sidecar/wake/train.py`); trained models live in the models cache, not
   git.
-- Command bar (`commandbar.ts`): pre-created hidden window,
-  `globalShortcut` (`Ctrl+Alt+L`), `backgroundMaterial: 'acrylic'` on
-  Windows 11 with a solid fallback; restore focus to the previous window
-  on close.
 
 ### Memory (`main/brain/memory/`, phase 10)
 
@@ -333,5 +344,7 @@ spoken with push-to-talk: tests STT → brain → TTS without a microphone),
 time and changes), `LUMI_DEBUG_VISIBLE=1` (no content protection: real screenshots show the
 face, to check it on screen),
 `LUMI_DEBUG_SETTINGS=<tab>` (opens the settings on a tab; captured with
-LUMI_DEBUG_CAPTURE). Logs: `%APPDATA%\Lumi\logs\` (`lumi.log`,
+LUMI_DEBUG_CAPTURE), `LUMI_DEBUG_BAR=1|<text>` (opens the command bar at
+startup, with that text typed; with LUMI_DEBUG_VISIBLE=1 a real screenshot
+shows the acrylic). Logs: `%APPDATA%\Lumi\logs\` (`lumi.log`,
 `sidecar.log`). Real-model sidecar tests: `uv run pytest -m model -s`.

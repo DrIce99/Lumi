@@ -29,6 +29,33 @@ export class Screenshots {
     private readonly vision: Vision,
   ) {}
 
+  /**
+   * An image the user attached (command bar), described in words by the
+   * model that sees. Attaching it is the user's own choice, so "ask" doesn't
+   * ask again; "never" still keeps it off remote services.
+   */
+  async describeImage(name: string, jpegBase64: string, request: string): Promise<string> {
+    const chosen = this.host.visionModel();
+    if (!chosen) return "(no model that can see images is configured: you can't see it)";
+    const local = chosen.provider.id === "ollama";
+    if (this.host.settings().perception.sendScreenshots === "never" && !local) return "(the user doesn't allow sending images to an online service: you can't see it)";
+    try {
+      log.info(`Attached image ${name} for ${chosen.provider.id}/${chosen.model}`);
+      const result = await chosen.provider.complete({
+        model: chosen.model,
+        system:
+          "You describe an image the user attached, for an assistant that cannot see it. Be concrete and compact (at most 150 words): what it shows and the details relevant to the request. Quote visible text exactly.",
+        prompt: request ? `The user's request: ${request}` : "Describe the image.",
+        images: [jpegBase64],
+        maxTokens: 500,
+      });
+      return `What the image shows: ${result.text || "(no description)"}`;
+    } catch (err) {
+      log.warn("Describing an attached image failed", err);
+      return "(looking at the image failed)";
+    }
+  }
+
   async look(focus: string | undefined, requestedByUser: boolean): Promise<LookResult> {
     const settings = this.host.settings();
     const policy = settings.perception.sendScreenshots;

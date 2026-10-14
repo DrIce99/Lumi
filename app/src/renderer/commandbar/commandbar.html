@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'" />
+    <title>Lumi</title>
+    <link rel="stylesheet" href="commandbar.css" />
+  </head>
+  <body>
+    <div id="panel" class="panel">
+      <div id="context" class="chip context" hidden>
+        <span class="chip-label">Selezione</span>
+        <span id="contextText" class="chip-text"></span>
+        <button id="contextRemove" class="chip-x" type="button" title="Non usare questo testo" aria-label="Rimuovi il contesto">×</button>
+      </div>
+      <div class="row">
+        <div class="eyes" aria-hidden="true"><i></i><i></i></div>
+        <textarea id="input" rows="1" placeholder="Chiedi qualcosa a Lumi…" spellcheck="true" aria-label="Chiedi qualcosa a Lumi"></textarea>
+      </div>
+      <div id="files" class="files" hidden></div>
+      <div id="drop" class="drop" hidden>Rilascia qui per allegare</div>
+    </div>
+    <script src="commandbar.js"></script>
+  </body>
+</html>

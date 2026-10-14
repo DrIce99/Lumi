@@ -66,10 +66,21 @@
           </label>
         </div>
         <label class="field">
-          <span>Scorciatoia per scrivergli</span>
+          <span>Scorciatoia della barra dei comandi</span>
           <input id="chatHotkey" type="text" maxlength="60" placeholder="Control+Alt+L" />
-          <small class="hint">Formato Electron, ad esempio <code>Control+Alt+L</code>. Puoi anche cliccare sugli occhi.</small>
+          <small class="hint">Formato Electron, ad esempio <code>Control+Alt+L</code>. Premuta di nuovo (o con Esc) la barra si chiude. Per la chat con la cronologia clicca sugli occhi.</small>
         </label>
+        <div class="grid2">
+          <label class="field">
+            <span>Risposta alla barra</span>
+            <select id="barReply">
+              <option value="voice+text">Voce e fumetto</option>
+              <option value="voice">Solo voce</option>
+              <option value="text">Solo fumetto</option>
+            </select>
+          </label>
+          <label class="check"><input id="barSelection" type="checkbox" /> Usa il testo selezionato nell'altra app come contesto (serve la percezione dello schermo)</label>
+        </div>
         <label class="check"><input id="launchAtLogin" type="checkbox" /> Avvia con Windows</label>
       </section>
 

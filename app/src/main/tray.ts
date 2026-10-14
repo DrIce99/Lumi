@@ -22,6 +22,8 @@ export interface TrayState {
 
 export interface TrayActions {
   talk(): void;
+  /** Opens the command bar. */
+  ask(): void;
   toggleVisible(): void;
   toggleDoNotDisturb(): void;
   toggleMuted(): void;
@@ -90,7 +92,8 @@ export class LumiTray {
       click: () => a.setListenMode(mode),
     }));
     return Menu.buildFromTemplate([
-      { label: "Scrivi a Lumi…", accelerator: s.chatHotkey || undefined, registerAccelerator: false, click: () => a.talk() },
+      { label: "Chiedi a Lumi…", accelerator: s.chatHotkey || undefined, registerAccelerator: false, click: () => a.ask() },
+      { label: "Chat con Lumi", click: () => a.talk() },
       { label: "Come ti ascolto", submenu: modes, enabled: s.voiceReady },
       { type: "separator" },
       { label: "Mostra Lumi", type: "checkbox", checked: s.visible, click: () => a.toggleVisible() },

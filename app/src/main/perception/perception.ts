@@ -8,7 +8,7 @@ import type { AttentionKind, GazeCommand, Settings } from "../../shared/types";
 import { log } from "../log";
 import { Attention, type AttentionContext, type AttentionTarget, type Candidate } from "./attention";
 import type { Change } from "./capture";
-import { perceptionSummary, type ReadText } from "./context";
+import { appName, perceptionSummary, type ReadText } from "./context";
 import { pausedFor, type ForegroundWindow } from "./desktop";
 import { findText, normalizeText, type TextItem } from "./grounding";
 import { readingPlan, type Fixation, type ReadLine } from "./reading";
@@ -138,6 +138,13 @@ export class Perception {
   /** Perception (screen watching) is on and not paused. */
   watching(): boolean {
     return this.host.settings().perception.enabled && this.pausedReason === null;
+  }
+
+  /** The text selected in the focused element of another app, with that app's name; null when none or paused. */
+  selection(): { app: string; text: string } | null {
+    const text = this.uia?.selection?.trim();
+    if (!this.watching() || !text || this.uia?.focus.isPassword) return null;
+    return { app: this.foreground ? appName(this.foreground.process) : "", text };
   }
 
   /** The summary that goes into the prompt. */

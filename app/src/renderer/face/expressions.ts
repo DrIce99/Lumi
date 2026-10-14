@@ -23,8 +23,10 @@ export interface EyeShape {
   lidTop: number;
   /** Degrees; positive drops the lid toward the nose (angry), negative toward the outside (sad). */
   lidAngle: number;
-  /** Fraction of the eye cut away from the bottom by a curved cheek (happy). */
+  /** Fraction of the eye cut away from the bottom by a straight cheek line (happy, shy). */
   cheek: number;
+  /** Degrees; positive raises the cheek line on the outer side (happy). */
+  cheekAngle: number;
 }
 
 export interface ExpressionDef {
@@ -43,7 +45,7 @@ export interface ExpressionDef {
   blinkPauseMs?: number;
 }
 
-export const NEUTRAL_SHAPE: EyeShape = { width: 1, height: 1, y: 0, tilt: 0, spread: 0, lid: 0, asym: 0, lidTop: 0, lidAngle: 0, cheek: 0 };
+export const NEUTRAL_SHAPE: EyeShape = { width: 1, height: 1, y: 0, tilt: 0, spread: 0, lid: 0, asym: 0, lidTop: 0, lidAngle: 0, cheek: 0, cheekAngle: 0 };
 
 const def = (shape: Partial<EyeShape>, rest: Partial<Omit<ExpressionDef, "shape">> = {}): ExpressionDef => ({
   shape: { ...NEUTRAL_SHAPE, ...shape },
@@ -56,15 +58,16 @@ const def = (shape: Partial<EyeShape>, rest: Partial<Omit<ExpressionDef, "shape"
 
 export const EXPRESSION_DEFS: Record<Expression, ExpressionDef> = {
   neutra: def({}),
-  // Happy eyes: the cheeks push the bottom up into an arch
-  gioia: def({ width: 1.2, height: 0.84, y: 3, cheek: 0.42 }, { onset: "bounce", blinkRate: 1.1 }),
+  // Happy eyes: the cheeks push the bottom up, more on the outer side
+  gioia: def({ width: 1.2, height: 0.84, y: 3, cheek: 0.4, cheekAngle: 24 }, { onset: "bounce", blinkRate: 1.1 }),
   // Sad: lids drop on the outer side
   tristezza: def({ width: 0.94, height: 0.82, y: 6, tilt: 10, lidTop: 0.3, lidAngle: -26 }, { gazeBias: { x: 0, y: 0.85 }, blinkRate: 0.8, saccadeRate: 0.5 }),
   sorpresa: def({ width: 1.14, height: 1.28, y: -3 }, { blinkPauseMs: 1400, saccadeRate: 0.4 }),
   // Angry: lids drop toward the nose, a frown
   rabbia: def({ width: 0.86, height: 0.88, y: 1.5, tilt: -8, spread: -2.5, lidTop: 0.32, lidAngle: 30 }, { saccadeRate: 0.7 }),
   pensiero: def({ height: 0.95, asym: -0.2, lidTop: 0.12 }, { gazeBias: { x: 0.8, y: -0.8 }, saccadeRate: 0.35 }),
-  imbarazzo: def({ width: 0.93, height: 0.86, y: 3, cheek: 0.22 }, { avert: true, onset: "tremble", blinkRate: 1.4 }),
+  // Shy: smaller, worried lids and the cheeks pressed up on the inner side, looking away
+  imbarazzo: def({ width: 0.88, height: 0.8, y: 4, lidTop: 0.16, lidAngle: -20, cheek: 0.2, cheekAngle: -16 }, { avert: true, onset: "tremble", blinkRate: 1.6 }),
   sonno: def({ height: 0.94, y: 2, lidTop: 0.52 }, { blinkRate: 0.45, saccadeRate: 0.3 }),
   ascolto: def({ height: 1.1, y: -1.5 }, { saccadeRate: 0.25 }),
 };

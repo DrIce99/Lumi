@@ -121,16 +121,16 @@ Il volto si disegna su `<canvas>` (o SVG) nel renderer, a 60 fps solo mentre qua
 | Emozione | Forma |
 | --- | --- |
 | neutra | capsule dritte |
-| gioia | occhi più larghi, **tagliati dal basso** da una curva (le guance che salgono: occhi ad arco), leggero rimbalzo verso l'alto |
+| gioia | occhi più larghi, **tagliati dal basso** da una linea dritta più alta verso l'esterno (le guance che salgono), leggero rimbalzo verso l'alto |
 | tristezza | occhi più bassi, **palpebra tagliata in alto e scesa verso l'esterno** (angoli interni alzati), sguardo in basso |
 | sorpresa | +28% in altezza, +14% in larghezza, breve pausa del battito |
 | rabbia / fastidio | **palpebra tagliata in alto e scesa verso il naso** (cipiglio), più stretti |
 | pensiero | sguardo in alto a destra, un occhio più piccolo, palpebre appena abbassate |
 | ascolto | leggermente più alti, fissi su di te, pochi movimenti |
 | sonno | palpebre dritte calate a metà, battiti lenti |
-| imbarazzo | sguardo che scappa di lato, leggero taglio dal basso, breve "tremolio" |
+| imbarazzo | occhi più piccoli, palpebre un po' preoccupate (angoli interni alzati) e taglio dal basso più alto verso il naso, sguardo che scappa di lato, breve "tremolio" |
 
-I tagli sono parametri interpolati come gli altri (`lidTop`, `lidAngle`, `cheek` in `face/expressions.ts`): gli occhi tagliati si disegnano su un livello a parte, così bagliore, ombra e bordo seguono la forma tagliata.
+I tagli sono linee dritte, parametri interpolati come gli altri (`lidTop`, `lidAngle`, `cheek`, `cheekAngle` in `face/expressions.ts`): gli occhi tagliati si disegnano su un livello a parte, così bagliore, ombra e bordo seguono la forma tagliata.
 
 **Mentre parla**, al posto della bocca: l'altezza degli occhi pulsa di ±5% seguendo l'ampiezza (RMS) dell'audio in uscita, con un leggero rimbalzo all'inizio di ogni frase. Le transizioni tra espressioni durano 150–300 ms e tutti i parametri si interpolano.
 
@@ -276,7 +276,7 @@ microfono ─► AEC del browser ─► VAD (Silero) ─► STT in streaming ─
 | Push-to-talk (predefinita) | tieni premuto `Ctrl+Alt+Spazio` |
 | **Chiamandola per nome** | dici "Lumi…" o "Ehi Lumi…" (vedi sotto) |
 | Conversazione continua | dopo una risposta resta in ascolto per 8 s senza bisogno di richiamarla |
-| **Barra dei comandi** (prevista) | `Ctrl+Alt+L` → campo di testo in sovrimpressione (vedi sotto) |
+| **Barra dei comandi** | `Ctrl+Alt+L` → campo di testo in sovrimpressione (vedi sotto) |
 | Chat | clic sugli occhi → riquadro di chat con la cronologia, come in Pixel Pet |
 
 ### Attivazione per nome
@@ -300,20 +300,18 @@ microfono ─► AEC del browser ─► VAD (Silero) ─► STT in streaming ─
 
 ### Barra dei comandi
 
-> Prevista (fase 9.3).
+Una finestra separata (`commandbar.ts`), creata all'avvio e nascosta, così si apre all'istante. Si apre anche dal menu della tray ("Chiedi a Lumi…"); la chat con la cronologia resta sul clic sugli occhi.
 
-Una finestra separata (`commandbar.ts`), creata all'avvio e nascosta, così si apre all'istante.
-
-- **Scorciatoia globale**: `Ctrl+Alt+L` (configurabile, con `globalShortcut`). Premuta di nuovo, oppure con `Esc`, la barra si chiude.
-- **Aspetto**: senza bordi, angoli arrotondati da 16 px, centrata in orizzontale a circa il 30% dell'altezza del monitor dove si trova il mouse, larga 640 px. Lo sfondo è sfocato (`backgroundMaterial: 'acrylic'` su Windows 11, con un fallback semitrasparente scuro su Windows 10), testo da 18 px e un segnaposto del tipo "Chiedi qualcosa a Lumi…".
+- **Scorciatoia globale**: `Ctrl+Alt+L` (impostazione `chatHotkey`, con `globalShortcut`). Premuta di nuovo, oppure con `Esc`, la barra si chiude. Non si chiude quando perde il focus, così puoi trascinarci un file da Esplora risorse.
+- **Aspetto**: senza bordi, centrata in orizzontale a circa il 30% dell'altezza del monitor dove si trova il mouse, larga 640 px. Su Windows 11 (22H2 o successivo) lo sfondo è acrilico (`backgroundMaterial: 'acrylic'`) con gli angoli arrotondati dal sistema (DWM, circa 8 px); su Windows 10 è un riquadro scuro semitrasparente con angoli da 16 px. Testo da 18 px, segnaposto "Chiedi qualcosa a Lumi…" e i due occhi di Lumi a sinistra.
 - **Animazione**: entra con fade + scala da 0,96 a 1 in 140 ms. Mentre scrivi, gli occhi di Lumi guardano la barra.
 - **Comportamento**:
   - `Invio` invia, `Maiusc+Invio` va a capo e il campo cresce fino a 6 righe.
   - Dopo l'invio la barra si chiude subito e Lumi risponde **a voce** e/o con un fumetto, secondo le impostazioni ("risposta alla barra: voce / testo / entrambi").
-  - `↑` richiama i prompt precedenti (ultimi 50, salvati in locale).
-  - Puoi **trascinare** un file o un'immagine nella barra per allegarlo. Con le immagini vale la policy della [visione locale](#visione-locale).
-  - Se c'è del testo selezionato in un'altra app quando apri la barra (letto via UIA), compare come "contesto" sopra il campo e si può rimuovere con un clic. Esempio: selezioni un errore, `Ctrl+Alt+L`, "cosa vuol dire?".
-- **Focus**: la barra prende il focus quando si apre e lo restituisce alla finestra precedente quando si chiude.
+  - `↑` e `↓` (dalla prima o dall'ultima riga) richiamano i prompt precedenti: ultimi 50, salvati in `commandbar.json`. Quello che stavi scrivendo torna dopo il più recente.
+  - Puoi **trascinare** fino a 5 file nella barra per allegarli. I file di testo vengono letti (al massimo 24.000 caratteri in tutto, divisi tra i file), gli altri solo nominati. Le immagini le descrive a parole il modello che vede (`brain.vision`, finché non arriva la [visione locale](#visione-locale)): allegarle vale come consenso per `sendScreenshots: "ask"`, mentre `"never"` le tiene lontane dai servizi online.
+  - Se c'è del testo selezionato in un'altra app quando apri la barra (letto via UIA, quindi con la percezione attiva e non in pausa; mai dai campi password), compare come "contesto" sopra il campo e si può rimuovere con un clic. Esempio: selezioni un errore, `Ctrl+Alt+L`, "cosa vuol dire?". Si spegne in Impostazioni → Generale.
+- **Focus**: la barra prende il focus quando si apre e lo restituisce alla finestra precedente quando si chiude (se aveva ancora il focus).
 
 ---
 
@@ -575,7 +573,7 @@ lumi/
 │  │  ├─ main.ts
 │  │  ├─ window.ts             finestra trasparente, top-most, hit test, drag
 │  │  ├─ tray.ts
-│  │  ├─ commandbar.ts         barra dei comandi in sovrimpressione (prevista)
+│  │  ├─ commandbar.ts         barra dei comandi in sovrimpressione
 │  │  ├─ settings.ts           JSON in %APPDATA%\Lumi + chiavi DPAPI
 │  │  ├─ sidecar.ts            spawn, health check, riavvio
 │  │  ├─ perception/
@@ -662,7 +660,8 @@ Il sidecar ascolta solo su `127.0.0.1`, con una porta casuale e un token generat
   "tts":     { "engine": "qwen3", "model": "1.7B-CustomVoice", "voice": "...", "speed": 1.0 },
   "vision":  { "provider": "ollama", "model": "qwen3-vl:8b", "keepAlive": "2m", "maxSide": 1344 },
   "listen":  { "mode": "push-to-talk", "hotkey": "Ctrl+Alt+Space", "wakeWord": "ehi lumi", "wakeThreshold": 0.5, "followUpSeconds": 8 },
-  "commandBar": { "hotkey": "Ctrl+Alt+L", "reply": "voice+text", "useSelection": true },
+  "chatHotkey": "Control+Alt+L",
+  "commandBar": { "reply": "voice+text", "useSelection": true },
   "face":    { "scale": 1.0, "color": "#F5F3EE", "adaptiveShadow": true, "glare": true },
   "perception": {
     "enabled": true, "ocr": "windows", "captureFps": 4, "ocrFps": 1.5,
@@ -686,7 +685,7 @@ Il sidecar ascolta solo su `127.0.0.1`, con una porta casuale e un token generat
 }
 ```
 
-Sono previste e arrivano con le rispettive fasi della roadmap: le sezioni `vision` (sostituirà `brain.vision`), `commandBar`, `memory` e `habits`, le chiavi `wakeThreshold` e `glare`, e il nuovo default `sendScreenshots: "never"`.
+Sono previste e arrivano con le rispettive fasi della roadmap: le sezioni `vision` (sostituirà `brain.vision`), `memory` e `habits`, le chiavi `wakeThreshold` e `glare`, e il nuovo default `sendScreenshots: "never"`.
 
 ---
 
@@ -723,7 +722,7 @@ Ogni fase si chiude con `npm run check` e `pytest` verdi e una prova manuale.
 9. **Prossimo blocco**, in quest'ordine, perché ogni punto è indipendente e si prova da solo:
    1. ~~[Ombra e contrasto](#ombra-e-contrasto) adattivi~~ (fatto).
    2. ~~[Espressione sincronizzata con la voce](#espressione-sincronizzata-con-la-voce)~~ (fatto).
-   3. [Barra dei comandi](#barra-dei-comandi) con `Ctrl+Alt+L`.
+   3. ~~[Barra dei comandi](#barra-dei-comandi) con `Ctrl+Alt+L`~~ (fatto).
    4. [Abbagliamento](#abbagliamento): prima `glare.ts` con i test, poi l'animazione.
    5. [Visione locale](#visione-locale) con Ollama e `qwen3-vl`, poi le `regions` come candidati di sguardo.
    6. [Attivazione per nome](#attivazione-per-nome) con openWakeWord: prima con un modello generico per provare il flusso, poi l'addestramento di "Lumi" con `train.py`.
@@ -760,5 +759,6 @@ Variabili di debug (stesso stile di Pixel Pet):
 - `LUMI_DEBUG_PERCEPTION=1`: registra OCR e UIA.
 - `LUMI_DEBUG_SAY="testo|emozione"`: fa parlare Lumi senza LLM.
 - `LUMI_DEBUG_CAPTURE=<prefisso>`: salva in PNG i fotogrammi del volto.
+- `LUMI_DEBUG_BAR=1` (o un testo, `\n` per andare a capo): apre la barra dei comandi all'avvio, con quel testo nel campo.
 
 Log in `%APPDATA%\Lumi\logs\`.

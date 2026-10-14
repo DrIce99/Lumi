@@ -11,7 +11,7 @@ import { PROVIDERS } from "../../shared/providers";
 import { FACT_KINDS, type FactKind, type Settings } from "../../shared/types";
 import { log } from "../log";
 import { RECENT_LINES, speakerLabel, type ConversationEntry, type Memory } from "./memory";
-import { buildContext, buildSystemPrompt, type Situation, type Trigger } from "./prompt";
+import { buildContext, buildSystemPrompt, messageForHistory, type Situation, type Trigger } from "./prompt";
 import { ProviderError, type ChatProvider, type LiveSay, type MomentSession, type ToolCallOut, type ToolResultIn } from "./providers/types";
 import { parseToolCall, type LookRegion, type ToolCall } from "./tools";
 
@@ -254,7 +254,7 @@ export class Brain {
     });
     if (isMessage) {
       if (trigger.speaker) host.memory.addMessage("other", trigger.text, false, { name: trigger.speaker });
-      else host.memory.addMessage("user", trigger.text);
+      else host.memory.addMessage("user", messageForHistory(trigger));
     }
 
     const chosen = this.authFailed ? null : host.provider(isMessage ? "chat" : "idle");

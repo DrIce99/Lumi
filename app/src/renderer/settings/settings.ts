@@ -384,6 +384,8 @@ function fill(next: SettingsSnapshot): void {
   $("scale").value = String(s.face.scale);
   $("color").value = s.face.color.toLowerCase();
   $("chatHotkey").value = s.chatHotkey;
+  $<HTMLSelectElement>("barReply").value = s.commandBar.reply;
+  $("barSelection").checked = s.commandBar.useSelection;
   $("launchAtLogin").checked = s.launchAtLogin;
 
   renderProviders(next);
@@ -471,6 +473,7 @@ function collect(): Settings {
     doNotDisturb: $("doNotDisturb").checked,
     muted: $("muted").checked,
     chatHotkey: $("chatHotkey").value,
+    commandBar: { reply: $<HTMLSelectElement>("barReply").value as Settings["commandBar"]["reply"], useSelection: $("barSelection").checked },
     launchAtLogin: $("launchAtLogin").checked,
     face: { scale: num("scale", s.face.scale), color: $("color").value, subtitles: $("subtitles").checked, adaptiveShadow: $("adaptiveShadow").checked },
     voices: { enabled: $("voicesEnabled").checked, onlyMe: $("onlyMe").checked },

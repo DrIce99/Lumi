@@ -37,6 +37,7 @@ export interface EyeGeometry {
   lidTop: number;
   lidAngle: number;
   cheek: number;
+  cheekAngle: number;
 }
 
 export function effectiveExpression(state: FaceState): Expression {
@@ -203,6 +204,7 @@ export class Face {
         lidTop: clamp(v("lidTop"), 0, 0.9),
         lidAngle: v("lidAngle"),
         cheek: clamp(v("cheek"), 0, 0.9),
+        cheekAngle: v("cheekAngle"),
       };
     };
     return [make(-1), make(1)];
@@ -403,23 +405,23 @@ function blit(ctx: CanvasRenderingContext2D, src: HTMLCanvasElement, box: { x: n
 
 /**
  * The part of an eye that stays visible (eye-local coordinates, after the
- * tilt): below a straight lid, possibly slanted, and above a cheek that
- * curves up in the middle.
+ * tilt): between a straight lid from above and a straight cheek line from
+ * below, each possibly slanted.
  */
-export function lidPath(ctx: Pick<CanvasRenderingContext2D, "moveTo" | "lineTo" | "quadraticCurveTo" | "closePath">, eye: EyeGeometry, side: -1 | 1): void {
+export function lidPath(ctx: Pick<CanvasRenderingContext2D, "moveTo" | "lineTo" | "closePath">, eye: EyeGeometry, side: -1 | 1): void {
   const half = eye.height / 2;
   const m = eye.width / 2 + 2;
-  // A lid barely lowered can't be slanted much (it would cut the corners of an open eye)
-  const slope = Math.tan((eye.lidAngle * Math.PI) / 180) * Math.min(1, eye.lidTop * 8);
-  // Positive angles drop the lid on the inner side (toward the other eye)
-  const lidAt = (x: number) => -half + eye.lidTop * eye.height + slope * (-side * x);
-  const edge = half - eye.cheek * eye.height * 0.35;
-  const middle = half - eye.cheek * eye.height;
+  // A line barely moved in can't be slanted much (it would cut the corners of an open eye)
+  const slant = (angle: number, cut: number) => Math.tan((angle * Math.PI) / 180) * Math.min(1, cut * 8);
+  const lidSlope = slant(eye.lidAngle, eye.lidTop);
+  const cheekSlope = slant(eye.cheekAngle, eye.cheek);
+  // `-side * x` grows toward the nose: positive angles put both lines lower on the inner side
+  const lidAt = (x: number) => -half + eye.lidTop * eye.height + lidSlope * (-side * x);
+  const cheekAt = (x: number) => half - eye.cheek * eye.height + cheekSlope * (-side * x);
   ctx.moveTo(-m, lidAt(-m));
   ctx.lineTo(m, lidAt(m));
-  ctx.lineTo(m, edge);
-  // The control point that puts the curve's midpoint at `middle`
-  ctx.quadraticCurveTo(0, 2 * middle - edge, -m, edge);
+  ctx.lineTo(m, cheekAt(m));
+  ctx.lineTo(-m, cheekAt(-m));
   ctx.closePath();
 }
 

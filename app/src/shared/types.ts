@@ -11,6 +11,9 @@ export const SOCIABILITY = ["silenzioso", "discreto", "normale", "chiacchierone"
 export type Sociability = (typeof SOCIABILITY)[number];
 
 export const LISTEN_MODES = ["push-to-talk", "wake-word", "continuous"] as const;
+/** How Lumi answers what is typed in the command bar. */
+export const BAR_REPLIES = ["voice+text", "voice", "text"] as const;
+export type BarReply = (typeof BAR_REPLIES)[number];
 export type ListenMode = (typeof LISTEN_MODES)[number];
 
 export const STT_ENGINES = ["faster-whisper", "parakeet", "whisper-cpp", "groq"] as const;
@@ -101,8 +104,13 @@ export interface Settings {
   doNotDisturb: boolean;
   /** No voice: answers appear only as text bubbles. */
   muted: boolean;
-  /** Opens the chat box. */
+  /** Opens the command bar. */
   chatHotkey: string;
+  commandBar: {
+    reply: BarReply;
+    /** Text selected in another app when the bar opens becomes its context. */
+    useSelection: boolean;
+  };
   launchAtLogin: boolean;
   /** The first-run wizard (hardware profile) has been shown. */
   setupDone: boolean;
@@ -149,6 +157,7 @@ export const DEFAULT_SETTINGS: Settings = {
   doNotDisturb: false,
   muted: false,
   chatHotkey: "Control+Alt+L",
+  commandBar: { reply: "voice+text", useSelection: true },
   launchAtLogin: false,
   setupDone: false,
 };
@@ -301,6 +310,40 @@ export type MicEvent =
   | { type: "frame"; pcm: ArrayBuffer; speech: number };
 
 /** API exposed by the face window preload as `window.lumi`. */
+/** Text selected in another app when the command bar opened. */
+export interface BarContext {
+  app: string;
+  text: string;
+}
+
+export interface BarOpen {
+  context: BarContext | null;
+  /** Earlier prompts, oldest first (recalled with the up arrow). */
+  history: string[];
+}
+
+export interface BarSubmit {
+  text: string;
+  /** The selection shown as context, unless the user removed it. */
+  useContext: boolean;
+  /** Paths of dropped files. */
+  files: string[];
+}
+
+/** `window.lumiBar` in the command bar. */
+export interface BarBridge {
+  onOpen(cb: (msg: BarOpen) => void): void;
+  onClose(cb: () => void): void;
+  submit(msg: BarSubmit): void;
+  cancel(): void;
+  /** The panel's height (DIP), the window follows it. */
+  resize(height: number): void;
+  /** The user is typing: the eyes look at the bar. */
+  typing(): void;
+  /** The path of a dropped file. */
+  pathFor(file: File): string;
+}
+
 export interface FaceBridge {
   onLayout(cb: (layout: FaceLayout) => void): void;
   onState(cb: (state: FaceState) => void): void;

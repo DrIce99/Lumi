@@ -1,20 +1,23 @@
 // Entry point: wires the face, perception, brain, voice and UI together.
-import { app, BrowserWindow, dialog, globalShortcut, powerMonitor, screen, shell } from "electron";
+import { app, BrowserWindow, dialog, globalShortcut, nativeImage, powerMonitor, screen, shell } from "electron";
 import { writeFileSync } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { join } from "node:path";
 import type { Emotion } from "../shared/emotions";
 import { toEmotion } from "../shared/emotions";
 import { applyProfile } from "../shared/profiles";
 import { PROVIDER_IDS, type ProviderId } from "../shared/providers";
-import type { GpuInfo, KeySource, Settings, SettingsSnapshot, TtsEngine } from "../shared/types";
+import type { BarContext, GpuInfo, KeySource, Settings, SettingsSnapshot, TtsEngine } from "../shared/types";
 import { Activity } from "./activity";
+import { readAttachments, type Attachment } from "./attachments";
 import { Audiobooks } from "./audiobook";
 import { GazeOverlay } from "./debugOverlay";
 import { Autonomy } from "./brain/autonomy";
 import { Brain, type BrainHost, type SpeechSink } from "./brain/brain";
 import { Memory } from "./brain/memory";
 import type { Situation, Trigger } from "./brain/prompt";
+import { CommandBar } from "./commandbar";
 import { detectGpu } from "./gpu";
 import { readJson, writeJson } from "./jsonStore";
 import { initLog, log } from "./log";
@@ -51,6 +54,8 @@ import { Vision } from "./vision";
 import { FaceWindow, type Point } from "./window";
 
 const DEBUG = process.argv.includes("--debug");
+/** Attached images are scaled down to this long side before a model looks at them. */
+const IMAGE_MAX_SIDE = 1344;
 
 registerAppScheme();
 
@@ -545,6 +550,11 @@ function start(): void {
         },
         spontaneous,
       );
+    if (trigger.kind === "message" && trigger.via === "bar") {
+      const reply = settings().commandBar.reply;
+      if (reply === "text" || !voice.ready()) return bubble(true);
+      return reply === "voice" && !settings().face.subtitles ? voice.speech() : new TeeSpeech(voice.speech(), bubble(false));
+    }
     if (!voice.ready()) return bubble(true);
     const spoken = voice.speech();
     const typed = trigger.kind === "message" && trigger.via === "text";
@@ -591,6 +601,22 @@ function start(): void {
           const image = await face.win.webContents.capturePage();
           writeFileSync(`${capturePrefix}_${i}.png`, image.toPNG());
         }, 1500 + i * 900);
+      }
+    }
+    // Development aid: open the command bar at startup, with some text typed
+    // in it unless the value is "1" (captured with LUMI_DEBUG_CAPTURE)
+    const debugBar = process.env.LUMI_DEBUG_BAR;
+    if (debugBar) {
+      setTimeout(() => {
+        commandBar.open();
+        if (debugBar !== "1") {
+          // A literal "\n" in the variable is a new line
+          const typed = JSON.stringify(debugBar.replace(/\\n/g, "\n"));
+          void commandBar.win.webContents.executeJavaScript(`{ const i = document.getElementById("input"); i.value = ${typed}; i.dispatchEvent(new Event("input")); }`);
+        }
+      }, 2000);
+      if (capturePrefix) {
+        setTimeout(async () => writeFileSync(`${capturePrefix}_bar.png`, (await commandBar.win.webContents.capturePage()).toPNG()), 3200);
       }
     }
     const settingsTab = process.env.LUMI_DEBUG_SETTINGS;
@@ -730,6 +756,7 @@ function start(): void {
   const tray = new LumiTray(
     {
       talk,
+      ask: () => commandBar.open(),
       toggleVisible: () => setVisible(!visible),
       toggleDoNotDisturb: () => settingsStore.update({ doNotDisturb: !settings().doNotDisturb }),
       toggleMuted: () => settingsStore.update({ muted: !settings().muted }),
@@ -756,12 +783,49 @@ function start(): void {
     }),
   );
 
+  // ---- command bar (Ctrl+Alt+L): a text field over everything ----
+  const commandBar = new CommandBar(
+    {
+      context: () => (settings().commandBar.useSelection ? perception.selection() : null),
+      gaze: (rect) => {
+        // While the bar is open the eyes look at it, like at a caret
+        if (rect) perception.add({ id: "commandbar", kind: "caret", rect, salience: 1, t: Date.now() });
+        else perception.remove("commandbar");
+      },
+      submit: ({ text, context, files }) => void askFromBar(text, context, files),
+    },
+    `${APP_ORIGIN}/renderer/commandbar/commandbar.html`,
+    join(dataDir, "commandbar.json"),
+  );
+
+  async function askFromBar(text: string, context: BarContext | null, files: string[]): Promise<void> {
+    if (!visible) setVisible(true);
+    let attachments: Attachment[] = [];
+    if (files.length) {
+      mood.set({ thinking: true });
+      attachments = await readAttachments(files, {
+        size: async (path) => (await stat(path)).size,
+        read: async (path) => new Uint8Array(await readFile(path)),
+        describeImage: async (path, name) => {
+          let image = nativeImage.createFromPath(path);
+          if (image.isEmpty()) return "(an image format that can't be opened)";
+          const { width, height } = image.getSize();
+          const scale = Math.min(1, IMAGE_MAX_SIDE / Math.max(width, height));
+          if (scale < 1) image = image.resize({ width: Math.round(width * scale), height: Math.round(height * scale), quality: "good" });
+          return screenshots.describeImage(name, image.toJPEG(82).toString("base64"), text);
+        },
+      });
+    }
+    log.info(`Command bar: ${text.length} characters${context ? ", with the selection" : ""}${attachments.length ? `, ${attachments.length} attachments` : ""}`);
+    await brain.handle({ kind: "message", text: text || "(guarda gli allegati)", via: "bar", ...(context ? { context } : {}), ...(attachments.length ? { attachments } : {}) });
+  }
+
   function registerHotkeys(): void {
     globalShortcut.unregisterAll();
     const s = settings();
     if (s.chatHotkey) {
       try {
-        if (!globalShortcut.register(s.chatHotkey, talk)) log.warn(`Hotkey ${s.chatHotkey} is already used by another application`);
+        if (!globalShortcut.register(s.chatHotkey, () => commandBar.toggle())) log.warn(`Hotkey ${s.chatHotkey} is already used by another application`);
       } catch (err) {
         log.warn(`Invalid hotkey ${s.chatHotkey}`, err);
       }

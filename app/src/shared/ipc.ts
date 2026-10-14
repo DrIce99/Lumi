@@ -45,6 +45,13 @@ export const IPC = {
   settingsDiscordToken: "settings:discord-token",
   settingsOpenData: "settings:open-data",
   settingsRestartSidecar: "settings:restart-sidecar",
+  // command bar
+  barOpen: "bar:open",
+  barClose: "bar:close",
+  barSubmit: "bar:submit",
+  barCancel: "bar:cancel",
+  barResize: "bar:resize",
+  barTyping: "bar:typing",
   // main -> settings window
   settingsStatus: "settings:status",
 } as const;
