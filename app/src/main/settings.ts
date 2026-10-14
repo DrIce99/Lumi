@@ -162,6 +162,7 @@ export function sanitizeSettings(input: unknown): Settings {
       color: color(face.color, d.face.color),
       subtitles: bool(face.subtitles, d.face.subtitles),
       adaptiveShadow: bool(face.adaptiveShadow, d.face.adaptiveShadow),
+      glare: bool(face.glare, d.face.glare),
     },
     perception: {
       enabled: bool(perception.enabled, d.perception.enabled),

@@ -90,6 +90,8 @@ export interface Settings {
     subtitles: boolean;
     /** Shadow and border under the eyes follow the brightness behind the face (needs perception). */
     adaptiveShadow: boolean;
+    /** Squints when the watched screen suddenly turns bright (needs perception). */
+    glare: boolean;
   };
   perception: {
     enabled: boolean;
@@ -143,7 +145,7 @@ export const DEFAULT_SETTINGS: Settings = {
   voices: { enabled: true, onlyMe: false },
   discord: { enabled: false, userId: "" },
   appAudio: { enabled: false, apps: ["Discord"] },
-  face: { scale: 1, color: "#F5F3EE", subtitles: false, adaptiveShadow: true },
+  face: { scale: 1, color: "#F5F3EE", subtitles: false, adaptiveShadow: true, glare: true },
   perception: {
     enabled: true,
     ocr: "windows",
@@ -350,6 +352,7 @@ export interface FaceBridge {
   onGaze(cb: (gaze: GazeCommand) => void): void;
   onGesture(cb: (gesture: FaceGesture) => void): void;
   onContrast(cb: (contrast: FaceContrast) => void): void;
+  onGlare(cb: (msg: { lightDx: number }) => void): void;
   onBubbleStart(cb: (msg: BubbleStart) => void): void;
   onBubbleChunk(cb: (msg: BubbleChunk) => void): void;
   onBubbleEnd(cb: (msg: BubbleEnd) => void): void;

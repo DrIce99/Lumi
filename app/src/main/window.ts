@@ -205,6 +205,11 @@ export class FaceWindow {
     this.send(IPC.gesture, gesture);
   }
 
+  /** Dazzled by a screen that turned bright; `lightDx`: the light's horizontal distance from the face center (DIP). */
+  glare(lightDx: number): void {
+    this.send(IPC.glare, { lightDx });
+  }
+
   /** Shadow and border under the eyes; sent only when they change. */
   contrast(contrast: FaceContrast): void {
     const last = this.lastContrast;

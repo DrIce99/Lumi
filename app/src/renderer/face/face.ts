@@ -7,6 +7,7 @@ import type { FaceContrast, FaceGesture, FaceLayout, FaceState, GazeCommand } fr
 import { Blinker } from "./blink";
 import { EXPRESSION_DEFS, NEUTRAL_SHAPE, shapeFor, transitionMs, type EyeShape } from "./expressions";
 import { GazeController } from "./gaze";
+import { glareEnd, glareFrame, SHIFT_PX, startGlare, type GlarePlay } from "./glare";
 import { clamp, easeOutBack, Tween } from "./tween";
 
 /** Eye size and spacing at scale 1 (px). */
@@ -56,6 +57,7 @@ export class Face {
   private readonly shape: Record<keyof EyeShape, Tween>;
   private gestures: { kind: FaceGesture; start: number; seed: number }[] = [];
   private bounceAt = Number.NEGATIVE_INFINITY;
+  private glarePlay: GlarePlay | null = null;
   private level = 0;
   private lastFrame = 0;
   private levelSource: (() => number) | null = null;
@@ -128,6 +130,18 @@ export class Face {
     this.wake();
   }
 
+  /**
+   * Dazzled by a screen that suddenly turned bright. `lightDx`: where the
+   * light is, horizontally from the face center (screen DIP).
+   */
+  glare(lightDx: number): void {
+    const now = performance.now();
+    this.glarePlay = startGlare(now, lightDx, this.gaze.output(now).x, this.speaking(), this.random);
+    // No spontaneous blink in the middle of the squint; the settling blinks come after
+    this.blinker.pause(glareEnd(this.glarePlay));
+    this.wake();
+  }
+
   /** A sentence starts playing: a small lift of the eyes. */
   sentenceStart(): void {
     this.bounceAt = performance.now();
@@ -189,14 +203,19 @@ export class Face {
     const lid = clamp(v("lid"), 0, 0.95);
     const half = (EYE_GAP + EYE_WIDTH) / 2 + v("spread") / 2;
     const tilt = (v("tilt") * Math.PI) / 180;
+    // Dazzled: the eye near the light squeezes shut, the gaze slips away from it
+    const play = this.glarePlay;
+    const dazzle = play ? glareFrame(play, now) : null;
+    const away = play && dazzle ? -play.side * SHIFT_PX * dazzle.shift : 0;
     const make = (side: -1 | 1): EyeGeometry => {
       const asym = side === 1 ? 1 + v("asym") : 1;
-      const open = baseHeight * asym * (1 - lid);
+      const squint = play && dazzle ? (side === play.side ? dazzle.near : dazzle.far) : 1;
+      const open = baseHeight * asym * (1 - lid) * squint;
       const height = Math.max(width * 0.2, open * (1 - (1 - BLINK_MIN) * closure));
       // The resting lid lowers the top of the eye; blinks squash toward the middle
       const lidDrop = (baseHeight * asym * lid) / 2;
       return {
-        cx: cx + side * half * s + (look.x - side * look.vergence + gesture.x) * s,
+        cx: cx + side * half * s + (look.x - side * look.vergence + gesture.x + away) * s,
         cy: cy + (v("y") + look.y + gesture.y + bounce) * s + lidDrop,
         width,
         height,
@@ -262,6 +281,7 @@ export class Face {
       this.gaze.active(now) ||
       this.gestures.length > 0 ||
       now - this.bounceAt < 240 ||
+      this.glarePlay !== null ||
       this.shadow.active(now) ||
       this.border.active(now) ||
       Object.values(this.shape).some((t) => t.active(now))
@@ -281,6 +301,7 @@ export class Face {
     this.lastFrame = now;
     this.blinker.update(now);
     this.gaze.update(now);
+    this.updateGlare(now);
     this.updateLevel(dt);
     this.draw(now);
     if (this.animating(now)) {
@@ -291,6 +312,17 @@ export class Face {
       this.wakeTimer = window.setTimeout(this.wake, Math.max(10, next - now));
     }
   };
+
+  /** The quick blinks that settle the eyes after a glare, then the end of it. */
+  private updateGlare(now: number): void {
+    const play = this.glarePlay;
+    if (!play) return;
+    while (play.blinks.length && play.blinks[0] <= now) {
+      play.blinks.shift();
+      this.blinker.trigger(now);
+    }
+    if (!play.blinks.length && now >= glareEnd(play)) this.glarePlay = null;
+  }
 
   private updateLevel(dt: number): void {
     const raw = this.speaking() && this.levelSource ? clamp(this.levelSource() / 0.12, 0, 1) : 0;

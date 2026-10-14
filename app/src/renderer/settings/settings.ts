@@ -370,6 +370,7 @@ function fill(next: SettingsSnapshot): void {
   $("muted").checked = s.muted;
   $("subtitles").checked = s.face.subtitles;
   $("adaptiveShadow").checked = s.face.adaptiveShadow;
+  $("glare").checked = s.face.glare;
   $("voicesEnabled").checked = s.voices.enabled;
   $("onlyMe").checked = s.voices.onlyMe;
   $("discordEnabled").checked = s.discord.enabled;
@@ -475,7 +476,7 @@ function collect(): Settings {
     chatHotkey: $("chatHotkey").value,
     commandBar: { reply: $<HTMLSelectElement>("barReply").value as Settings["commandBar"]["reply"], useSelection: $("barSelection").checked },
     launchAtLogin: $("launchAtLogin").checked,
-    face: { scale: num("scale", s.face.scale), color: $("color").value, subtitles: $("subtitles").checked, adaptiveShadow: $("adaptiveShadow").checked },
+    face: { scale: num("scale", s.face.scale), color: $("color").value, subtitles: $("subtitles").checked, adaptiveShadow: $("adaptiveShadow").checked, glare: $("glare").checked },
     voices: { enabled: $("voicesEnabled").checked, onlyMe: $("onlyMe").checked },
     discord: { enabled: $("discordEnabled").checked, userId: $("discordUserId").value.trim() },
     appAudio: {

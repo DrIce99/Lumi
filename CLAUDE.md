@@ -121,8 +121,8 @@ Work one roadmap phase at a time; finish each with checks green.
 ## Testing
 
 - Pure modules (`attention`, `reading`, `chunker`, `endpoint`,
-  `normalize_it`, emotion mapping; later `glare`, `patterns`, memory
-  `search`) get unit tests. Providers and the
+  `normalize_it`, emotion mapping, `backdrop`, `glare`; later
+  `patterns`, memory `search`) get unit tests. Providers and the
   sidecar are mocked in app tests; sidecar engines are mocked in pytest
   except tests marked `@pytest.mark.model` (skipped by default).
 
@@ -240,6 +240,16 @@ Work one roadmap phase at a time; finish each with checks green.
   `cheekAngle`; happy: outer side higher). Lines only, no curves. Drawn on an
   offscreen layer; the border is that layer stamped in 8 directions and
   tinted black, so glow, shadow and border follow the cut shape.
+- Glare: `perception/glare.ts` (pure) turns the change detector's luma
+  frames of the watched display (gaze target's, else the foreground's)
+  into a 64x36 linear-light thumbnail (sRGB decoding of the luma: an
+  approximation of Rec. 709 on linearized RGB, fine for the thresholds);
+  fires on dark (< 0.25) to bright (> 0.55, > 60% bright pixels) within
+  500 ms, 20 s cooldown, history reset when the watched display changes,
+  blocked while asleep, dragged or hidden. No extra capture, so it needs
+  perception on. The renderer's `face/glare.ts` (pure) is the squint
+  curve, a multiplicative layer on eye heights plus a 3 px gaze shift;
+  60% while speaking; blinks paused during it, 1-2 settling blinks after.
 - Command bar (`main/commandbar.ts`, page in `renderer/commandbar/`):
   pre-created hidden window, toggled by `chatHotkey` (Ctrl+Alt+L; the face
   chat stays on the eye click). Acrylic + DWM rounded corners on Windows 11
@@ -260,11 +270,6 @@ Work one roadmap phase at a time; finish each with checks green.
 Decisions already taken for the next phases. Nothing here exists in the
 code yet; when a piece lands, move its notes to the sections above.
 
-- Glare (`perception/glare.ts`, pure): luminance jump on a 64x36
-  thumbnail of the watched display, Rec. 709 on linearized values. The
-  thumbnail comes from the sidecar like every other capture (never
-  `desktopCapturer`). Glare overrides expressions except speaking, where
-  it plays at 60%.
 - Vision becomes a separate local model (top-level `vision` setting
   replacing `brain.vision`, Ollama, default `qwen3-vl:8b`,
   `keep_alive: "2m"`). The brain never receives images: it gets

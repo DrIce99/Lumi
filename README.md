@@ -165,14 +165,12 @@ Per uscire da una fascia bisogna superarne il bordo di 0,03, così uno sfondo a 
 
 ### Abbagliamento
 
-> Previsto (fase 9.4).
-
 Quando lo schermo che Lumi sta guardando passa all'improvviso da prevalentemente scuro a prevalentemente chiaro (per esempio quando apri una pagina bianca da un editor scuro), Lumi viene "abbagliato".
 
 **Rilevamento** (`perception/glare.ts`, puro e testato):
 
-- Si cattura una miniatura 64×36 del monitor osservato, cioè quello del bersaglio dello sguardo, a 4 fps.
-- Si calcola la luminanza relativa media (Rec. 709 sui valori linearizzati) e la percentuale di pixel con luminanza > 0,6.
+- Si usa una miniatura 64×36 del monitor osservato, cioè quello del bersaglio dello sguardo (altrimenti quello della finestra attiva). La miniatura si ricava dai fotogrammi del rilevamento dei cambiamenti, quindi nessuna cattura in più: va alla loro frequenza (`captureFps`, 4 di default) e solo con la percezione attiva e non in pausa.
+- Si calcola la luminanza relativa media in luce lineare e la percentuale di pixel con luminanza > 0,6. I fotogrammi portano la luma già pesata sui valori in gamma, quindi linearizzarla approssima Rec. 709 sui valori linearizzati: esatto sui grigi, abbastanza vicino per queste soglie.
 - L'abbagliamento scatta quando, entro 500 ms, la luminanza media passa da < 0,25 a > 0,55 **e** i pixel chiari superano il 60%.
 - Le transizioni graduali (dissolvenze più lente di 1 s) non contano: l'occhio "si adatta".
 - Dopo un abbagliamento ci sono 20 s di attesa. Non scatta mentre Lumi dorme, durante il trascinamento della finestra o quando cambia il monitor osservato.
@@ -188,7 +186,7 @@ Quando lo schermo che Lumi sta guardando passa all'improvviso da prevalentemente
 | riapertura | 500 ms | easing out, fino a 100% | fino a 100% | torna al bersaglio |
 | assestamento | — | 1–2 battiti rapidi entro 600 ms | idem | — |
 
-L'abbagliamento ha la priorità su tutte le espressioni tranne il parlato. Se Lumi sta parlando, si applica una versione ridotta (60%) e l'audio non si interrompe.
+L'abbagliamento è uno strato sopra l'espressione (le altezze si moltiplicano), quindi prevale su tutte. Se Lumi sta parlando, si applica una versione ridotta (60%) e l'audio non si interrompe. Si spegne in Impostazioni → Generale («Abbagliamento»).
 
 ---
 
@@ -581,7 +579,7 @@ lumi/
 │  │  │  ├─ capture.ts         frame dal sidecar + diff a blocchi
 │  │  │  ├─ attention.ts       candidati → bersaglio dello sguardo (puro, testato)
 │  │  │  ├─ reading.ts         simulazione della lettura (puro, testato)
-│  │  │  ├─ glare.ts           rilevamento abbagliamento (puro, testato; previsto)
+│  │  │  ├─ glare.ts           rilevamento abbagliamento (puro, testato)
 │  │  │  ├─ backdrop.ts        luminanza dietro il volto → ombra adattiva (puro, testato)
 │  │  │  ├─ vision.ts          look_at_screen → visione locale (Ollama; previsto)
 │  │  │  └─ context.ts         riassunto percettivo per il prompt
@@ -685,7 +683,7 @@ Il sidecar ascolta solo su `127.0.0.1`, con una porta casuale e un token generat
 }
 ```
 
-Sono previste e arrivano con le rispettive fasi della roadmap: le sezioni `vision` (sostituirà `brain.vision`), `memory` e `habits`, le chiavi `wakeThreshold` e `glare`, e il nuovo default `sendScreenshots: "never"`.
+Sono previste e arrivano con le rispettive fasi della roadmap: le sezioni `vision` (sostituirà `brain.vision`), `memory` e `habits`, la chiave `wakeThreshold`, e il nuovo default `sendScreenshots: "never"`.
 
 ---
 
@@ -723,7 +721,7 @@ Ogni fase si chiude con `npm run check` e `pytest` verdi e una prova manuale.
    1. ~~[Ombra e contrasto](#ombra-e-contrasto) adattivi~~ (fatto).
    2. ~~[Espressione sincronizzata con la voce](#espressione-sincronizzata-con-la-voce)~~ (fatto).
    3. ~~[Barra dei comandi](#barra-dei-comandi) con `Ctrl+Alt+L`~~ (fatto).
-   4. [Abbagliamento](#abbagliamento): prima `glare.ts` con i test, poi l'animazione.
+   4. ~~[Abbagliamento](#abbagliamento)~~ (fatto).
    5. [Visione locale](#visione-locale) con Ollama e `qwen3-vl`, poi le `regions` come candidati di sguardo.
    6. [Attivazione per nome](#attivazione-per-nome) con openWakeWord: prima con un modello generico per provare il flusso, poi l'addestramento di "Lumi" con `train.py`.
 10. **Memoria a lungo termine** ([dettagli](#memoria-a-lungo-termine)): prima `db.ts` + log + FTS + `search_memory` per date, poi coda di embedding e ricerca ibrida, poi fatti, riassunti e infine oblio a cascata. Importare nel log `archive.jsonl`, episodi e fatti esistenti.

@@ -1,5 +1,5 @@
 // Entry point: wires the face, perception, brain, voice and UI together.
-import { app, BrowserWindow, dialog, globalShortcut, nativeImage, powerMonitor, screen, shell } from "electron";
+import { app, BrowserWindow, dialog, globalShortcut, nativeImage, powerMonitor, screen, shell, type Display } from "electron";
 import { writeFileSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { monitorEventLoopDelay } from "node:perf_hooks";
@@ -25,6 +25,8 @@ import { Mood } from "./mood";
 import { ensureOllama } from "./ollama";
 import { Backdrop, meanLuminance, rectInFrame } from "./perception/backdrop";
 import { ChangeDetector } from "./perception/capture";
+import type { Frame } from "./perception/diff";
+import { GlareDetector, glareStats, thumbnail } from "./perception/glare";
 import { foregroundWindow, systemCaret } from "./perception/desktop";
 import { Perception, type OcrLine } from "./perception/perception";
 import { UiaClient } from "./perception/uia";
@@ -408,15 +410,48 @@ function start(): void {
     },
     onChanges: (list) => perception.onChanges(list),
     onFrames: (displays, frames) => {
-      if (!settings().face.adaptiveShadow || !backdrop.wantsSample(Date.now()) || face.isDragging()) return;
-      const i = displays.findIndex((d) => d.id === lumiDisplay().id);
-      const frame = frames[i];
-      const region = frame && rectInFrame(face.faceRect(), displays[i].bounds, frame);
-      if (!region) return;
-      backdrop.sample(meanLuminance(frame, region), Date.now());
-      face.contrast(backdrop.contrast(Date.now()));
+      sampleBackdrop(displays, frames);
+      watchGlare(displays, frames);
     },
   });
+
+  function sampleBackdrop(displays: Display[], frames: Frame[]): void {
+    if (!settings().face.adaptiveShadow || !backdrop.wantsSample(Date.now()) || face.isDragging()) return;
+    const i = displays.findIndex((d) => d.id === lumiDisplay().id);
+    const frame = frames[i];
+    const region = frame && rectInFrame(face.faceRect(), displays[i].bounds, frame);
+    if (!region) return;
+    backdrop.sample(meanLuminance(frame, region), Date.now());
+    face.contrast(backdrop.contrast(Date.now()));
+  }
+
+  // A screen that suddenly turns bright dazzles Lumi: the monitor watched is
+  // the one with the gaze target (else the active window's)
+  const glare = new GlareDetector();
+  function watchGlare(displays: Display[], frames: Frame[]): void {
+    if (!settings().face.glare) return;
+    const target = perception.currentTarget();
+    const fg = foregroundWindow();
+    const watched = target
+      ? screen.getDisplayNearestPoint({ x: Math.round(target.point.x), y: Math.round(target.point.y) })
+      : fg?.rect
+        ? screen.getDisplayMatching(screen.screenToDipRect(null, fg.rect))
+        : lumiDisplay();
+    const i = displays.findIndex((d) => d.id === watched.id);
+    if (i < 0 || !frames[i]) return;
+    const asleep = mood.state().drowsy || effectiveFace() === "sonno";
+    const event = glare.push(glareStats(thumbnail(frames[i])), Date.now(), watched.id, asleep || face.isDragging() || !visible);
+    if (!event) return;
+    const b = watched.bounds;
+    const light = { x: b.x + event.centroid.x * b.width, y: b.y + event.centroid.y * b.height };
+    log.info("Dazzled by a screen that turned bright");
+    face.glare(light.x - face.faceCenter().x);
+  }
+  /** The expression the face shows (sleepy when drowsy and neutral). */
+  function effectiveFace(): string {
+    const s = mood.state();
+    return s.drowsy && s.expression === "neutra" ? "sonno" : s.expression;
+  }
   const uia = new UiaClient(
     () => sidecar.socketUrl("/uia"),
     (snapshot) => perception.onUia(snapshot),
