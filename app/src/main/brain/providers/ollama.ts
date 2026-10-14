@@ -39,6 +39,7 @@ export class OllamaTransport implements ChatTransport {
   constructor(
     private readonly baseUrl: string,
     private readonly fetch: FetchLike = defaultFetch,
+    private readonly apiKey: string | null = null,
   ) {}
 
   async stream(request: StreamRequest, onDelta: (delta: StreamDelta) => void, signal: AbortSignal): Promise<StreamOutcome> {
@@ -54,7 +55,7 @@ export class OllamaTransport implements ChatTransport {
   }
 
   async listModels(): Promise<string[]> {
-    const res = await this.fetch(`${this.baseUrl}/api/tags`, { signal: AbortSignal.timeout(10_000) }).catch((err: unknown) => {
+    const res = await this.fetch(`${this.baseUrl}/api/tags`, { headers: this.headers(), signal: AbortSignal.timeout(20_000) }).catch((err: unknown) => {
       throw fetchError(err, "Ollama", false);
     });
     if (!res.ok) throw await httpError(res, "Ollama");
@@ -79,7 +80,7 @@ export class OllamaTransport implements ChatTransport {
 
     let res: Response;
     try {
-      res = await this.fetch(`${this.baseUrl}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+      res = await this.fetch(`${this.baseUrl}/api/chat`, { method: "POST", headers: this.headers(), body: JSON.stringify(body), signal });
     } catch (err) {
       throw fetchError(err, "Ollama", signal.aborted && signal.reason?.name !== "TimeoutError");
     }
@@ -112,6 +113,13 @@ export class OllamaTransport implements ChatTransport {
       throw fetchError(err, "Ollama", signal.aborted && signal.reason?.name !== "TimeoutError");
     }
     return { finish: calls && finish === "stop" ? "tool_calls" : finish, usage };
+  }
+
+  private headers(): Record<string, string> {
+    return {
+      "Content-Type": "application/json",
+      ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
+    };
   }
 }
 

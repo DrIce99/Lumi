@@ -323,13 +323,14 @@ Si usa lo stesso schema di Pixel Pet: un modello per la **conversazione** e uno 
 
 | Servizio | Costo | Note per un assistente vocale |
 | --- | --- | --- |
-| **Ollama** | gratis, locale | privato. `qwen3` per parlare, `qwen2.5vl` o `mistral-small3.2` per la visione |
+| **Ollama (locale)** | gratis | privato: i modelli installati sul PC compaiono con "Rileva modelli"; per esempio `qwen3` |
+| **Ollama Cloud** | secondo il piano Ollama | modelli eseguiti online, senza download locale. Crea una API key su [ollama.com/settings/keys](https://ollama.com/settings/keys), seleziona "Ollama Cloud" e usa "Rileva modelli". La chiave viene cifrata nelle impostazioni (oppure usa `OLLAMA_API_KEY`). I prompt vengono elaborati da Ollama online. |
 | **Groq** | gratis con limiti | **la latenza più bassa**: ottimo per la conversazione. Ha anche Whisper per l'STT |
 | **Google Gemini** | gratis con limiti giornalieri | `gemini-flash-lite-latest` / `gemini-flash-latest`, con visione inclusa |
 | **OpenRouter** | gratis con i modelli `:free` | molta scelta, latenza variabile |
 | Compatibile OpenAI | dipende | LM Studio, llama.cpp server, ecc. |
 
-Per la voce conta il **tempo al primo token**. Un servizio remoto veloce (Groq) con TTS e STT locali dà spesso l'esperienza più "umana" su PC senza una GPU grande.
+Ollama locale e Ollama Cloud sono due servizi distinti nel selettore: il primo rileva i modelli installati dal server locale; il secondo interroga il catalogo cloud accessibile alla tua API key e invia le richieste direttamente a Ollama. Per la voce conta il **tempo al primo token**. Un servizio remoto veloce (Groq) con TTS e STT locali dà spesso l'esperienza più "umana" su PC senza una GPU grande.
 
 Tool esposti al modello:
 

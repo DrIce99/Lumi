@@ -36,7 +36,7 @@ class ChatterboxEngine(TTSEngine):
             import torch
             from chatterbox.mtl_tts import ChatterboxMultilingualTTS
         except ImportError as err:
-            raise EngineUnavailable("Chatterbox non è installato nel sidecar: esegui scripts/install-chatterbox.ps1.") from err
+            raise EngineUnavailable("Chatterbox non è installato nel sidecar: esegui `uv sync --extra chatterbox` nella cartella sidecar.") from err
         self.device = resolve_device(self.config.device)
         log.info("Loading Chatterbox Multilingual on %s", self.device)
         self.model = ChatterboxMultilingualTTS.from_pretrained(device=torch.device(self.device))

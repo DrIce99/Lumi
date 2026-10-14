@@ -268,7 +268,7 @@ class CompatSession implements MomentSession {
           if (call.name === "say") live();
         }
       },
-      AbortSignal.any([this.controller.signal, AbortSignal.timeout(this.provider.id === "ollama" ? 300_000 : 120_000)]),
+      AbortSignal.any([this.controller.signal, AbortSignal.timeout(this.provider.id === "ollama" || this.provider.id === "ollama-cloud" ? 300_000 : 120_000)]),
     );
 
     const stop = (hasCalls: boolean): RoundResult["stop"] =>

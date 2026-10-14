@@ -19,7 +19,10 @@ export function createProvider(id: ProviderId, config: ProviderConfig): ChatProv
   if (info.needsKey && !config.apiKey) return null;
   switch (info.kind) {
     case "ollama":
-      return new CompatProvider(id, new OllamaTransport(trimUrl(config.ollamaUrl), config.fetch));
+      return new CompatProvider(
+        id,
+        new OllamaTransport(id === "ollama-cloud" ? info.baseUrl! : trimUrl(config.ollamaUrl), config.fetch, id === "ollama-cloud" ? config.apiKey : null),
+      );
     case "openai": {
       const base = id === "custom" ? trimUrl(config.customUrl) : info.baseUrl!;
       if (!base) return null;
@@ -33,7 +36,10 @@ export function createProvider(id: ProviderId, config: ProviderConfig): ChatProv
 export async function listModels(id: ProviderId, config: ProviderConfig): Promise<string[]> {
   const info = PROVIDERS[id];
   if (info.needsKey && !config.apiKey) throw new ProviderError("auth", "Inserisci prima la chiave API.");
-  if (info.kind === "ollama") return new OllamaTransport(trimUrl(config.ollamaUrl), config.fetch).listModels();
+  if (info.kind === "ollama") {
+    const base = id === "ollama-cloud" ? info.baseUrl! : trimUrl(config.ollamaUrl);
+    return new OllamaTransport(base, config.fetch, id === "ollama-cloud" ? config.apiKey : null).listModels();
+  }
   const base = id === "custom" ? trimUrl(config.customUrl) : info.baseUrl!;
   if (!base) throw new ProviderError("bad_request", "Indica prima l'indirizzo del servizio.");
   const models = await new OpenAITransport(base, config.apiKey, info.name, {}, config.fetch).listModels();

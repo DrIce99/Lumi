@@ -19,6 +19,7 @@ muteConsole();
 interface Captured {
   url: string;
   body: Record<string, unknown> & { messages: Record<string, unknown>[] };
+  headers?: HeadersInit;
 }
 
 /** Replaces fetch for the duration of `fn`. */
@@ -26,7 +27,7 @@ async function withFetch(reply: (request: Captured, n: number) => Response | Pro
   const original = globalThis.fetch;
   const requests: Captured[] = [];
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-    const request = { url: String(input), body: init?.body ? JSON.parse(String(init.body)) : { messages: [] } };
+    const request = { url: String(input), body: init?.body ? JSON.parse(String(init.body)) : { messages: [] }, headers: init?.headers };
     requests.push(request);
     return reply(request, requests.length);
   }) as typeof fetch;
@@ -291,6 +292,28 @@ test("Ollama: native API with a larger context, no thinking, keep-alive and imag
     },
   );
   assert.equal(t.finals[0][0].text, "Che bel codice!");
+});
+
+test("Ollama Cloud: model discovery and chat use the cloud API key", async () => {
+  const transport = new OllamaTransport("https://ollama.com", undefined, "ollama-test-key");
+  await withFetch(
+    (request) =>
+      request.url.endsWith("/api/tags")
+        ? new Response(JSON.stringify({ models: [{ name: "gemma4:31b" }, { name: "gpt-oss:120b" }] }))
+        : ndjson([{ message: { content: "Ciao!" }, done: true }]),
+    async (requests) => {
+      assert.deepEqual(await transport.listModels(), ["gemma4:31b", "gpt-oss:120b"]);
+      let text = "";
+      await transport.stream(
+        { model: "gemma4:31b", messages: [{ role: "user", text: "Ciao" }], tools: null, json: false, maxTokens: 10 },
+        (delta) => { text += delta.text ?? ""; },
+        new AbortController().signal,
+      );
+      assert.equal(text, "Ciao!");
+      assert.deepEqual(requests.map((request) => request.url), ["https://ollama.com/api/tags", "https://ollama.com/api/chat"]);
+      for (const request of requests) assert.equal(new Headers(request.headers).get("authorization"), "Bearer ollama-test-key");
+    },
+  );
 });
 
 test("errors become clear spoken messages", async () => {

@@ -2,7 +2,7 @@
 // else speaks the OpenAI-compatible chat API. Only free (or local) services:
 // there is deliberately no paid provider.
 
-export const PROVIDER_IDS = ["ollama", "groq", "gemini", "openrouter", "custom"] as const;
+export const PROVIDER_IDS = ["ollama", "ollama-cloud", "groq", "gemini", "openrouter", "custom"] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
 export interface ProviderInfo {
@@ -32,6 +32,18 @@ export const PROVIDERS: Record<ProviderId, ProviderInfo> = {
     note: "Gratis e privato: il modello gira sul tuo computer. Installa Ollama da ollama.com, poi scarica un modello, per esempio \"ollama pull gemma4:e4b\" (piccolo, veloce e vede le immagini) o \"ollama pull qwen3\" (per vedere lo schermo anche \"qwen2.5vl\" o \"mistral-small3.2\"). La voce e il modello si dividono la memoria della scheda video. Se Ollama è chiuso, Lumi lo avvia.",
     suggestions: ["gemma4:e4b", "qwen3", "gemma4:e2b", "qwen3:4b", "qwen2.5vl", "mistral-small3.2"],
     visionSuggestions: ["gemma4:e4b", "qwen2.5vl", "mistral-small3.2", "gemma3"],
+  },
+  "ollama-cloud": {
+    label: "Ollama Cloud (online)",
+    name: "Ollama Cloud",
+    kind: "ollama",
+    needsKey: true,
+    baseUrl: "https://ollama.com",
+    envKey: "OLLAMA_API_KEY",
+    keyHelp: "ollama.com/settings/keys",
+    note: "I modelli vengono eseguiti sui server Ollama: crea una API key su ollama.com/settings/keys, inseriscila qui e premi «Rileva modelli». Le richieste e i dati inviati vengono elaborati online da Ollama.",
+    suggestions: ["gemma4:31b"],
+    visionSuggestions: [],
   },
   groq: {
     label: "Groq (gratis con limiti)",

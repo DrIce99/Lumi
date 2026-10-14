@@ -16,6 +16,9 @@
    %APPDATA%\\Lumi\\models\\wake\\lumi.onnx (never into the repo), with a
    lumi.json report (recall and false positives on held-out clips).
 
+The features are kept in lumi.features.npz: --reuse trains and exports
+again from them, without the hours of synthesis.
+
 Optional: --user-dir with 20-30 WAV recordings of your own voice saying the
 name makes it much more precise (they are augmented and weighted more).
 """
@@ -270,7 +273,7 @@ def export(model, path: Path) -> None:
     import torch
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    torch.onnx.export(model, torch.zeros(1, FRAMES, EMBEDDING), str(path), input_names=["input"], output_names=["score"], opset_version=17)
+    torch.onnx.export(model, torch.zeros(1, FRAMES, EMBEDDING), str(path), input_names=["input"], output_names=["score"], opset_version=18, external_data=False)
 
 
 # ---------------- main ----------------
@@ -288,13 +291,43 @@ def main() -> None:
     ap.add_argument("--name", default="lumi", help="model name (file <name>.onnx)")
     ap.add_argument("--epochs", type=int, default=40)
     ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--reuse", action="store_true", help="train on the features saved by the last run (skips synthesis)")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     paths.configure()
 
-    rng = random.Random(args.seed)
     nrng = np.random.default_rng(args.seed)
     engines = [e.strip() for e in args.engines.split(",") if e.strip()]
+    out = paths.models_dir() / "wake" / f"{args.name}.onnx"
+    # Synthesis takes hours: its result is kept, so training and export can be rerun alone
+    cache = out.with_suffix(".features.npz")
+    if args.reuse and cache.exists():
+        saved = np.load(cache)
+        feats, y_all, w_all, users = saved["feats"], saved["labels"], saved["weights"], int(saved["user_clips"])
+        log.info("%d clips from %s", len(y_all), cache)
+    else:
+        feats, y_all, w_all, users = synthesize_features(args, engines, nrng)
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        np.savez(cache, feats=feats, labels=y_all, weights=w_all, user_clips=users)
+
+    order = nrng.permutation(len(y_all))
+    split = int(len(order) * 0.85)
+    tr, va = order[:split], order[split:]
+    model = train(feats[tr], y_all[tr], w_all[tr], args.epochs, args.seed)
+    report = {name: evaluate(model, feats[va], y_all[va], t) for name, t in (("at_0.5", 0.5), ("at_0.7", 0.7))}
+    log.info("Validation: %s", json.dumps(report))
+
+    export(model, out)
+    (out.with_suffix(".json")).write_text(
+        json.dumps({"name": args.name, "engines": engines, "clips": int(len(y_all)), "user_clips": users, "validation": report}, indent=2),
+        encoding="utf-8",
+    )
+    log.info("Saved %s: restart Lumi (or wait a minute) and the wake word uses it", out)
+
+
+def synthesize_features(args: argparse.Namespace, engines: list[str], nrng: np.random.Generator) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """Synthetic and recorded clips, augmented: (features, labels, weights, user clip count)."""
+    rng = random.Random(args.seed)
     noises = read_wavs(args.noise_dir, 500)
 
     log.info("Synthesizing %d positives and %d negatives with %s", args.count, args.negatives, ", ".join(engines))
@@ -337,22 +370,7 @@ def main() -> None:
     pos_share = y_all.mean()
     w_all = np.where(y_all == 1, w_all * 0.5 / pos_share, w_all * 0.5 / (1 - pos_share))
     log.info("%d clips (%.0f%% positive): computing features...", len(y_all), 100 * pos_share)
-    feats = features(x_all)
-
-    order = nrng.permutation(len(y_all))
-    split = int(len(order) * 0.85)
-    tr, va = order[:split], order[split:]
-    model = train(feats[tr], y_all[tr], w_all[tr], args.epochs, args.seed)
-    report = {name: evaluate(model, feats[va], y_all[va], t) for name, t in (("at_0.5", 0.5), ("at_0.7", 0.7))}
-    log.info("Validation: %s", json.dumps(report))
-
-    out = paths.models_dir() / "wake" / f"{args.name}.onnx"
-    export(model, out)
-    (out.with_suffix(".json")).write_text(
-        json.dumps({"name": args.name, "engines": engines, "clips": int(len(y_all)), "user_clips": len(users), "validation": report}, indent=2),
-        encoding="utf-8",
-    )
-    log.info("Saved %s: restart Lumi (or wait a minute) and the wake word uses it", out)
+    return features(x_all), y_all, w_all, len(users)
 
 
 if __name__ == "__main__":
