@@ -2,7 +2,28 @@
 // voice (the sidecar maps it to an engine-specific style, see
 // sidecar/tts/emotions.json) and the shape of the eyes.
 
-export const EMOTIONS = ["neutra", "gioia", "tristezza", "sorpresa", "rabbia", "pensiero", "imbarazzo", "sonno"] as const;
+export const EMOTIONS = [
+  "neutra",
+  "gioia",
+  "tristezza",
+  "sorpresa",
+  "rabbia",
+  "pensiero",
+  "imbarazzo",
+  "sonno",
+  // Precise, a little pedantic ("Uhm, in realtà..."): flat eyes reading, glasses pushed up
+  "saccente",
+  // Doubt: slit eyes with lines above and below, a fixed sideways look
+  "sospetto",
+  // Fear: tiny pupils in big rings, a steady tremble
+  "paura",
+  // Anime-style shock: empty rings, violet lines, a freeze and a jolt
+  "spavento",
+  // > < : straining, or wincing at a bad pun
+  "smorfia",
+  // _ _ : flat lines, bored, deadpan
+  "apatia",
+] as const;
 export type Emotion = (typeof EMOTIONS)[number];
 
 /** Face expressions: the emotions plus states that only the face shows. */
@@ -43,6 +64,38 @@ const SYNONYMS: Record<string, Emotion> = {
   sleepy: "sonno",
   assonnato: "sonno",
   tired: "sonno",
+  nerd: "saccente",
+  pedante: "saccente",
+  precisino: "saccente",
+  pedantic: "saccente",
+  smug: "saccente",
+  suspicious: "sospetto",
+  sospettoso: "sospetto",
+  dubbio: "sospetto",
+  doubt: "sospetto",
+  skeptical: "sospetto",
+  scettico: "sospetto",
+  fear: "paura",
+  afraid: "paura",
+  scared: "paura",
+  timore: "paura",
+  spaventato: "spavento",
+  shock: "spavento",
+  shocked: "spavento",
+  terrore: "spavento",
+  panico: "spavento",
+  cringe: "smorfia",
+  strain: "smorfia",
+  sforzo: "smorfia",
+  wince: "smorfia",
+  bored: "apatia",
+  annoiato: "apatia",
+  noia: "apatia",
+  apathetic: "apatia",
+  apatico: "apatia",
+  sarcasmo: "apatia",
+  sarcastic: "apatia",
+  deadpan: "apatia",
 };
 
 /** The emotion named by `value`, accepting common synonyms; null when unknown. */
@@ -60,7 +113,13 @@ function words(...list: string[]): RegExp {
 
 /** Cues for guessEmotion, checked in this order (the first match wins). */
 const CUES: { emotion: Emotion; intensity: number; re: RegExp }[] = [
+  { emotion: "spavento", intensity: 0.7, re: words("aiuto", "oh no", "oddio") },
+  { emotion: "paura", intensity: 0.5, re: words("che paura", "attenzione", "pericolos[oa]", "rischios[oa]", "attent[oa]", "irreversibile") },
   { emotion: "tristezza", intensity: 0.5, re: words("mi dispiace", "purtroppo", "peccato", "che triste", "condoglianze", "che brutto") },
+  { emotion: "saccente", intensity: 0.5, re: words("in realtà", "tecnicamente", "per la precisione", "a essere precisi", "a voler essere precisi") },
+  { emotion: "sospetto", intensity: 0.5, re: words("sospetto", "mi puzza", "sicuro sicuro", "strano", "non mi convince", "davvero davvero") },
+  { emotion: "smorfia", intensity: 0.5, re: words("ahia", "che battuta", "che freddura", "pessima", "ugh") },
+  { emotion: "apatia", intensity: 0.5, re: words("che noia", "bah", "wow\\.\\.\\.", "ma dai\\.\\.\\.", "come no", "certo certo") },
   { emotion: "rabbia", intensity: 0.4, re: words("uffa", "che rabbia", "che fastidio", "insopportabile", "che nervi") },
   { emotion: "imbarazzo", intensity: 0.4, re: words("oops", "ops", "scusa", "scusami", "che imbarazzo", "ehm") },
   { emotion: "sorpresa", intensity: 0.5, re: words("wow", "incredibile", "non ci credo", "accidenti", "caspita", String.raw`davvero\?`) },

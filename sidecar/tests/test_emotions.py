@@ -3,7 +3,7 @@ from pathlib import Path
 
 from tts.emotions import chatterbox_exaggeration, entry, qwen_instruct, speed_factor
 
-APP_EMOTIONS = ["neutra", "gioia", "tristezza", "sorpresa", "rabbia", "pensiero", "imbarazzo", "sonno"]
+APP_EMOTIONS = ["neutra", "gioia", "tristezza", "sorpresa", "rabbia", "pensiero", "imbarazzo", "sonno", "saccente", "sospetto", "paura", "spavento", "smorfia", "apatia"]
 
 
 def test_every_app_emotion_has_an_entry():

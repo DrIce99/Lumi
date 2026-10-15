@@ -32,7 +32,10 @@ Work one roadmap phase at a time; finish each with checks green.
   Keep heavy work (capture diffing, OCR calls) out of the renderer.
 - `window.ts`: frameless, `transparent: true`, `alwaysOnTop` at
   `'screen-saver'` level, `skipTaskbar`, `setContentProtection(true)` (so our
-  own captures and screen sharing skip the face), click-through with
+  own captures and screen sharing skip the face; with `face.showInCaptures`
+  it is off, so OBS and Remote Desktop see Lumi, and our captures send the
+  face/command bar rects as `exclude` to the sidecar, which paints them
+  flat gray; the backdrop is then read beside the window), click-through with
   `setIgnoreMouseEvents(true, { forward: true })` toggled by a hit test on
   opaque eye pixels (same approach as Pixel Pet's `solid`).
 - Face (`renderer/face/`): canvas, animates at 60 fps only while something
@@ -323,6 +326,24 @@ Work one roadmap phase at a time; finish each with checks green.
   `cheekAngle`; happy: outer side higher). Lines only, no curves. Drawn on an
   offscreen layer; the border is that layer stamped in 8 directions and
   tinted black, so glow, shadow and border follow the cut shape.
+- Characterful expressions (saccente, sospetto, paura, spavento, smorfia,
+  apatia): `ExpressionDef` gained `glyph` (capsule | ring | chevron; a
+  glyph change crossfades 160 ms while the shape tweens), `pupil` (ring),
+  `accessories` (glasses, squintLines, shockLines: on the same offscreen
+  layer so they get border and glow; the glasses are anchored to the
+  face's resting centers, not the gaze, while doubt and shock lines move
+  with the eyes; the doubt lines touch the slit (stroke center inset into
+  its edge), so slit + lids read as one piece per eye; alpha-tweened in/out), `motion` (tremble, pulse,
+  reading: `motionAt`, strength follows intensity), `noBlink`
+  (`Blinker.pause` 1 h, `resume` after), `still` (gaze: no wander, no
+  micro-saccades; `nextEventAt` = Infinity, so `face.ts` caps its sleep
+  at 60 s: setTimeout(Infinity) fires at once), `randomSide` (gaze bias
+  side picked at onset), `fixedShape` (intensity doesn't shrink glyphs and
+  lines). New gestures: `freeze` (gaze held and blinks paused 500 ms, then
+  a jolt) and `glassesPush` (finger timeline in `glassesPush`, glasses
+  stay 2 px higher). Geometry is pure in `face/glyphs.ts`. Checked by eye
+  with `LUMI_DEBUG_FACE` + `LUMI_DEBUG_CAPTURE` (+ `LUMI_DATA_DIR` and an
+  unreachable `LUMI_SIDECAR_URL` to keep the real data and models out).
 - Glare: `perception/glare.ts` (pure) turns the change detector's luma
   frames of the watched display (gaze target's, else the foreground's)
   into a 64x36 linear-light thumbnail (sRGB decoding of the luma: an
@@ -553,7 +574,10 @@ time and changes), `LUMI_DEBUG_VISIBLE=1` (no content protection: real screensho
 face, to check it on screen),
 `LUMI_WAKE_MODEL=<name>` (wake word model, default `lumi`),
 `LUMI_DEBUG_SETTINGS=<tab>` (opens the settings on a tab; captured with
-LUMI_DEBUG_CAPTURE), `LUMI_DEBUG_BAR=1|<text>` (opens the command bar at
+LUMI_DEBUG_CAPTURE), `LUMI_DEBUG_FACE=<expr,...>` (cycles expressions on a
+dark background, no greeting; with LUMI_DEBUG_CAPTURE saves each at 250,
+650, 1500 ms), `LUMI_DATA_DIR=<dir>` (another userData: settings, memory,
+logs), `LUMI_DEBUG_BAR=1|<text>` (opens the command bar at
 startup, with that text typed; with LUMI_DEBUG_VISIBLE=1 a real screenshot
 shows the acrylic). Logs: `%APPDATA%\Lumi\logs\` (`lumi.log`,
 `sidecar.log`). Real-model sidecar tests: `uv run pytest -m model -s`.

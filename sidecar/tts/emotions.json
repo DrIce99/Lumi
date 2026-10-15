@@ -6,5 +6,11 @@
   "rabbia":    { "qwen_instruct": "Parla con tono deciso e un po' infastidito", "chatterbox_exaggeration": 0.75, "speed": 1.03 },
   "pensiero":  { "qwen_instruct": "Parla con tono riflessivo, come se pensassi ad alta voce", "chatterbox_exaggeration": 0.45, "speed": 0.95 },
   "imbarazzo": { "qwen_instruct": "Parla con un po' di imbarazzo, esitando leggermente", "chatterbox_exaggeration": 0.5, "speed": 0.97 },
-  "sonno":     { "qwen_instruct": "Parla con voce assonnata, lenta e morbida", "chatterbox_exaggeration": 0.3, "speed": 0.88 }
+  "sonno":     { "qwen_instruct": "Parla con voce assonnata, lenta e morbida", "chatterbox_exaggeration": 0.3, "speed": 0.88 },
+  "saccente":  { "qwen_instruct": "Parla con tono puntiglioso e un po' saccente, da professorino che precisa", "chatterbox_exaggeration": 0.55, "speed": 1.0 },
+  "sospetto":  { "qwen_instruct": "Parla con tono sospettoso e diffidente, scandendo le parole", "chatterbox_exaggeration": 0.55, "speed": 0.94 },
+  "paura":     { "qwen_instruct": "Parla con voce intimorita e un po' tremante", "chatterbox_exaggeration": 0.7, "speed": 1.04 },
+  "spavento":  { "qwen_instruct": "Parla di colpo, spaventato e agitato", "chatterbox_exaggeration": 0.85, "speed": 1.08 },
+  "smorfia":   { "qwen_instruct": "Parla con una smorfia, come stringendo i denti", "chatterbox_exaggeration": 0.65, "speed": 0.98 },
+  "apatia":    { "qwen_instruct": "Parla con tono piatto, annoiato e apatico", "chatterbox_exaggeration": 0.3, "speed": 0.9 }
 }

@@ -87,8 +87,8 @@ export class CommandBar {
       },
     });
     this.win.setAlwaysOnTop(true, "screen-saver");
-    // Out of Lumi's own captures (and screen sharing), like the face (LUMI_DEBUG_VISIBLE=1 shows it)
-    this.win.setContentProtection(process.env.LUMI_DEBUG_VISIBLE !== "1");
+    // Out of screen captures, like the face, until main applies face.showInCaptures
+    this.win.setContentProtection(true);
     if (this.acrylic) roundCorners(this.win.getNativeWindowHandle());
     this.win.setMenu(null);
     // A file dropped outside the drop handlers must not replace the page

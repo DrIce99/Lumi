@@ -1,5 +1,5 @@
 // Entry point: wires the face, perception, brain, voice and UI together.
-import { app, BrowserWindow, dialog, globalShortcut, nativeImage, powerMonitor, screen, shell, type Display } from "electron";
+import { app, BrowserWindow, dialog, globalShortcut, nativeImage, powerMonitor, screen, shell, type Display, type Rectangle } from "electron";
 import { writeFileSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { monitorEventLoopDelay } from "node:perf_hooks";
@@ -24,7 +24,7 @@ import { readJson, writeJson } from "./jsonStore";
 import { initLog, log } from "./log";
 import { Mood } from "./mood";
 import { ensureOllama } from "./ollama";
-import { Backdrop, meanLuminance, rectInFrame } from "./perception/backdrop";
+import { Backdrop, besideWindow, meanLuminance, meanLuminanceOf, rectInFrame } from "./perception/backdrop";
 import { ChangeDetector } from "./perception/capture";
 import { appName } from "./perception/context";
 import { listVisionModels } from "./perception/vision";
@@ -66,6 +66,8 @@ const DEBUG = process.argv.includes("--debug");
 const IMAGE_MAX_SIDE = 1344;
 
 registerAppScheme();
+// Development aid: another data folder (settings, memory, logs), e.g. to try the app without touching the real one
+if (process.env.LUMI_DATA_DIR) app.setPath("userData", process.env.LUMI_DATA_DIR);
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -419,7 +421,7 @@ function start(): void {
     toPhysical: (rect) => screen.dipToScreenRect(null, rect),
     ocr: async (region) => {
       if (!sidecar.endpoint() || !voice.configured) return null;
-      const result = await sidecar.request<{ lines: OcrLine[] }>("/ocr", { region, lang: "it" }, 15_000);
+      const result = await sidecar.request<{ lines: OcrLine[] }>("/ocr", { region, lang: "it", exclude: ownWindowsPhysical() }, 15_000);
       return result.lines;
     },
     notificationArea: () => {
@@ -428,6 +430,22 @@ function start(): void {
     },
     screenBounds: () => lumiDisplay().bounds,
   });
+  // Lumi's windows are hidden from every screen capture (ours, OBS, Remote
+  // Desktop, screen sharing) unless the user wants them visible: then our
+  // own captures get them painted over by the sidecar, so Lumi never sees
+  // or reads itself. LUMI_DEBUG_VISIBLE=1 shows them everywhere, ours included.
+  const debugVisible = process.env.LUMI_DEBUG_VISIBLE === "1";
+  function applyCaptureVisibility(): void {
+    const hidden = !settings().face.showInCaptures && !debugVisible;
+    for (const win of [face.win, commandBar.win]) if (!win.isDestroyed()) win.setContentProtection(hidden);
+  }
+  /** Lumi's windows on screen (DIP) to paint over in our captures; none while they hide themselves. */
+  function ownWindows(): Rectangle[] {
+    if (!settings().face.showInCaptures || debugVisible) return [];
+    return [face.win, commandBar.win].filter((win) => !win.isDestroyed() && win.isVisible()).map((win) => win.getBounds());
+  }
+  const ownWindowsPhysical = () => ownWindows().map((rect) => screen.dipToScreenRect(null, rect));
+
   // Shadow and border under the eyes follow the brightness behind the face;
   // without fresh frames (perception off or paused) they go back to the middle values
   const backdrop = new Backdrop();
@@ -442,9 +460,14 @@ function start(): void {
       return screen.getAllDisplays().filter((d) => ids.has(d.id));
     },
     active: () => visible && perception.watching() && sidecar.endpoint() !== null,
-    grab: async (displays) => {
+    exclude: ownWindows,
+    grab: async (displays, exclude) => {
       const regions = displays.map((d) => screen.dipToScreenRect(null, d.bounds));
-      const { data, headers } = await sidecar.requestBinary("/screen/luma", { regions, size: 640 });
+      const { data, headers } = await sidecar.requestBinary("/screen/luma", {
+        regions,
+        size: 640,
+        exclude: exclude.map((rect) => screen.dipToScreenRect(null, rect)),
+      });
       let offset = 0;
       return (headers.get("x-sizes") ?? "").split(",").map((size) => {
         const [width, height] = size.split("x").map(Number);
@@ -464,9 +487,18 @@ function start(): void {
     if (!settings().face.adaptiveShadow || !backdrop.wantsSample(Date.now()) || face.isDragging()) return;
     const i = displays.findIndex((d) => d.id === lumiDisplay().id);
     const frame = frames[i];
-    const region = frame && rectInFrame(face.faceRect(), displays[i].bounds, frame);
-    if (!region) return;
-    backdrop.sample(meanLuminance(frame, region), Date.now());
+    if (!frame) return;
+    let luminance: number | null;
+    if (ownWindows().length) {
+      // The face window is painted over: read the screen just beside it
+      const strips = besideWindow(face.faceRect(), face.win.getBounds()).map((rect) => rectInFrame(rect, displays[i].bounds, frame));
+      luminance = meanLuminanceOf(frame, strips.filter((r): r is NonNullable<typeof r> => r !== null));
+    } else {
+      const region = rectInFrame(face.faceRect(), displays[i].bounds, frame);
+      luminance = region && meanLuminance(frame, region);
+    }
+    if (luminance === null) return;
+    backdrop.sample(luminance, Date.now());
     face.contrast(backdrop.contrast(Date.now()));
   }
 
@@ -591,7 +623,7 @@ function start(): void {
       },
       ocr: async (rect) => {
         if (!sidecar.endpoint() || !voice.configured) return [];
-        const result = await sidecar.request<{ lines: OcrLine[] }>("/ocr", { region: screen.dipToScreenRect(null, rect), lang: "it" }, 8000);
+        const result = await sidecar.request<{ lines: OcrLine[] }>("/ocr", { region: screen.dipToScreenRect(null, rect), lang: "it", exclude: ownWindowsPhysical() }, 8000);
         return result.lines.map((l) => l.text);
       },
       seen: (regions) => perception.seen(regions),
@@ -607,7 +639,7 @@ function start(): void {
       },
     },
     new Vision(async (_display, maxSide, rect) => {
-      const { data } = await sidecar.requestBinary("/screen/jpeg", { region: screen.dipToScreenRect(null, rect), size: maxSide }, 10_000);
+      const { data } = await sidecar.requestBinary("/screen/jpeg", { region: screen.dipToScreenRect(null, rect), size: maxSide, exclude: ownWindowsPhysical() }, 10_000);
       return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
     }),
   );
@@ -785,6 +817,25 @@ function start(): void {
         writeFileSync(`${capturePrefix}_settings.png`, (await win.webContents.capturePage()).toPNG());
       }, 3500);
     }
+    // Development aid: show expressions one after the other (e.g. "saccente,paura"), on a dark
+    // background, and with LUMI_DEBUG_CAPTURE save each one at a few moments of its animation
+    const debugFace = process.env.LUMI_DEBUG_FACE;
+    if (debugFace) {
+      void face.win.webContents.executeJavaScript('document.body.style.background = "#2b2d31"');
+      const list = debugFace
+        .split(",")
+        .map((e) => toEmotion(e))
+        .filter((e): e is Emotion => e !== null);
+      list.forEach((emotion, i) => {
+        const start = 1500 + i * 2600;
+        setTimeout(() => mood.setEmotion(emotion, 0.9, 60_000), start);
+        if (!capturePrefix) return;
+        for (const ms of [250, 650, 1500]) {
+          setTimeout(async () => writeFileSync(`${capturePrefix}_${emotion}_${ms}.png`, (await face.win.webContents.capturePage()).toPNG()), start + ms);
+        }
+      });
+      return;
+    }
     setTimeout(() => void greet(), 1200);
   }
 
@@ -958,6 +1009,7 @@ function start(): void {
     `${APP_ORIGIN}/renderer/commandbar/commandbar.html`,
     join(dataDir, "commandbar.json"),
   );
+  applyCaptureVisibility();
 
   async function askFromBar(text: string, context: BarContext | null, files: string[]): Promise<void> {
     if (!visible) setVisible(true);
@@ -1112,6 +1164,7 @@ function start(): void {
 
   settingsStore.onChange((next, prev) => {
     if (next.face.scale !== prev.face.scale || next.face.color !== prev.face.color) face.setAppearance(next.face.scale, next.face.color);
+    if (next.face.showInCaptures !== prev.face.showInCaptures) applyCaptureVisibility();
     if (next.chatHotkey !== prev.chatHotkey || next.listen.hotkey !== prev.listen.hotkey || next.listen.mode !== prev.listen.mode) registerHotkeys();
     if (next.listen.mode !== prev.listen.mode || next.doNotDisturb !== prev.doNotDisturb) updateWake();
     if (next.launchAtLogin !== prev.launchAtLogin) applyLoginItem();

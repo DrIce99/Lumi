@@ -472,6 +472,8 @@ class LumaRequest(BaseModel):
 
     regions: list[dict]
     size: int = 640
+    # Lumi's own windows when they are visible to captures: painted over
+    exclude: list[dict] = []
 
 
 @app.post("/screen/luma")
@@ -480,7 +482,7 @@ async def screen_luma(req: LumaRequest, _: None = Depends(http_auth)) -> Respons
     from screen import grab_luma
 
     def grab() -> list[tuple[int, int, bytes]]:
-        return [grab_luma(int(r["x"]), int(r["y"]), int(r["width"]), int(r["height"]), req.size) for r in req.regions]
+        return [grab_luma(int(r["x"]), int(r["y"]), int(r["width"]), int(r["height"]), req.size, req.exclude) for r in req.regions]
 
     try:
         frames = await asyncio.to_thread(grab)
@@ -498,6 +500,7 @@ class JpegRequest(BaseModel):
 
     region: dict
     size: int = 1280
+    exclude: list[dict] = []
 
 
 @app.post("/screen/jpeg")
@@ -506,7 +509,7 @@ async def screen_jpeg(req: JpegRequest, _: None = Depends(http_auth)) -> Respons
 
     r = req.region
     try:
-        width, height, jpeg = await asyncio.to_thread(grab_jpeg, int(r["x"]), int(r["y"]), int(r["width"]), int(r["height"]), req.size)
+        width, height, jpeg = await asyncio.to_thread(grab_jpeg, int(r["x"]), int(r["y"]), int(r["width"]), int(r["height"]), req.size, 75, req.exclude)
     except Exception as err:  # noqa: BLE001
         raise HTTPException(status_code=503, detail=f"capture failed: {err}") from err
     return Response(jpeg, media_type="image/jpeg", headers={"X-Size": f"{width}x{height}"})
@@ -521,6 +524,7 @@ class OcrRequest(BaseModel):
     height: int = 0
     region: dict | None = None
     lang: str = "it"
+    exclude: list[dict] = []
 
 
 def decode_image(req: OcrRequest):
@@ -532,15 +536,15 @@ def decode_image(req: OcrRequest):
     return Image.open(io.BytesIO(raw))
 
 
-def grab_region(region: dict):
-    """Captures a rectangle of the screen (physical pixels). Lumi's window excludes itself from captures."""
+def grab_region(region: dict, exclude: list[dict] | None = None):
+    """Captures a rectangle of the screen (physical pixels), `exclude` painted over (Lumi's windows when visible)."""
     from PIL import Image
 
     from screen import grab_bgra
 
     box = {k: int(region[k]) for k in ("x", "y", "width", "height")}
     size = (max(1, box["width"]), max(1, box["height"]))
-    return Image.frombytes("RGB", size, grab_bgra(box["x"], box["y"], *size), "raw", "BGRX")
+    return Image.frombytes("RGB", size, grab_bgra(box["x"], box["y"], *size, exclude), "raw", "BGRX")
 
 
 def offset_lines(lines: list[dict], dx: float, dy: float) -> list[dict]:
@@ -559,7 +563,7 @@ async def ocr(req: OcrRequest, _: None = Depends(http_auth)) -> dict:
     region = req.region
 
     def run(engine):
-        image = grab_region(region) if region else decode_image(req)
+        image = grab_region(region, req.exclude) if region else decode_image(req)
         return engine.recognize(image, req.lang)
 
     try:

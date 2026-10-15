@@ -194,6 +194,7 @@ export function sanitizeSettings(input: unknown): Settings {
       subtitles: bool(face.subtitles, d.face.subtitles),
       adaptiveShadow: bool(face.adaptiveShadow, d.face.adaptiveShadow),
       glare: bool(face.glare, d.face.glare),
+      showInCaptures: bool(face.showInCaptures, d.face.showInCaptures),
     },
     perception: {
       enabled: bool(perception.enabled, d.perception.enabled),

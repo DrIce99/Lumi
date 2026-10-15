@@ -136,8 +136,23 @@ Il volto si disegna su `<canvas>` (o SVG) nel renderer, a 60 fps solo mentre qua
 | ascolto | leggermente più alti, fissi su di te, pochi movimenti |
 | sonno | palpebre dritte calate a metà, battiti lenti |
 | imbarazzo | occhi più piccoli, palpebre un po' preoccupate (angoli interni alzati) e taglio dal basso più alto verso il naso, sguardo che scappa di lato, breve "tremolio" |
+| saccente (nerd, precisino) | occhi bassi e piatti (palpebra dritta) che leggono da sinistra a destra, **occhiali**; all'inizio un **dito** sale e spinge la montatura in su. *Quando*: correzioni, spiegazioni tecniche precise, "Uhm, in realtà..." |
+| sospetto (dubbio) | occhi a **fessura schiacciati tra due linee** (palpebre) che li toccano: ogni occhio è un unico pezzo, che si sposta tutto insieme; sguardo fisso a destra o a sinistra (a caso). *Quando*: input contraddittori, domande trabocchetto, richieste poco chiare o sospette |
+| paura | **grandi cerchi** con **pupille piccolissime** al centro, **tremolio** leggero e continuo. *Quando*: avvisi di sistema, file da cancellare, comandi pericolosi, cose che gli fanno paura |
+| spavento (stile anime) | due **cerchi vuoti** e **tre linee viola** oblique in alto a destra; **0,5 s immobili**, poi un piccolo sobbalzo. *Quando*: errore critico improvviso, arresto inaspettato |
+| smorfia (> <) | due **chevron** `>` `<` che **pulsano** stringendosi. *Quando*: grande sforzo, un pessimo gioco di parole |
+| apatia (_ _) | due **linee orizzontali** spesse, **immobili**: niente battiti, niente saccadi. *Quando*: cose noiose, risposte scontate, sarcasmo |
 
 I tagli sono linee dritte, parametri interpolati come gli altri (`lidTop`, `lidAngle`, `cheek`, `cheekAngle` in `face/expressions.ts`): gli occhi tagliati si disegnano su un livello a parte, così bagliore, ombra e bordo seguono la forma tagliata.
+
+Le ultime sei espressioni vanno oltre la capsula (`face/glyphs.ts`, geometria pura e testata; `face.ts` disegna):
+
+- **Forma degli occhi**: capsula (anche schiacciata in una fessura o in una linea), **anello** con o senza pupilla, **chevron**. Cambiando forma c'è una dissolvenza di 160 ms, mentre dimensioni e posizione si interpolano come sempre. Per le espressioni con una forma propria l'intensità non riduce la forma (una "apatia" lieve resta una linea): regola solo i movimenti.
+- **Oggetti**: occhiali, linee del sospetto, linee viola dello spavento, il dito. Gli occhiali stanno sul volto e non seguono lo sguardo (gli occhi si muovono dietro le lenti); le linee del sospetto e dello spavento si muovono con gli occhi; compaiono in 200 ms e spariscono in 150 ms. Sono disegnati sullo stesso livello degli occhi, quindi hanno anche loro bordo, ombra e bagliore.
+- **Movimenti continui**, che sfumano con l'intensità: tremolio (paura), pulsazione (smorfia), lettura (saccente: lo sguardo percorre una riga in 1,6 s e torna all'inizio).
+- **Comportamenti**: lo spavento congela lo sguardo e i battiti per mezzo secondo e poi sobbalza; l'apatia ferma battiti, saccadi e micro-movimenti; la smorfia non sbatte le palpebre; il sospetto sceglie un lato a caso ogni volta.
+- Il modello le sceglie come le altre emozioni, nel `say`; il prompt dice quando usarle e di farlo con misura. Ognuna ha la sua resa nella voce (`sidecar/tts/emotions.json`) e qualche parola chiave per indovinarla dal testo ("in realtà...", "attenzione", "oh no", "ahia", "che noia"...).
+- Per vederle: `LUMI_DEBUG_FACE=saccente,sospetto,paura,spavento,smorfia,apatia` le mostra una dopo l'altra su sfondo scuro; con `LUMI_DEBUG_CAPTURE=<prefisso>` salva tre fotogrammi di ognuna (250, 650 e 1.500 ms).
 
 **Mentre parla**, al posto della bocca: l'altezza degli occhi pulsa di ±5% seguendo l'ampiezza (RMS) dell'audio in uscita, con un leggero rimbalzo all'inizio di ogni frase. Le transizioni tra espressioni durano 150–300 ms e tutti i parametri si interpolano.
 
@@ -160,7 +175,7 @@ Gli occhi devono restare leggibili anche su uno sfondo dello stesso colore. Si u
 
 Sopra resta il leggero bagliore caldo, che si vede sugli sfondi scuri.
 
-L'opacità è **adattiva**. Grazie a `setContentProtection(true)`, le catture dello schermo vedono ciò che c'è *dietro* la finestra di Lumi. Una volta al secondo si misura la luminanza media sotto il volto (`perception/backdrop.ts`), riusando i fotogrammi del rilevamento dei cambiamenti, che comprendono sempre il monitor di Lumi: nessuna cattura in più.
+L'opacità è **adattiva**. Grazie a `setContentProtection(true)`, le catture dello schermo vedono ciò che c'è *dietro* la finestra di Lumi. Una volta al secondo si misura la luminanza media sotto il volto (`perception/backdrop.ts`), riusando i fotogrammi del rilevamento dei cambiamenti, che comprendono sempre il monitor di Lumi: nessuna cattura in più. Con l'opzione «Visibile in OBS, Desktop remoto e condivisione schermo» la finestra nei fotogrammi è coperta di grigio, quindi si misura una striscia di 16 DIP appena fuori dalla finestra, accanto al volto (`besideWindow`).
 
 | Luminanza dietro il volto | Ombra | Bordo |
 | --- | --- | --- |
@@ -212,7 +227,7 @@ L'abbagliamento è uno strato sopra l'espressione (le altezze si moltiplicano), 
 | **OCR locale** solo sulle zone cambiate (Windows OCR, con fallback RapidOCR) | parole e righe con i loro rettangoli | 1–2 fps | medio |
 | Modello con visione (`look_at_screen`) | comprensione del contenuto | su richiesta | alto |
 
-La finestra di Lumi ha `setContentProtection(true)`, quindi non compare nelle proprie catture.
+La finestra di Lumi ha `setContentProtection(true)`, quindi non compare nelle proprie catture. Per lo stesso motivo non la vedono OBS, Desktop remoto e la condivisione schermo. Chi vuole mostrarla attiva in Impostazioni → Generale «Visibile in OBS, Desktop remoto e condivisione schermo» (`face.showInCaptures`): la protezione si spegne (volto e barra comandi) e l'app manda al sidecar i rettangoli delle proprie finestre come `exclude` in `/screen/luma`, `/screen/jpeg` e `/ocr`, che li copre di grigio uniforme. Così Lumi non vede né legge sé stessa, e il rilevamento cambiamenti ignora la zona (quando la finestra si sposta, il confronto riparte da zero).
 
 ### Il modulo di attenzione (`perception/attention.ts`)
 
@@ -1039,10 +1054,12 @@ Variabili di debug (stesso stile di Pixel Pet):
 - `LUMI_DEBUG_MESSAGE="..."`: come se avessi detto quel testo a Lumi.
 - `LUMI_DEBUG_HEAR=<file.wav>`: un WAV PCM16 passa da STT → cervello → TTS come se fosse detto con il push-to-talk (senza microfono).
 - `LUMI_DEBUG_LAG=1`: registra ogni 5 s il ritardo del thread principale e i tempi di ogni cattura.
-- `LUMI_DEBUG_VISIBLE=1`: niente protezione dei contenuti, così gli screenshot veri mostrano il volto.
+- `LUMI_DEBUG_VISIBLE=1`: niente protezione dei contenuti e niente copertura, così anche le catture di Lumi mostrano il volto.
 - `LUMI_DEBUG_SETTINGS=<scheda>`: apre le impostazioni su quella scheda.
 - `LUMI_DEBUG_CAPTURE=<prefisso>`: salva in PNG i fotogrammi del volto.
 - `LUMI_DEBUG_BAR=1` (o un testo, `\n` per andare a capo): apre la barra dei comandi all'avvio, con quel testo nel campo.
+- `LUMI_DEBUG_FACE=<espressioni>` (separate da virgole): le mostra una dopo l'altra su sfondo scuro, senza saluto; con `LUMI_DEBUG_CAPTURE` ne salva tre fotogrammi ciascuna.
+- `LUMI_DATA_DIR=<cartella>`: usa un'altra cartella per impostazioni, memoria e log (per provare l'app senza toccare quella vera). Con `LUMI_SIDECAR_URL` puntato a un indirizzo irraggiungibile l'app parte in modalità testo senza caricare modelli.
 - `LUMI_WAKE_MODEL=<nome>`: il modello della parola di attivazione (predefinito `lumi`; `hey_jarvis`, `alexa` o `hey_mycroft` sono modelli generici di openWakeWord, per provare il flusso).
 
 Log in `%APPDATA%\Lumi\logs\`.

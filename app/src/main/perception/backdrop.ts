@@ -2,7 +2,9 @@
 // the brighter the backdrop (close to the eye color), the stronger the
 // dark shadow and border under the eyes. Content protection hides Lumi's
 // window from captures, so the change detector's frames of Lumi's monitor
-// show exactly what is behind it; we sample them once a second.
+// show exactly what is behind it; we sample them once a second. When the
+// window is visible to captures the sidecar paints it over, so the sample
+// comes from thin strips just outside the window, beside the face.
 import type { FaceContrast } from "../../shared/types";
 import type { Frame } from "./diff";
 
@@ -55,6 +57,36 @@ export function rectInFrame(rect: Rect, display: Rect, frame: { width: number; h
   const y1 = Math.min(frame.height, Math.ceil((rect.y + rect.height - display.y) * sy));
   if (x1 <= x0 || y1 <= y0) return null;
   return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+}
+
+/** Thickness (DIP) of the strips read beside the face window when it is painted over. */
+export const BESIDE_DIP = 16;
+
+/**
+ * Strips just outside the face window, next to the face (screen DIP): left
+ * and right at the face's height, plus above or below the face when it
+ * touches that edge of the window (the side without the bubble room).
+ */
+export function besideWindow(face: Rect, window: Rect, thickness = BESIDE_DIP): Rect[] {
+  const strips: Rect[] = [
+    { x: window.x - thickness, y: face.y, width: thickness, height: face.height },
+    { x: window.x + window.width, y: face.y, width: thickness, height: face.height },
+  ];
+  if (face.y <= window.y) strips.push({ x: face.x, y: window.y - thickness, width: face.width, height: thickness });
+  if (face.y + face.height >= window.y + window.height) strips.push({ x: face.x, y: window.y + window.height, width: face.width, height: thickness });
+  return strips;
+}
+
+/** Mean luminance (0..1) over several regions of a frame (frame pixels), weighted by area; null for none. */
+export function meanLuminanceOf(frame: Frame, regions: Rect[]): number | null {
+  let sum = 0;
+  let count = 0;
+  for (const region of regions) {
+    const n = region.width * region.height;
+    sum += meanLuminance(frame, region) * n;
+    count += n;
+  }
+  return count ? sum / count : null;
 }
 
 /** Mean luminance (0..1) of a region of a frame (frame pixels). */

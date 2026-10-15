@@ -3,6 +3,7 @@
 // no per-frame logic here.
 import type { Expression } from "../../shared/emotions";
 import type { FaceGesture } from "../../shared/types";
+import type { Accessory, Glyph, Motion } from "./glyphs";
 
 export interface EyeShape {
   /** Multiplier of the base eye width. */
@@ -43,6 +44,22 @@ export interface ExpressionDef {
   onset?: FaceGesture;
   /** No blinking for this long after the expression starts. */
   blinkPauseMs?: number;
+  /** The eye's shape: a capsule (default), a ring (fear, shock), a chevron (> <). */
+  glyph?: Glyph;
+  /** Ring eyes: pupil radius as a fraction of the ring (0: empty). */
+  pupil?: number;
+  /** Props drawn with the eyes (glasses, lines). */
+  accessories?: Accessory[];
+  /** A continuous motion while the expression lasts. */
+  motion?: Motion;
+  /** No blinks while the expression lasts (lines and chevrons don't blink). */
+  noBlink?: boolean;
+  /** No idle eye movement at all (no wandering, no micro-saccades). */
+  still?: boolean;
+  /** gazeBias.x goes to a random side at each onset (a sideways suspicious look). */
+  randomSide?: boolean;
+  /** The shape is always full: intensity only scales the motion (glyphs and lines can't be "a bit" of themselves). */
+  fixedShape?: boolean;
 }
 
 export const NEUTRAL_SHAPE: EyeShape = { width: 1, height: 1, y: 0, tilt: 0, spread: 0, lid: 0, asym: 0, lidTop: 0, lidAngle: 0, cheek: 0, cheekAngle: 0 };
@@ -70,6 +87,18 @@ export const EXPRESSION_DEFS: Record<Expression, ExpressionDef> = {
   imbarazzo: def({ width: 0.88, height: 0.8, y: 4, lidTop: 0.16, lidAngle: -20, cheek: 0.2, cheekAngle: -16 }, { avert: true, onset: "tremble", blinkRate: 1.6 }),
   sonno: def({ height: 0.94, y: 2, lidTop: 0.52 }, { blinkRate: 0.45, saccadeRate: 0.3 }),
   ascolto: def({ height: 1.1, y: -1.5 }, { saccadeRate: 0.25 }),
+  // Nerd: flat eyes (a straight lid) reading downward, glasses pushed up by a finger
+  saccente: def({ height: 0.5, y: 2, lidTop: 0.4 }, { gazeBias: { x: 0, y: 0.5 }, saccadeRate: 0.3, blinkRate: 0.8, accessories: ["glasses"], motion: "reading", onset: "glassesPush" }),
+  // Doubt: a wide slit pressed between two lid lines (one piece per eye), staring to one side
+  sospetto: def({ width: 1.4, height: 0.34, spread: 9 }, { gazeBias: { x: 0.6, y: 0 }, randomSide: true, saccadeRate: 0.15, blinkRate: 0.6, accessories: ["squintLines"], fixedShape: true }),
+  // Fear: tiny pupils in big rings, a steady tremble
+  paura: def({ width: 2, height: 0.64, y: -1, spread: 6 }, { glyph: "ring", pupil: 0.18, motion: "tremble", blinkRate: 0.5, saccadeRate: 0.6, blinkPauseMs: 800, fixedShape: true }),
+  // Anime shock: empty rings, violet lines, half a second frozen, then a jolt
+  spavento: def({ width: 2.1, height: 0.68, y: -3, spread: 6 }, { glyph: "ring", accessories: ["shockLines"], onset: "freeze", blinkPauseMs: 1500, saccadeRate: 0.3, fixedShape: true }),
+  // > < : squeezing hard (effort, a terrible pun)
+  smorfia: def({ width: 1.15, height: 0.45, spread: -2 }, { glyph: "chevron", motion: "pulse", noBlink: true, saccadeRate: 0.3, gazeBias: { x: 0, y: 0 }, fixedShape: true }),
+  // _ _ : flat lines, perfectly still
+  apatia: def({ width: 1.35, height: 0.12, y: 6 }, { gazeBias: { x: 0, y: 0.2 }, noBlink: true, still: true, saccadeRate: 0.1, fixedShape: true }),
 };
 
 /**
@@ -78,7 +107,7 @@ export const EXPRESSION_DEFS: Record<Expression, ExpressionDef> = {
  */
 export function shapeFor(expression: Expression, intensity: number): EyeShape {
   const target = EXPRESSION_DEFS[expression].shape;
-  if (expression === "neutra") return { ...target };
+  if (expression === "neutra" || EXPRESSION_DEFS[expression].fixedShape) return { ...target };
   const k = 0.45 + 0.55 * Math.min(1, Math.max(0, intensity));
   const out = { ...NEUTRAL_SHAPE };
   for (const key of Object.keys(out) as (keyof EyeShape)[]) {

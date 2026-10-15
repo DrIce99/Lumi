@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   Backdrop,
+  besideWindow,
   contrastFor,
   DARK_CONTRAST,
   LIGHT_CONTRAST,
   meanLuminance,
+  meanLuminanceOf,
   MID_CONTRAST,
   rectInFrame,
   SAMPLE_MS,
@@ -75,4 +77,29 @@ test("samples are taken once a second and go stale without new frames", () => {
   // After a gap the band is decided afresh, without hysteresis from the old one
   b.sample(0.36, STALE_MS * 3);
   assert.deepEqual(b.contrast(STALE_MS * 3), MID_CONTRAST);
+});
+
+test("when the face window is painted over, the backdrop is read in strips just outside it", () => {
+  // Bubble room above: the face touches the bottom edge of the window
+  const window = { x: 100, y: 200, width: 400, height: 420 };
+  const face = { x: 240, y: 500, width: 120, height: 120 };
+  assert.deepEqual(besideWindow(face, window, 16), [
+    { x: 84, y: 500, width: 16, height: 120 },
+    { x: 500, y: 500, width: 16, height: 120 },
+    { x: 240, y: 620, width: 120, height: 16 },
+  ]);
+  // Bubble room below: the strip goes above the face
+  const below = besideWindow({ ...face, y: 200 }, window, 16);
+  assert.deepEqual(below[2], { x: 240, y: 184, width: 120, height: 16 });
+  assert.equal(below.length, 3);
+});
+
+test("several regions average by area", () => {
+  const frame: Frame = { width: 4, height: 1, luma: new Uint8Array([0, 255, 255, 255]) };
+  const mean = meanLuminanceOf(frame, [
+    { x: 0, y: 0, width: 1, height: 1 },
+    { x: 1, y: 0, width: 3, height: 1 },
+  ]);
+  assert.equal(mean, 0.75);
+  assert.equal(meanLuminanceOf(frame, []), null);
 });

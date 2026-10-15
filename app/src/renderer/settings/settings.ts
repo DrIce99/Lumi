@@ -394,6 +394,7 @@ function fill(next: SettingsSnapshot): void {
   $("subtitles").checked = s.face.subtitles;
   $("adaptiveShadow").checked = s.face.adaptiveShadow;
   $("glare").checked = s.face.glare;
+  $("showInCaptures").checked = s.face.showInCaptures;
   $("voicesEnabled").checked = s.voices.enabled;
   $("onlyMe").checked = s.voices.onlyMe;
   $("discordEnabled").checked = s.discord.enabled;
@@ -510,7 +511,7 @@ function collect(): Settings {
     chatHotkey: $("chatHotkey").value,
     commandBar: { reply: $<HTMLSelectElement>("barReply").value as Settings["commandBar"]["reply"], useSelection: $("barSelection").checked },
     launchAtLogin: $("launchAtLogin").checked,
-    face: { scale: num("scale", s.face.scale), color: $("color").value, subtitles: $("subtitles").checked, adaptiveShadow: $("adaptiveShadow").checked, glare: $("glare").checked },
+    face: { scale: num("scale", s.face.scale), color: $("color").value, subtitles: $("subtitles").checked, adaptiveShadow: $("adaptiveShadow").checked, glare: $("glare").checked, showInCaptures: $("showInCaptures").checked },
     voices: { enabled: $("voicesEnabled").checked, onlyMe: $("onlyMe").checked },
     web: { provider: $<HTMLSelectElement>("webProvider").value as Settings["web"]["provider"], searxngUrl: $("searxngUrl").value.trim() },
     memory: {

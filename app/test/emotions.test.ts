@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parseToolCall } from "../src/main/brain/tools";
 import { Mood } from "../src/main/mood";
-import { guessEmotion } from "../src/shared/emotions";
+import { guessEmotion, toEmotion } from "../src/shared/emotions";
 import type { FaceState } from "../src/shared/types";
 
 test("a light emotion is guessed from cue words and punctuation", () => {
@@ -54,4 +54,24 @@ test("an answer's emotion fades 1.5-3 s after Lumi stops talking; an interruptio
   mood.clearEmotion();
   assert.equal(mood.state().expression, "neutra");
   assert.equal(sent.at(-1)?.expression, "neutra");
+});
+
+test("the new emotions: synonyms small models use, and cue words", () => {
+  assert.equal(toEmotion("nerd"), "saccente");
+  assert.equal(toEmotion("Suspicious"), "sospetto");
+  assert.equal(toEmotion("scared"), "paura");
+  assert.equal(toEmotion("shocked"), "spavento");
+  assert.equal(toEmotion("cringe"), "smorfia");
+  assert.equal(toEmotion("sarcasmo"), "apatia");
+  const cases: [string, string][] = [
+    ["In realtà si dice qual è, senza apostrofo.", "saccente"],
+    ["Mmh, questa storia non mi convince.", "sospetto"],
+    ["Attenzione: questo comando è irreversibile.", "paura"],
+    ["Oh no, si è chiuso tutto!", "spavento"],
+    ["Ahia, che battuta.", "smorfia"],
+    ["Che noia, ancora le slide.", "apatia"],
+    ["Wow, incredibile!", "sorpresa"],
+    ["Il cielo è sereno.", "neutra"],
+  ];
+  for (const [text, emotion] of cases) assert.equal(guessEmotion(text).emotion, emotion, text);
 });

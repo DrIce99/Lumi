@@ -91,9 +91,9 @@ export class FaceWindow {
     });
     this.win.setAlwaysOnTop(true, "screen-saver");
     this.win.setIgnoreMouseEvents(true, { forward: true });
-    // Keeps the face out of our own screen captures and of the user's screen sharing
-    // (LUMI_DEBUG_VISIBLE=1 lets screenshots show it, to check how it looks on screen)
-    this.win.setContentProtection(process.env.LUMI_DEBUG_VISIBLE !== "1");
+    // Keeps the face out of screen captures and screen sharing until main applies
+    // the user's choice (face.showInCaptures)
+    this.win.setContentProtection(true);
     this.win.once("ready-to-show", () => {
       this.win.showInactive();
       log.info(`Face window shown at ${JSON.stringify(this.win.getBounds())}`);

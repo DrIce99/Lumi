@@ -1,7 +1,8 @@
 // Screen changes, a few times per second: small luminance frames (about
 // 640 px wide) of the monitor with the active window and of Lumi's monitor,
-// diffed in 32x32 blocks. Lumi's own window never appears (content
-// protection). The changed rectangles are reported in screen DIP.
+// diffed in 32x32 blocks. Lumi's own windows never appear: content
+// protection, or painted over by the sidecar when the user wants them
+// visible to OBS (`exclude`). The changed rectangles are reported in screen DIP.
 // The frames come from the sidecar, not from desktopCapturer: getSources
 // blocked this thread ~400 ms per call, and the click-through mouse hook
 // runs here, so the whole system pointer froze at every capture.
@@ -24,6 +25,7 @@ export class ChangeDetector {
   private running = false;
   private readonly frames = new Map<number, Frame>();
   private readonly habits = new Map<number, Habituation>();
+  private excluded = "[]";
 
   constructor(
     private readonly options: {
@@ -32,8 +34,10 @@ export class ChangeDetector {
       displays: () => Display[];
       /** Whether to capture at all (perception on and not paused, sidecar up). */
       active: () => boolean;
-      /** One frame per display, in the same order. */
-      grab: (displays: Display[]) => Promise<Frame[]>;
+      /** Lumi's windows to paint over (screen DIP); a change to them restarts the diff, since the painted area moved. */
+      exclude?: () => { x: number; y: number; width: number; height: number }[];
+      /** One frame per display, in the same order, `exclude` painted flat. */
+      grab: (displays: Display[], exclude: { x: number; y: number; width: number; height: number }[]) => Promise<Frame[]>;
       onChanges: (changes: Change[]) => void;
       /** Every grabbed frame, for other readers of the screen (the backdrop behind the face). */
       onFrames?: (displays: Display[], frames: Frame[]) => void;
@@ -64,8 +68,14 @@ export class ChangeDetector {
     try {
       const displays = this.options.displays();
       if (!displays.length) return;
+      const exclude = this.options.exclude?.() ?? [];
+      const key = JSON.stringify(exclude);
+      if (key !== this.excluded) {
+        this.excluded = key;
+        this.frames.clear();
+      }
       const t0 = performance.now();
-      const frames = await this.options.grab(displays);
+      const frames = await this.options.grab(displays, exclude);
       const t1 = performance.now();
       this.options.onFrames?.(displays, frames);
       const changes: Change[] = [];

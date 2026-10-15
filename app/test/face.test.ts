@@ -6,6 +6,7 @@ import { blinkCurve, blinkInterval, Blinker, CLOSE_MS, HOLD_MS, MAX_INTERVAL_MS,
 import { EXPRESSION_DEFS, NEUTRAL_SHAPE, shapeFor, transitionMs } from "../src/renderer/face/expressions";
 import { effectiveExpression } from "../src/renderer/face/face";
 import { fixationMs, GazeController, gazeOffset, MAX_OFFSET_X, MAX_OFFSET_Y, saccadeMs, vergenceFor } from "../src/renderer/face/gaze";
+import { chevronPoints, glasses, GLASSES_PUSH_MS, glassesPush, motionAt, ringGeometry, shockLines, squintLines, STILL } from "../src/renderer/face/glyphs";
 import { easeInOutCubic, easeOutBack, Tween } from "../src/renderer/face/tween";
 import { seeded, sequence } from "./helpers";
 
@@ -159,4 +160,80 @@ test("the conversation state wins over the emotion on the face", () => {
   assert.equal(effectiveExpression({ ...base, listening: true }), "ascolto");
   assert.equal(effectiveExpression({ ...base, thinking: true, listening: true }), "pensiero");
   assert.equal(effectiveExpression({ ...base, expression: "neutra", drowsy: true }), "sonno");
+});
+
+test("new expressions: glyphs and lines keep their full shape, the props and motions they bring", () => {
+  for (const e of ["sospetto", "paura", "spavento", "smorfia", "apatia"] as const) {
+    assert.deepEqual(shapeFor(e, 0.1), EXPRESSION_DEFS[e].shape, `${e} is never "a bit" of itself`);
+  }
+  assert.ok(shapeFor("saccente", 0.1).lidTop < EXPRESSION_DEFS.saccente.shape.lidTop, "a capsule expression still scales");
+  assert.equal(EXPRESSION_DEFS.paura.glyph, "ring");
+  assert.ok((EXPRESSION_DEFS.paura.pupil ?? 0) > 0 && !EXPRESSION_DEFS.spavento.pupil, "fear has tiny pupils, shock none");
+  assert.deepEqual(EXPRESSION_DEFS.saccente.accessories, ["glasses"]);
+  assert.equal(EXPRESSION_DEFS.saccente.onset, "glassesPush");
+  assert.equal(EXPRESSION_DEFS.spavento.onset, "freeze");
+  assert.ok(EXPRESSION_DEFS.apatia.still && EXPRESSION_DEFS.apatia.noBlink);
+  // A line is wider than tall: "_ _"
+  assert.ok(EXPRESSION_DEFS.apatia.shape.width * 14 > EXPRESSION_DEFS.apatia.shape.height * 44 * 3);
+});
+
+test("glyphs: > < chevrons point to the nose, rings hold a small pupil", () => {
+  const [a, b, c] = chevronPoints(16, 20, -1);
+  assert.deepEqual([a.x, b.x, c.x], [-8, 8, -8], "left eye: >");
+  assert.deepEqual(chevronPoints(16, 20, 1)[1], { x: -8, y: 0 }, "right eye: <");
+  const ring = ringGeometry(28, 28, 0.18, 1);
+  assert.equal(ring.rx, 12.4);
+  assert.ok(ring.pupil > 1 && ring.pupil < 3);
+  assert.equal(ringGeometry(28, 28, 0, 1).pupil, 0);
+});
+
+test("glasses sit on the face; the finger rises, pushes them up and leaves", () => {
+  const g = glasses({ x: 100, y: 100 }, { x: 136, y: 100 }, 1, 0);
+  assert.ok(g.lenses[0].x < 100 - 7 && g.lenses[0].x + g.lenses[0].width > 100 + 7, "the lens wraps the eye");
+  assert.equal(glasses({ x: 100, y: 100 }, { x: 136, y: 100 }, 1, 4).lenses[0].y, g.lenses[0].y - 4, "lift raises them");
+  assert.equal(glassesPush(-1, 1).finger, null);
+  const start = glassesPush(0, 1);
+  const contact = glassesPush(500, 1);
+  const held = glassesPush(700, 1);
+  assert.ok(start.finger && contact.finger && start.finger.y > contact.finger.y, "the finger comes up");
+  assert.equal(start.lift, 0);
+  assert.equal(held.lift, 4, "pushed up");
+  const after = glassesPush(GLASSES_PUSH_MS + 10, 1);
+  assert.equal(after.finger, null, "the finger is gone");
+  assert.equal(after.lift, 2, "the glasses stay a little higher");
+});
+
+test("doubt and shock lines; tremble, pulse and reading motions", () => {
+  const [above, below] = squintLines({ cx: 50, cy: 50, width: 16, height: 10 }, 1);
+  // The lines touch the slit (their stroke overlaps its edges): one piece, no gap
+  assert.ok(above[0].y > 45 - 2.6 / 2 && above[0].y < 45 + 2.6 / 2, "top line on the slit's top edge");
+  assert.ok(below[0].y > 55 - 2.6 / 2 && below[0].y < 55 + 2.6 / 2, "bottom line on the slit's bottom edge");
+  assert.ok(above[0].x < 42 && above[1].x > 58, "a little longer than the slit");
+  const shock = shockLines({ cx: 50, cy: 50, width: 28, height: 28 }, 1);
+  assert.equal(shock.length, 3);
+  assert.ok(shock.every(([a, b]) => a.x > 64 && a.y < b.y && b.y <= 34), "top right of the right eye, slanted");
+  assert.deepEqual(motionAt(null, 123, 0), STILL);
+  for (let t = 0; t < 2000; t += 37) {
+    const m = motionAt("tremble", t, 1);
+    assert.ok(Math.abs(m.dx) <= 0.85 && Math.abs(m.dy) <= 0.7, "a light tremble");
+    const p = motionAt("pulse", t, 1);
+    assert.ok(p.sy >= 0.8 && p.sy <= 1 && p.sx >= 0.9);
+    const r = motionAt("reading", t, 0);
+    assert.ok(r.gazeX >= -0.6 && r.gazeX <= 0.6);
+  }
+  assert.ok(motionAt("reading", 1500, 0).gazeX > motionAt("reading", 200, 0).gazeX, "reading goes left to right");
+  assert.equal(motionAt("tremble", 50, 1, 0), STILL, "no strength, no motion");
+});
+
+test("expressions without blinks resume them after; still eyes don't move on their own", () => {
+  const blinker = new Blinker(0, () => 0.5);
+  blinker.pause(3_600_000);
+  assert.ok(blinker.nextEventAt() >= 3_600_000);
+  blinker.resume(1000);
+  assert.ok(blinker.nextEventAt() < 2000);
+  const gaze = new GazeController(0, () => 0.5);
+  gaze.setStyle({ bias: { x: 0, y: 0.2 }, avert: false, saccadeRate: 1, still: true }, 0);
+  for (let t = 0; t < 30_000; t += 250) gaze.update(t);
+  assert.equal(gaze.active(30_000), false);
+  assert.equal(gaze.nextEventAt(), Number.POSITIVE_INFINITY);
 });

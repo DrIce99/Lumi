@@ -149,17 +149,43 @@ def test_screen_luma_frames(client, monkeypatch):
     assert screen.thumbnail_size(300, 200, 640) == (300, 200)
     asked = []
 
-    def fake(x, y, width, height, max_side):
+    def fake(x, y, width, height, max_side, exclude):
         asked.append((x, y, width, height, max_side))
+        assert exclude == [{"x": 10, "y": 20, "width": 400, "height": 460}]
         w, h = screen.thumbnail_size(width, height, max_side)
         return w, h, bytes([len(asked)]) * (w * h)
 
     monkeypatch.setattr(screen, "grab_luma", fake)
     regions = [{"x": 0, "y": 0, "width": 3440, "height": 1440}, {"x": 3440, "y": -232, "width": 1080, "height": 1920}]
-    res = client.post("/screen/luma", json={"regions": regions})
+    res = client.post("/screen/luma", json={"regions": regions, "exclude": [{"x": 10, "y": 20, "width": 400, "height": 460}]})
     assert res.headers["x-sizes"] == "640x268,360x640"
     assert res.content == bytes([1]) * (640 * 268) + bytes([2]) * (360 * 640)
     assert asked == [(0, 0, 3440, 1440, 640), (3440, -232, 1080, 1920, 640)]
+
+
+def test_screen_excludes_scaled_to_the_output():
+    import screen
+
+    # A 3440x1440 region at x=1000 shrunk to 640x268: Lumi's window half off the left edge, one outside
+    boxes = screen.scaled_excludes(
+        [{"x": 900, "y": 100, "width": 400, "height": 500}, {"x": 5000, "y": 0, "width": 10, "height": 10}],
+        1000, 0, 3440, 1440, 640, 268,
+    )
+    assert boxes == [(0, 18, 56, 112)]
+    assert screen.scaled_excludes(None, 0, 0, 10, 10, 10, 10) == []
+
+
+@pytest.mark.skipif(not hasattr(__import__("ctypes"), "windll"), reason="Windows only")
+def test_screen_excluded_rect_is_flat_gray():
+    import ctypes
+
+    import screen
+
+    ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+    w, h, luma = screen.grab_luma(0, 0, 400, 200, 400, [{"x": 100, "y": 50, "width": 100, "height": 100}])
+    assert (w, h) == (400, 200)
+    inside = {luma[y * w + x] for y in range(50, 150) for x in range(100, 200)}
+    assert inside == {128}
 
 
 @pytest.mark.skipif(not hasattr(__import__("ctypes"), "windll"), reason="Windows only")

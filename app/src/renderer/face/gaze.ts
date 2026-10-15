@@ -53,6 +53,8 @@ export interface GazeStyle {
   avert: boolean;
   /** Multiplies how often the eyes wander and micro-move. */
   saccadeRate: number;
+  /** No idle movement at all: no wandering, no micro-saccades (apathy). */
+  still?: boolean;
 }
 
 export interface GazeOutput {
@@ -106,7 +108,7 @@ export class GazeController {
 
   setStyle(style: GazeStyle, now: number): void {
     const changed =
-      style.avert !== this.style.avert || style.bias?.x !== this.style.bias?.x || style.bias?.y !== this.style.bias?.y;
+      style.avert !== this.style.avert || style.bias?.x !== this.style.bias?.x || style.bias?.y !== this.style.bias?.y || !!style.still !== !!this.style.still;
     this.style = style;
     if (changed) {
       this.pursuitTarget = null;
@@ -127,6 +129,7 @@ export class GazeController {
       this.saccadeTo(next, now);
       return;
     }
+    if (this.style.still) return;
     const rate = Math.max(0.1, this.style.saccadeRate);
     if (!this.command.target && !this.style.bias && now >= this.nextWanderAt && now >= this.fixationUntil) {
       this.wander(now);
@@ -155,6 +158,7 @@ export class GazeController {
 
   /** When the eyes will move next on their own (micro-saccade, wandering, a queued target). */
   nextEventAt(): number {
+    if (this.style.still) return this.pending ? this.fixationUntil : Number.POSITIVE_INFINITY;
     let next = this.nextMicroAt;
     if (this.pending) next = Math.min(next, this.fixationUntil);
     if (!this.command.target && !this.style.bias) next = Math.min(next, Math.max(this.nextWanderAt, this.fixationUntil));

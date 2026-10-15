@@ -119,6 +119,8 @@ export interface Settings {
     adaptiveShadow: boolean;
     /** Squints when the watched screen suddenly turns bright (needs perception). */
     glare: boolean;
+    /** Visible to OBS, Remote Desktop and screen sharing (Lumi's own captures paint it over). */
+    showInCaptures: boolean;
   };
   perception: {
     enabled: boolean;
@@ -176,7 +178,7 @@ export const DEFAULT_SETTINGS: Settings = {
   voices: { enabled: true, onlyMe: false },
   discord: { enabled: false, userId: "" },
   appAudio: { enabled: false, apps: ["Discord"] },
-  face: { scale: 1, color: "#F5F3EE", subtitles: false, adaptiveShadow: true, glare: true },
+  face: { scale: 1, color: "#F5F3EE", subtitles: false, adaptiveShadow: true, glare: true, showInCaptures: false },
   perception: {
     enabled: true,
     ocr: "windows",
@@ -269,7 +271,8 @@ export interface FaceState {
 }
 
 /** A short eye gesture, independent of the expression. */
-export type FaceGesture = "nod" | "shake" | "bounce" | "tremble";
+/** freeze: half a second still, then a jolt (shock); glassesPush: a finger pushes the glasses up (saccente). */
+export type FaceGesture = "nod" | "shake" | "bounce" | "tremble" | "freeze" | "glassesPush";
 
 export type BubbleKind = "speech" | "system" | "question";
 

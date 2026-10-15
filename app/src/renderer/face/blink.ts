@@ -66,6 +66,13 @@ export class Blinker {
     if (this.nextAt < until) this.nextAt = until + between(this.random, 200, 600);
   }
 
+  /** Ends a pause at once (an expression without blinks is over). */
+  resume(now: number): void {
+    if (this.pausedUntil <= now) return;
+    this.pausedUntil = 0;
+    this.nextAt = now + between(this.random, 300, 900);
+  }
+
   /** Blinks now, unless a blink is already running or blinking is paused. */
   trigger(now: number): boolean {
     if (this.blinking(now) || now < this.pausedUntil) return false;
