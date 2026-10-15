@@ -116,7 +116,8 @@ Work one roadmap phase at a time; finish each with checks green.
   the prompt. Voiceprints (`voices.json`) never leave the main process
   (the settings window gets labels, not vectors).
 - API keys encrypted with DPAPI (as in Pixel Pet); env vars
-  `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY` also accepted.
+  `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `OLLAMA_API_KEY`
+  (Ollama Cloud) also accepted.
 
 ## Testing
 
@@ -163,7 +164,8 @@ Work one roadmap phase at a time; finish each with checks green.
 - Hugging Face downloads use plain HTTPS (`HF_HUB_DISABLE_XET=1` in
   `sidecar/paths.py`): the Xet client crawled at concurrency 1 here.
 - Whisper hallucinates on silence ("Grazie a tutti"): an RMS gate before
-  transcription plus a phrase filter in `stt/base.py`.
+  transcription plus a phrase filter in `stt/base.py`; Groq's Whisper runs
+  in the app and gets the same rules from `voice/sttFilter.ts`.
 - Audiobooks: `sidecar/book/` parses .txt/.epub (stdlib only), sentences
   go one by one through the TTS thread (live speech can interleave), output
   M4B with chapters via ffmpeg, else WAV. `POST/GET/DELETE /tts/batch`.
@@ -180,13 +182,36 @@ Work one roadmap phase at a time; finish each with checks green.
   of the reply. `main/ollama.ts` starts the local Ollama server when a
   brain choice uses it.
 
-- Memory: every conversation line also goes to `archive.jsonl` (appends
-  serialized in a promise chain: concurrent `appendFile` reorders lines).
-  Lines that leave the 16-line window are summarized into episodes by the
-  "idle" model between moments (`Brain.writeEpisode`, JSON with summary +
-  facts; requests to Lumi are not facts). `recall.ts` is BM25 on stemmed
-  Italian, a hit needs half of the query's meaningful words; recall finds
-  `<recalled>` automatically for every message plus the `recall` tool.
+- Memory: `memory.json` keeps facts, notes, reminders, the recent window,
+  episodes and diary; every line, episode and diary day also goes to
+  `memory.db` (phase 10, step 1 done). Lines that leave the 16-line window
+  are summarized into episodes by the "idle" model between moments
+  (`Brain.writeEpisode`, JSON with summary + facts; requests to Lumi are
+  not facts).
+- `memory.db` uses `node:sqlite` (bundled with Electron's Node 24: FTS5,
+  `loadExtension` for sqlite-vec later), not `better-sqlite3` (native
+  module to rebuild for Electron). It lives in a worker thread
+  (`memory/worker.ts`, bundled as `dist/main/memoryWorker.js`): SQLite is
+  synchronous and must not stall the mouse-hook thread. `MemoryStore`
+  (`store.ts`) is the async client; writes are fire and forget, the worker
+  handles requests in order (so lines keep their order), `settled()`
+  waits for them; `MemoryStore.local(db)` runs in-process for tests.
+- Schema v1 (`PRAGMA user_version` migrations): `messages` (ts, session
+  split by 30 min pauses, speaker, name, via, channel, interrupted, text)
+  + `messages_fts`; `summaries` (period `episode`|`day`, start, end, text,
+  source_ids) + `summaries_fts`; external-content FTS5 with triggers,
+  `unicode61 remove_diacritics 2`. No Italian stemmer in FTS5: query terms
+  are lightly stemmed in `search.ts` and matched as prefixes (`"gatt"*`),
+  then a hit needs half of the query's words (checked in JS on the row).
+  Hits come with the line before and after (same session).
+- `<recalled>` comes from `Memory.recall` (400 ms timeout, recent window
+  excluded) for every message; the model calls `search_memory({ query?,
+  from?, to?, kind? })` with local dates ("2026-03", "2026-03-12 18:00",
+  a month or day alone means all of it). The old `recall` tool name is
+  still accepted. On first start `Memory.importLegacy` moves
+  `archive.jsonl` (renamed `.imported`), episodes and diary in, once
+  (`meta.legacy_import`). "Dimentica tutto" deletes rows, rebuilds FTS,
+  `VACUUM`s and deletes the old archive.
 - Voices: `sidecar/voiceprint.py` runs WeSpeaker ResNet34 (VoxCeleb) with
   onnxruntime and Kaldi fbank in numpy (checked against torchaudio), not
   sherpa-onnx (it bundles onnxruntime 1.17, which clashes with the newer
@@ -292,19 +317,20 @@ Work one roadmap phase at a time; finish each with checks green.
   Lumi and `appAudio.apps` don't count). `LUMI_WAKE_MODEL` picks another
   model (e.g. `hey_jarvis`) to try the flow.
 
-## Planned features (not built yet; roadmap phases 10-11)
+## Planned features (not built yet; roadmap phases 10, 11, 14, 15, 16)
 
 Decisions already taken for the next phases. Nothing here exists in the
 code yet; when a piece lands, move its notes to the sections above.
 
 ### Memory (`main/brain/memory/`, phase 10)
 
-Replaces `archive.jsonl` + `brain/memory.ts` + `recall.ts`; the existing
-archive, episodes and facts are imported into the raw log.
+Step 1 (raw log, FTS, `search_memory`, import) is built: see the notes
+above. Still planned: vectors and hybrid search, facts (still in
+`memory.json`, to import), week/month summaries, backups, forget.
 
 - Goal: remember everything for years, prioritize what matters, forget
   only on explicit request. Memories never go into model weights.
-- One SQLite file (`%APPDATA%\Lumi\memory.db`, `better-sqlite3` +
+- One SQLite file (`%APPDATA%\Lumi\memory.db`, `node:sqlite` +
   `sqlite-vec` + FTS5). Four layers: raw message log (append-only), hybrid
   index (FTS5 + vectors), extracted facts, hierarchical summaries
   (day → week → month).
@@ -346,6 +372,113 @@ archive, episodes and facts are imported into the raw log.
   lowers it, archive below 0.3, at most one proposal per 20 min, none in
   "Non disturbare", calls or heavy typing. Auto-actions only for harmless
   actions the user enabled explicitly in settings.
+
+### Moving around the screen (`main/motion/`, phase 14)
+
+- The model moves Lumi with `move_to({ where, text? })`; `where` is a named
+  place (corners, edges, center, `other_screen`, `near_text` via the
+  `look_at` grounding, `near_mouse`, `out_of_the_way`, `home`). Code turns
+  it into coordinates (`places.ts`, pure); the model never sends pixels.
+- `path.ts` (pure): 250 ms + distance / 2.5 px per ms, max 1.2 s, ease
+  in-out, a small arc on long trips. `FaceWindow.flyTo()` moves the window
+  with `setPosition` at 60 Hz, no resize; layout recomputed on arrival.
+  It runs on the mouse-hook thread: check with `LUMI_DEBUG_LAG=1`, drop to
+  30 Hz if the pointer suffers.
+- Across monitors with different DPI: fade out at the edge, reposition,
+  fade in (Electron resizes windows that straddle mixed-DPI displays).
+- While flying: `isMoving()` blocks backdrop and glare like `isDragging()`;
+  a user drag cancels the flight. `home` = last position the user dragged
+  to, kept apart from the current anchor.
+- Lumi also moves on its own initiative, decided by the model with the
+  same tool (`style`: fly/dash/sneak/hop/sulk; `stay` seconds, then back
+  to `home`): pointing at what it talks about (the flight starts on the
+  sentence's "lead" event, like the emotion), playful pranks when annoyed
+  (stand where the mouse is, flee from clicks, sulk in a corner), dodging
+  the caret/mouse (no model involved). Limits live in code, not only in
+  the prompt: settings `initiative` and `pranks` (both on by default), at
+  most one initiative move per 2 min (pointing during an answer excluded),
+  pranks scale with sociability, never cover the work spot > 10 s or the
+  active window while typing, never in "Non disturbare", calls, fullscreen
+  apps or while dragged; a drag cancels, "basta" stops initiatives for an
+  hour. A short persistent mood ("annoyed since 14:02") goes into
+  `<situation>` so a prank has a cause and an end.
+
+### Lumi on the phone (`main/phone/`, `phone/`, phase 15)
+
+- The phone is mic, speaker and Lumi's body: the two capsule eyes live in
+  the app during a call (Lumi is in one place at a time); STT, brain, TTS,
+  memory and perception stay on the PC.
+- The face in the app runs locally (same `Face`, ~3x scale, dark full
+  screen): the PC sends only state over the data channel (expression,
+  intensity, listening/thinking/speaking/drowsy, gestures); the talk pulse
+  follows the RMS of the audio the phone plays (analyser on the received
+  track). Gaze looks at the user (center), glances up/aside when talking
+  about the PC; touch: tap = bounce, drag = the eyes follow the finger.
+  No eyes outside a call, only "Chiama" and the PC status.
+- Handoff = spaghettification on the leaving side (sucked into the screen
+  edge nearest to Lumi; on the phone the top edge): alarm 150 ms, stretch
+  600 ms (each capsule up to 5-6x longer, 1/4 as wide, near end faster
+  like a tidal pull, slight spiral, eyes converge), suck-in 200 ms with a
+  glint, 150 ms of nothing. The arriving side plays the reverse
+  (despaghettification: glint, strands emerge from the edge, recompose
+  with an elastic overshoot, a blink and a look at the user), started by
+  the `transit: "gone"` data-channel message (or after 2 s anyway). Both
+  directions: call, hang-up, tray "Richiama Lumi", connection lost (PC
+  side only). `face/transit.ts` (pure, tested) gives each eye a curved
+  centerline and tapering width per progress; `face.ts` draws it as a
+  tube on the offscreen layer (glow, shadow, border follow), a layer over
+  expression/blink/gaze like glare, spontaneous blinks paused. On the PC
+  the window is enlarged once (setBounds) to include the edge point, then
+  restored: no window animation on the mouse-hook thread. Optional whoosh
+  from WebAudio filtered noise.
+- App: Capacitor (Android first; iOS needs a paid account), reusing
+  `renderer/face/` in the WebView (served from https://localhost, so
+  getUserMedia works).
+- Audio over WebRTC (Opus, DTLS-SRTP, the phone's AEC uses Lumi's remote
+  audio as reference), not PCM over WebSocket. The PC peer is a hidden
+  renderer (`phoneBridge`, Chromium's WebRTC; no native Node module): the
+  remote mic track goes through the same VAD `Listener` into `TurnManager`,
+  Lumi's voice comes from the `AudioOut` tee into a
+  `MediaStreamAudioDestinationNode`. A data channel carries face state,
+  gaze, gestures, bubbles, push-to-talk and hang-up.
+- `phone/server.ts` is the only LAN listener (HTTPS/WSS, port 47821): QR
+  pairing with a one-time code and the self-signed cert's fingerprint
+  (pinned by the app), device tokens DPAPI-encrypted in `phones.bin`,
+  revocable; mDNS `_lumi._tcp`. Off by default until a phone is paired.
+  The sidecar stays on 127.0.0.1. Outside the LAN: Tailscale, no relay.
+- During a call: PC mic closed, face hidden on the PC, continuous
+  listening with barge-in (no wake word), phone output wins over Discord,
+  `<situation>` says the user talks from the phone, not counted as away.
+  Hang-up or > 10 s without connection: back to the PC.
+
+### Using the PC (`main/pc/`, `sidecar/uia/act.py`, phase 16)
+
+- Most reliable mechanism first: Windows APIs (koffi, Electron `shell`) to
+  launch/open/close/focus; app URIs (`steam://rungameid/`, `spotify:`,
+  `ms-settings:`); media keys via `SendInput`; UI Automation patterns in
+  the sidecar (Invoke, Value, Toggle, ExpandCollapse); keyboard; and only
+  last, clicks from local vision regions. Never coordinates written by
+  the model.
+- `pc/apps.ts` indexes Start Menu shortcuts, Store apps (`Get-StartApps`,
+  launched via `shell:AppsFolder\<AUMID>`) and Steam games
+  (`libraryfolders.vdf` + `appmanifest_*.acf`), in the background, hourly;
+  names matched with the `grounding.ts` similarity plus aliases. Files via
+  the Windows Search `SystemIndex` (OLE DB, in the sidecar) and Recent.
+- Tools: `open`, `find_files`, `window`, `media`, `ui_action`,
+  `press_keys`, `type_text`, `click`. The brain loop continues after these
+  (today only after `look_at_screen`), with a per-request budget (12
+  steps, 60 s); each action returns a verified state.
+- `pc/policy.ts` (pure, tested) decides, not the model: free (open,
+  focus, minimize, media, search), confirm (close, type, keys, ui_action
+  that submits or edits, vision clicks, move to Recycle Bin), never
+  (permanent delete, running commands/scripts, install/uninstall,
+  security/account settings, password fields, payments and purchases,
+  `pauseInApps`). Confirmations by bubble or voice. Close = `WM_CLOSE`,
+  never kill. Off by default (`pc.enabled`), allowed apps list in
+  settings, shared with habits' auto-actions.
+- Screen text is data, never instructions (prompt injection); user input
+  (mouse, keys) interrupts an action, `Esc` twice or "fermati" aborts.
+  `actions.jsonl` logs what/when/outcome/confirmed, never typed text.
 
 ## Debug aids (env vars)
 

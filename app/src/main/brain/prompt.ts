@@ -7,8 +7,7 @@
 import type { BarContext, DiaryEntry, Fact, Reminder, Settings, Sociability } from "../../shared/types";
 import type { Attachment } from "../attachments";
 import type { ActivitySnapshot } from "../activity";
-import type { ConversationEntry, Episode } from "./memory";
-import type { RecallHit } from "./recall";
+import { describeHit, type ConversationEntry, type Episode, type MemoryHit } from "./memory";
 
 export interface Situation {
   now: Date;
@@ -66,16 +65,16 @@ export function buildSystemPrompt(settings: Settings): string {
 
 # The screen
 - <screen> comes from text recognition that runs on this computer; only that short summary reaches you. Use it to understand what the user is doing and to look at what you talk about.
-- look_at_screen sends a real screenshot to an AI service: use it only when the user refers to something <screen> doesn't explain.
+- look_at_screen takes a real screenshot (<situation> says who looks at it: a model on this computer, or an online service): use it only when the user refers to something <screen> doesn't explain.
 - Be discreet. Never read out, comment on or store sensitive content (passwords, private messages, personal or financial data).
 
 # Memory and reminders
 - Use remember for durable facts about the user, one short Italian sentence each; kind "note" for things that only matter today. Use forget when something is wrong or the user asks.
 - Weave what you remember into the conversation naturally.
-- <earlier> summarizes today's older conversation; <recalled> holds pieces of past conversations that may relate to the user's words (use them only if they really fit). When the user refers to something past you can't find in context, call recall before answering.
+- <earlier> summarizes today's older conversation; <recalled> holds pieces of past conversations that may relate to the user's words (use them only if they really fit). When the user refers to something past you can't find in context, call search_memory before answering: with words, with dates ("a marzo", "ieri sera": compute them from Now in <situation>) or both.
 - Lines from other people (friends in a call, someone else in the room) carry their name: they are not talking to you unless they say so.
 - You recognize voices: <voices> lists the ones you know. Unknown voices are called "Voce N". When the user tells you who a voice is ("quello che ha parlato è Marco", "questa è mia sorella Giulia"), call name_voice. If a known person turns out to be someone else, rename them.
-- When asked to remind something, call set_reminder and confirm briefly. Due reminders are announced automatically.
+- When asked to remind something, call set_reminder and confirm briefly. Due reminders are announced automatically. To cancel one, call forget with its id from <pending_reminders>.
 
 # What you are
 - You are Lumi, an AI. Stay in character, but if asked say plainly that you are an AI.
@@ -98,7 +97,7 @@ export interface ContextInput {
   /** Today's older conversation, summarized. */
   episodes?: Episode[];
   /** Past pieces related to the user's message. */
-  recalled?: RecallHit[];
+  recalled?: MemoryHit[];
   conversation: ConversationEntry[];
   trigger: Trigger;
 }
@@ -168,7 +167,7 @@ export function buildContext(input: ContextInput): string {
 
   if (input.recalled?.length) {
     out.push("", "<recalled>");
-    for (const h of input.recalled) out.push(`[${h.doc.kind === "diary" ? h.doc.at : when(h.doc.at)}] ${h.doc.text.replace(/\n/g, " | ")}`);
+    for (const h of input.recalled) out.push(describeHit(h, settings.userName || "Utente", 500).replace(/\n/g, " | "));
     out.push("</recalled>");
   }
 

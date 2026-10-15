@@ -4,6 +4,7 @@
 import type { FetchLike } from "../brain/providers/compat";
 import { fetchError, httpError } from "../brain/providers/compat";
 import type { SttHandlers } from "./sttClient";
+import { cleanTranscript, isSilence } from "./sttFilter";
 import type { SttBackend } from "./turns";
 
 const URL = "https://api.groq.com/openai/v1/audio/transcriptions";
@@ -85,13 +86,14 @@ export class GroqStt implements SttBackend {
       offset += c.byteLength;
     }
     const durationMs = Math.round((pcm.byteLength / 32_000) * 1000);
-    if (durationMs < 200) {
+    // Silence never goes out: Whisper would make something up
+    if (durationMs < 200 || isSilence(pcm)) {
       session.handlers.final({ text: "", words: [], durationMs, ms: 0 });
       return;
     }
     const started = Date.now();
     void this.transcribe(pcm, session.vocabulary)
-      .then((text) => session.handlers.final({ text, words: [], durationMs, ms: Date.now() - started }))
+      .then((text) => session.handlers.final({ text: cleanTranscript(text, durationMs / 1000), words: [], durationMs, ms: Date.now() - started }))
       .catch((err: unknown) => session.handlers.final({ text: "", words: [], durationMs, ms: Date.now() - started, error: err instanceof Error ? err.message : String(err) }));
   }
 

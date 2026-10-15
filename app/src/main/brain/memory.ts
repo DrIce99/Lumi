@@ -1,18 +1,20 @@
 // Long-term memory: facts about the user, short-lived notes, the recent
 // conversation (with interrupted answers marked as such), episodes (older
 // parts of the conversation, summarized), a per-day diary and reminders.
-// Saved in %APPDATA%\Lumi\memory.json. Every line of conversation also
-// goes to archive.jsonl, so nothing said is lost when the recent window
-// moves on: `search` finds it again.
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { appendFile } from "node:fs/promises";
+// Saved in %APPDATA%\Lumi\memory.json. Every line of conversation, every
+// episode and diary day also goes to memory.db (memory/db.ts, in a worker
+// thread), so nothing said is lost when the recent window moves on:
+// `recall` and `searchMemory` find it again, by words and by date.
+import { existsSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { DiaryEntry, Fact, FactKind, Reminder } from "../../shared/types";
 import { DebouncedWriter, readJson } from "../jsonStore";
 import { log } from "../log";
-import { search, type RecallDoc, type RecallHit } from "./recall";
+import type { LineInput, MemoryHit, SearchRequest, SearchResult, Speaker } from "./memory/db";
+import type { MemoryStore } from "./memory/store";
+import { localStamp } from "./memory/search";
 
-export type Speaker = "user" | "lumi" | "other";
+export type { MemoryHit, Speaker };
 
 export interface ConversationEntry {
   at: string;
@@ -58,14 +60,12 @@ const MAX_NOTES = 40;
 const MAX_CONVERSATION = 120;
 const MAX_DIARY = 60;
 const MAX_EPISODES = 300;
-/** Archived lines kept in memory for search (the file keeps everything). */
-const MAX_ARCHIVE = 20_000;
 /** Lines the prompt shows verbatim; older ones are summarized into episodes. */
 export const RECENT_LINES = 16;
 /** Unsummarized older lines that make an episode worth writing. */
 const EPISODE_LINES = 20;
-/** Archived lines searched together (a short exchange). */
-const WINDOW = 3;
+/** Automatic recall must not slow the answer down. */
+const RECALL_TIMEOUT_MS = 400;
 
 export function localDate(d: Date = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -79,24 +79,66 @@ export function speakerLabel(e: ConversationEntry, user: string): string {
   return e.name || "Qualcun altro";
 }
 
+/** A memory found by a search, as the model reads it: "[2026-03-12 18:40] Diego: ..." or "[diario 2026-03-12] ...". */
+export function describeHit(hit: MemoryHit, user: string, maxChars = 700): string {
+  const clip = (t: string) => (t.length > maxChars ? `${t.slice(0, maxChars - 1)}…` : t);
+  if (hit.kind === "conversation") {
+    const lines = hit.lines.map((l) => `${speakerLabel(l, user)}${l.via ? ` (${l.via})` : ""}: ${l.text}${l.interrupted ? " [interrotto]" : ""}`);
+    return `[${localStamp(hit.at)}] ${clip(lines.join("\n"))}`;
+  }
+  if (hit.kind === "day") return `[diario ${localStamp(hit.at).slice(0, 10)}] ${clip(hit.text)}`;
+  return `[riassunto ${localStamp(hit.at)} - ${localStamp(hit.end).slice(11)}] ${clip(hit.text)}`;
+}
+
 export class Memory {
   private data: MemoryData;
   private readonly writer: DebouncedWriter | null;
-  private readonly archiveFile: string | null;
-  private archive: ConversationEntry[] = [];
-  /** Appends run one after the other, so the file keeps the order of the lines. */
-  private archiveWrites: Promise<void> = Promise.resolve();
+  /** The old archive (before memory.db); renamed once imported. */
+  private readonly legacyArchive: string | null;
 
   constructor(
     file: string | null,
+    /** memory.db; null keeps only memory.json (searches find nothing). */
+    private readonly store: MemoryStore | null = null,
     private readonly now: () => Date = () => new Date(),
   ) {
     const loaded = file ? readJson<MemoryData>(file) : null;
     this.data = loaded?.version === 1 ? loaded : this.empty();
     this.data.episodes ??= [];
     this.writer = file ? new DebouncedWriter(file, () => this.data) : null;
-    this.archiveFile = file ? join(dirname(file), "archive.jsonl") : null;
-    this.loadArchive();
+    this.legacyArchive = file ? join(dirname(file), "archive.jsonl") : null;
+  }
+
+  /**
+   * First start with memory.db: the old archive.jsonl (or, without it, the
+   * conversation kept so far), episodes and diary go into it, once. The
+   * archive is then renamed, not deleted.
+   */
+  async importLegacy(): Promise<void> {
+    if (!this.store) return;
+    const file = this.legacyArchive;
+    let lines: ConversationEntry[] = [];
+    if (file && existsSync(file)) {
+      for (const line of readFileSync(file, "utf8").split("\n")) {
+        if (!line.trim()) continue;
+        try {
+          lines.push(JSON.parse(line) as ConversationEntry);
+        } catch {
+          // A torn last line after a crash: skip it
+        }
+      }
+    } else lines = [...this.data.conversation];
+    const summaries = [
+      ...this.episodes().map((e) => ({ kind: "episode" as const, start: e.start, end: e.end, text: e.summary })),
+      ...this.data.diary.map((d) => ({ kind: "day" as const, start: dayStart(d.date), end: dayStart(d.date, 1), text: d.summary })),
+    ];
+    try {
+      const imported = await this.store.importLegacy({ lines, summaries });
+      if (imported) log.info(`Memory: imported ${imported} lines and ${summaries.length} summaries into memory.db`);
+      if (file && existsSync(file)) renameSync(file, `${file}.imported`);
+    } catch (err) {
+      log.error("Importing the old archive into memory.db failed (it stays where it is)", err);
+    }
   }
 
   // ---- facts and notes ----
@@ -125,10 +167,12 @@ export class Memory {
     return fact;
   }
 
+  /** Deletes a fact, a note or a pending reminder by id. */
   forget(id: string): boolean {
-    const before = this.data.facts.length;
+    const before = this.data.facts.length + this.data.reminders.length;
     this.data.facts = this.data.facts.filter((f) => f.id !== id);
-    const removed = this.data.facts.length !== before;
+    this.data.reminders = this.data.reminders.filter((r) => r.id !== id);
+    const removed = this.data.facts.length + this.data.reminders.length !== before;
     if (removed) this.save();
     return removed;
   }
@@ -138,23 +182,21 @@ export class Memory {
     const bornAt = this.data.stats.bornAt;
     this.data = this.empty();
     this.data.stats.bornAt = bornAt;
-    this.archive = [];
-    const file = this.archiveFile;
-    if (file) {
-      this.archiveWrites = this.archiveWrites.then(() => {
-        try {
-          writeFileSync(file, "", "utf8");
-        } catch (err) {
-          log.warn("Cannot clear the conversation archive", err);
-        }
-      });
+    void this.store?.clear();
+    for (const file of this.legacyArchive ? [this.legacyArchive, `${this.legacyArchive}.imported`] : []) {
+      try {
+        rmSync(file, { force: true });
+      } catch (err) {
+        log.warn(`Cannot delete ${file}`, err);
+      }
     }
     this.save();
   }
 
   // ---- conversation and diary ----
 
-  addMessage(who: Speaker, text: string, interrupted = false, extra: { name?: string; via?: string } = {}): void {
+  /** `channel`: how it reached Lumi (voice, text, bar, an app), kept in memory.db only. */
+  addMessage(who: Speaker, text: string, interrupted = false, extra: { name?: string; via?: string; channel?: string } = {}): void {
     const clean = text.trim();
     if (!clean) return;
     const entry: ConversationEntry = {
@@ -166,7 +208,7 @@ export class Memory {
       ...(extra.via ? { via: extra.via } : {}),
     };
     this.data.conversation.push(entry);
-    this.toArchive([entry]);
+    this.store?.append(entry satisfies LineInput, extra.channel ?? extra.via);
     if (who === "user") this.data.stats.chats += 1;
     if (this.data.conversation.length > MAX_CONVERSATION) {
       this.data.conversation.splice(0, this.data.conversation.length - MAX_CONVERSATION);
@@ -184,29 +226,34 @@ export class Memory {
 
   /**
    * Past local days that still have to go into the diary: their episodes
-   * and the lines no episode covers (from the archive, so lines that left
+   * and the lines no episode covers (from memory.db, so lines that left
    * the recent window are not lost).
    */
-  pendingDiaryDays(): { date: string; episodes: Episode[]; entries: ConversationEntry[] }[] {
+  async pendingDiaryDays(): Promise<{ date: string; episodes: Episode[]; entries: ConversationEntry[] }[]> {
     const today = localDate(this.now());
     const days = new Set<string>();
     for (const entry of this.data.conversation) {
       const date = localDate(new Date(entry.at));
       if (date < today) days.add(date);
     }
-    const source = this.archive.length ? this.archive : this.data.conversation;
-    return [...days].sort().map((date) => {
+    const out: { date: string; episodes: Episode[]; entries: ConversationEntry[] }[] = [];
+    for (const date of [...days].sort()) {
       const episodes = this.episodes().filter((e) => localDate(new Date(e.end)) === date);
       const coveredUntil = episodes[episodes.length - 1]?.end ?? "";
+      const logged = this.store ? await this.store.between(dayStart(date), dayStart(date, 1)) : [];
+      const source: ConversationEntry[] = logged.length ? logged.map(({ id: _id, session: _session, channel: _channel, ...line }) => line) : this.data.conversation;
       const entries = source.filter((e) => localDate(new Date(e.at)) === date && e.at > coveredUntil);
-      return { date, episodes, entries };
-    });
+      out.push({ date, episodes, entries });
+    }
+    return out;
   }
 
-  /** Stores a day summary and drops that day's raw conversation (the archive keeps it). */
+  /** Stores a day summary and drops that day's raw conversation (memory.db keeps it). */
   addDiary(date: string, summary: string): void {
+    const text = summary.trim().slice(0, 1500);
     this.data.diary = this.data.diary.filter((d) => d.date !== date);
-    this.data.diary.push({ date, summary: summary.trim().slice(0, 1500) });
+    this.data.diary.push({ date, summary: text });
+    this.store?.addSummary({ kind: "day", start: dayStart(date), end: dayStart(date, 1), text });
     this.data.diary.sort((a, b) => a.date.localeCompare(b.date));
     if (this.data.diary.length > MAX_DIARY) this.data.diary.splice(0, this.data.diary.length - MAX_DIARY);
     this.data.conversation = this.data.conversation.filter((e) => localDate(new Date(e.at)) !== date);
@@ -242,23 +289,29 @@ export class Memory {
     const list = this.episodes();
     list.push(episode);
     if (list.length > MAX_EPISODES) list.splice(0, list.length - MAX_EPISODES);
+    this.store?.addSummary({ kind: "episode", start: episode.start, end: episode.end, text: clean });
     this.save();
     return episode;
   }
 
-  /** Past conversation, episodes and diary days related to `query` (the recent window is excluded: it is already in context). */
-  search(query: string, limit = 3, user = "Utente"): RecallHit[] {
+  /** Where the recent window (already in the prompt) starts. */
+  recentFrom(): string | undefined {
     const recent = this.data.conversation;
-    const recentFrom = recent.length ? recent[Math.max(0, recent.length - RECENT_LINES)].at : "￿";
-    const docs: RecallDoc[] = [];
-    const older = this.archive.filter((e) => e.at < recentFrom);
-    for (let i = 0; i < older.length; i += WINDOW) {
-      const window = older.slice(i, i + WINDOW);
-      docs.push({ id: `a${i}`, at: window[0].at, kind: "conversation", text: window.map((e) => `${speakerLabel(e, user)}: ${e.text}`).join("\n") });
-    }
-    for (const e of this.episodes()) docs.push({ id: e.id, at: e.start, kind: "episode", text: e.summary });
-    for (const d of this.data.diary) docs.push({ id: `d${d.date}`, at: d.date, kind: "diary", text: d.summary });
-    return search(docs, query, limit);
+    return recent.length ? recent[Math.max(0, recent.length - RECENT_LINES)].at : undefined;
+  }
+
+  /** Past conversation, episodes and diary days related to the user's words (automatic recall: quick, or nothing). */
+  async recall(query: string, limit = 3): Promise<MemoryHit[]> {
+    if (!this.store) return [];
+    const result = await this.store.search({ query, limit, before: this.recentFrom() }, RECALL_TIMEOUT_MS);
+    return result?.hits ?? [];
+  }
+
+  /** The search_memory tool: words and/or dates and kind; null when memory.db is unavailable. */
+  async searchMemory(request: SearchRequest): Promise<SearchResult | null> {
+    if (!this.store) return null;
+    // Words skip what the prompt already shows; a date range lists everything in it
+    return this.store.search({ ...request, ...(request.query ? { before: this.recentFrom() } : {}) });
   }
 
   // ---- reminders ----
@@ -304,44 +357,9 @@ export class Memory {
     this.writer?.schedule();
   }
 
-  private loadArchive(): void {
-    if (!this.archiveFile) return;
-    if (!existsSync(this.archiveFile)) {
-      // First run with an archive: start it from the conversation kept so far
-      this.toArchive(this.data.conversation);
-      return;
-    }
-    try {
-      for (const line of readFileSync(this.archiveFile, "utf8").split("\n")) {
-        if (!line.trim()) continue;
-        try {
-          this.archive.push(JSON.parse(line) as ConversationEntry);
-        } catch {
-          // A torn last line after a crash: skip it
-        }
-      }
-      if (this.archive.length > MAX_ARCHIVE) this.archive.splice(0, this.archive.length - MAX_ARCHIVE);
-    } catch (err) {
-      log.warn("Cannot read the conversation archive", err);
-    }
-  }
-
-  private toArchive(entries: ConversationEntry[]): void {
-    if (!entries.length) return;
-    this.archive.push(...entries);
-    if (this.archive.length > MAX_ARCHIVE) this.archive.splice(0, this.archive.length - MAX_ARCHIVE);
-    if (!this.archiveFile) return;
-    // Appended without blocking the main thread (the mouse hook runs on it)
-    const file = this.archiveFile;
-    const text = entries.map((e) => JSON.stringify(e)).join("\n") + "\n";
-    this.archiveWrites = this.archiveWrites
-      .then(() => appendFile(file, text, "utf8"))
-      .catch((err: unknown) => log.warn("Cannot append to the conversation archive", err));
-  }
-
-  /** Resolves once the archive file has every line (tests, shutdown). */
+  /** Resolves once memory.db has every line (tests, shutdown). */
   archived(): Promise<void> {
-    return this.archiveWrites;
+    return this.store?.settled() ?? Promise.resolve();
   }
 
   private pruneFacts(): void {
@@ -365,4 +383,10 @@ export class Memory {
       stats: { bornAt: now, lastSeenAt: now, chats: 0 },
     };
   }
+}
+
+/** Local midnight of a "YYYY-MM-DD" day (plus `days`), as ISO. */
+function dayStart(date: string, days = 0): string {
+  const [y, m, d] = date.split("-").map(Number);
+  return new Date(y, m - 1, d + days).toISOString();
 }

@@ -16,6 +16,7 @@ import { GazeOverlay } from "./debugOverlay";
 import { Autonomy } from "./brain/autonomy";
 import { Brain, type BrainHost, type SpeechSink } from "./brain/brain";
 import { Memory } from "./brain/memory";
+import { MemoryStore } from "./brain/memory/store";
 import type { Situation, Trigger } from "./brain/prompt";
 import { CommandBar } from "./commandbar";
 import { detectGpu } from "./gpu";
@@ -105,7 +106,10 @@ function start(): void {
   const settings = () => settingsStore.get();
   const apiKeys = new ApiKeyStore(dataDir);
   const services = new Services(settings, apiKeys);
-  const memory = new Memory(join(dataDir, "memory.json"));
+  // Every line said, searchable for years: SQLite in a worker thread
+  const memoryStore = MemoryStore.open(join(dataDir, "memory.db"), join(__dirname, "memoryWorker.js"));
+  const memory = new Memory(join(dataDir, "memory.json"), memoryStore);
+  void memory.importLegacy();
   const speakers = new Speakers(join(dataDir, "voices.json"));
 
   /** Who said an utterance at the microphone: the user, or another voice (by name or "Voce N"). */
@@ -1015,7 +1019,7 @@ function start(): void {
         });
         return result.canceled ? null : (result.filePaths[0] ?? null);
       },
-      forgetFact: (id) => {
+      forgetMemory: (id) => {
         memory.forget(id);
         return snapshot();
       },
@@ -1088,7 +1092,7 @@ function start(): void {
     mood.dispose();
     voice.stopAll();
     sidecarStt.close();
-    void Promise.all([sidecar.stop(), memory.archived()]).finally(() => app.quit());
+    void Promise.all([sidecar.stop(), memory.archived().then(() => memoryStore.close())]).finally(() => app.quit());
   });
 
   /** Starts the local Ollama server when one of the brain choices (or the local vision) needs it. */

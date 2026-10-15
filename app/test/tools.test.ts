@@ -68,9 +68,9 @@ test("reminder times: minutes, hours, clock times and dates", () => {
   assert.equal(parseWhen("0", now), null);
 });
 
-test("memory: facts, notes, interrupted answers, reminders and the diary", () => {
+test("memory: facts, notes, interrupted answers, reminders and the diary", async () => {
   let clock = new Date(2026, 9, 13, 10, 0);
-  const memory = new Memory(null, () => clock);
+  const memory = new Memory(null, null, () => clock);
   const fact = memory.remember("  Ama  il caffè ", "preference");
   assert.equal(fact.text, "Ama il caffè");
   assert.equal(memory.remember("ama il caffè", "preference").id, fact.id, "no duplicates");
@@ -87,7 +87,7 @@ test("memory: facts, notes, interrupted answers, reminders and the diary", () =>
     ["Chiamare Marco"],
   );
   clock = new Date(2026, 9, 14, 9, 0);
-  const days = memory.pendingDiaryDays();
+  const days = await memory.pendingDiaryDays();
   assert.deepEqual(
     days.map((d) => [d.date, d.entries.length]),
     [["2026-10-13", 2]],
@@ -96,4 +96,8 @@ test("memory: facts, notes, interrupted answers, reminders and the diary", () =>
   assert.equal(memory.recentConversation(10).length, 0);
   assert.equal(memory.forget(fact.id), true);
   assert.equal(memory.forget(fact.id), false);
+  // forget also cancels a pending reminder
+  const reminder = memory.addReminder("Dentista", new Date(2026, 9, 15, 10, 0));
+  assert.equal(memory.forget(reminder.id), true);
+  assert.deepEqual(memory.reminders(), []);
 });

@@ -473,7 +473,8 @@ export interface SettingsBridge {
   testVoice(text: string): Promise<ConnectionReport>;
   applyProfile(profile: Profile): Promise<SettingsSnapshot>;
   pickVoiceFile(): Promise<string | null>;
-  forgetFact(id: string): Promise<SettingsSnapshot>;
+  /** Deletes a fact, a note or a pending reminder. */
+  forgetMemory(id: string): Promise<SettingsSnapshot>;
   clearMemory(): Promise<SettingsSnapshot>;
   forgetVoice(id: string): Promise<SettingsSnapshot>;
   /** Saves the Discord bot token (empty: removes it). */

@@ -319,7 +319,7 @@ function renderStatus(status: SidecarStatus): void {
 
 // ---------------- form ----------------
 
-function listItems(id: string, items: { tag: string; text: string; action?: () => void }[], empty: string): void {
+function listItems(id: string, items: { tag: string; text: string; action?: () => void; actionLabel?: string }[], empty: string): void {
   const list = $<HTMLUListElement>(id);
   if (!items.length) {
     const li = document.createElement("li");
@@ -341,7 +341,7 @@ function listItems(id: string, items: { tag: string; text: string; action?: () =
       if (item.action) {
         const button = document.createElement("button");
         button.type = "button";
-        button.textContent = "Dimentica";
+        button.textContent = item.actionLabel ?? "Dimentica";
         button.addEventListener("click", item.action);
         li.append(button);
       }
@@ -432,12 +432,12 @@ function fill(next: SettingsSnapshot): void {
 
   listItems(
     "facts",
-    next.facts.map((f) => ({ tag: KIND_LABEL[f.kind] ?? f.kind, text: f.text, action: () => void api.forgetFact(f.id).then(fill) })),
+    next.facts.map((f) => ({ tag: KIND_LABEL[f.kind] ?? f.kind, text: f.text, action: () => void api.forgetMemory(f.id).then(fill) })),
     "Non ricorda ancora niente di te.",
   );
   listItems(
     "reminders",
-    next.reminders.map((r) => ({ tag: new Date(r.dueAt).toLocaleString("it-IT", { weekday: "short", hour: "2-digit", minute: "2-digit" }), text: r.text })),
+    next.reminders.map((r) => ({ tag: new Date(r.dueAt).toLocaleString("it-IT", { weekday: "short", hour: "2-digit", minute: "2-digit" }), text: r.text, action: () => void api.forgetMemory(r.id).then(fill), actionLabel: "Annulla" })),
     "Nessun promemoria.",
   );
   listItems(

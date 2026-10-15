@@ -4,6 +4,7 @@ import test from "node:test";
 import { meaningless, requiredSilenceMs, trailingIncomplete, turnEnded } from "../src/main/voice/endpoint";
 import { multipart, wav } from "../src/main/voice/groqStt";
 import type { SttHandlers } from "../src/main/voice/sttClient";
+import { cleanTranscript, isSilence } from "../src/main/voice/sttFilter";
 import { isEcho, TurnManager, type Clock, type SttBackend, type TurnHost, type WakeBackend } from "../src/main/voice/turns";
 import { distance, matchWakeWord } from "../src/main/voice/wakeWord";
 import { DEFAULT_SETTINGS, type ListenMode, type MicControl, type Settings } from "../src/shared/types";
@@ -427,4 +428,21 @@ test("without the wake word detector the name is still spotted in transcripts", 
   const t = setup("wake-word", {}, () => false, { backend: null });
   t.turns.mic({ type: "speech-start" });
   assert.equal(t.stt.log[0], "start 1", "every utterance is transcribed");
+});
+
+test("remote speech recognition drops silence and Whisper's hallucinations", () => {
+  const tone = (amplitude: number) => {
+    const pcm = new Uint8Array(3200);
+    const view = new DataView(pcm.buffer);
+    for (let i = 0; i < 1600; i++) view.setInt16(i * 2, Math.round(amplitude * 32767 * Math.sin(i / 5)), true);
+    return pcm;
+  };
+  assert.equal(isSilence(new Uint8Array(0)), true);
+  assert.equal(isSilence(tone(0.001)), true);
+  assert.equal(isSilence(tone(0.1)), false);
+  assert.equal(cleanTranscript("Sottotitoli creati dalla comunità Amara.org", 3), "");
+  assert.equal(cleanTranscript(" Grazie a tutti! ", 2), "");
+  assert.equal(cleanTranscript("Grazie.", 0.4), "");
+  assert.equal(cleanTranscript("Grazie.", 1.2), "Grazie.", "a real thank-you is long enough");
+  assert.equal(cleanTranscript("Che  ore sono?", 1.5), "Che ore sono?");
 });

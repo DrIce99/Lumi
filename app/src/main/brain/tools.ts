@@ -10,6 +10,9 @@ export interface ToolSpec {
   parameters: Record<string, unknown>;
 }
 
+export const MEMORY_KINDS = ["all", "conversation", "summary"] as const;
+export type MemoryKind = (typeof MEMORY_KINDS)[number];
+
 export const LOOK_REGIONS = ["active_window", "cursor", "caret", "top", "bottom", "left", "right", "center", "user"] as const;
 export type LookRegion = (typeof LOOK_REGIONS)[number];
 
@@ -85,22 +88,34 @@ export const TOOLS: ToolSpec[] = [
   },
   {
     name: "forget",
-    description: "Delete a memory by id (for example 'f12') when it is wrong or outdated, or when the user asks you to forget it.",
+    description:
+      "Delete a memory by id (for example 'f12') when it is wrong or outdated, or when the user asks you to forget it; also cancels a pending reminder (for example 'r7').",
     parameters: {
       type: "object",
-      properties: { id: { type: "string", description: "Id of the memory, as shown in <memory>." } },
+      properties: { id: { type: "string", description: "Id of the memory, as shown in <memory>, or of the reminder, as shown in <pending_reminders>." } },
       required: ["id"],
       additionalProperties: false,
     },
   },
   {
-    name: "recall",
+    name: "search_memory",
     description:
-      "Search your memory of past conversations (older than <recent_conversation>, also weeks ago) when the user refers to something you don't see in context ('ti ricordi quando...', 'cosa ti avevo detto di...'). The results come back to you.",
+      "Search your long-term memory: everything said in past conversations (also months or years ago), plus the summaries of episodes and days. Use it when the user refers to something you don't see in context ('ti ricordi quando...', 'cosa ti avevo detto del trasloco?', 'di cosa abbiamo parlato ieri sera?', 'cosa ti ho detto a marzo?'). Give words, dates or both. The results come back to you.",
     parameters: {
       type: "object",
-      properties: { query: { type: "string", description: "A few keywords, e.g. 'dentista appuntamento' or 'progetto Marco'." } },
-      required: ["query"],
+      properties: {
+        query: { type: "string", description: "A few keywords, e.g. 'dentista appuntamento' or 'progetto Marco'. Leave it out to list a period." },
+        from: {
+          type: "string",
+          description: "Start of the period, local time: '2026-03' (a month), '2026-03-12' (a day) or '2026-03-12 18:00'. Given alone, a month or a day means that whole month or day.",
+        },
+        to: { type: "string", description: "End of the period, included, in the same format." },
+        kind: {
+          type: "string",
+          enum: [...MEMORY_KINDS],
+          description: "conversation: the lines said; summary: episode and diary summaries (best for a whole period); all (default).",
+        },
+      },
       additionalProperties: false,
     },
   },
@@ -153,7 +168,7 @@ export type ToolCall =
   | { name: "look_at_screen"; focus?: string }
   | { name: "remember"; fact: string; kind: FactKind }
   | { name: "forget"; id: string }
-  | { name: "recall"; query: string }
+  | { name: "search_memory"; query?: string; from?: string; to?: string; kind?: MemoryKind }
   | { name: "set_reminder"; due: Date; text: string }
   | { name: "name_voice"; voice: string; person: string }
   | { name: "stay_quiet"; minutes?: number };
@@ -227,9 +242,15 @@ export function parseToolCall(name: string, input: unknown, now = new Date()): T
       const id = text(o.id, 20);
       return id ? { name, id } : null;
     }
-    case "recall": {
+    // "recall" was the tool's name before memory.db: models may still call it
+    case "recall":
+    case "search_memory": {
       const query = text(o.query ?? o.text, 300);
-      return query ? { name, query } : null;
+      const from = text(o.from, 40);
+      const to = text(o.to, 40);
+      const kind = typeof o.kind === "string" && (MEMORY_KINDS as readonly string[]).includes(o.kind) ? (o.kind as MemoryKind) : undefined;
+      if (!query && !from && !to) return null;
+      return { name: "search_memory", ...(query ? { query } : {}), ...(from ? { from } : {}), ...(to ? { to } : {}), ...(kind ? { kind } : {}) };
     }
     case "name_voice": {
       const voice = text(o.voice, 60);

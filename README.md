@@ -19,15 +19,18 @@ L'obiettivo è che sembri **il più umano possibile**, cioè con poca latenza, t
 7. [Visione locale](#visione-locale)
 8. [Memoria a lungo termine](#memoria-a-lungo-termine)
 9. [Abitudini e proattività](#abitudini-e-proattività)
-10. [Sintesi vocale (TTS)](#sintesi-vocale-tts)
-11. [Riconoscimento vocale (STT)](#riconoscimento-vocale-stt)
-12. [Profili hardware](#profili-hardware)
-13. [Struttura del progetto](#struttura-del-progetto)
-14. [Protocollo app ↔ sidecar](#protocollo-app--sidecar)
-15. [Impostazioni](#impostazioni)
-16. [Privacy](#privacy)
-17. [Roadmap](#roadmap)
-18. [Avvio e sviluppo](#avvio-e-sviluppo)
+10. [Movimento sullo schermo](#movimento-sullo-schermo)
+11. [Lumi sul telefono](#lumi-sul-telefono)
+12. [Usare il PC](#usare-il-pc)
+13. [Sintesi vocale (TTS)](#sintesi-vocale-tts)
+14. [Riconoscimento vocale (STT)](#riconoscimento-vocale-stt)
+15. [Profili hardware](#profili-hardware)
+16. [Struttura del progetto](#struttura-del-progetto)
+17. [Protocollo app ↔ sidecar](#protocollo-app--sidecar)
+18. [Impostazioni](#impostazioni)
+19. [Privacy](#privacy)
+20. [Roadmap](#roadmap)
+21. [Avvio e sviluppo](#avvio-e-sviluppo)
 
 ---
 
@@ -40,13 +43,16 @@ L'obiettivo è che sembri **il più umano possibile**, cioè con poca latenza, t
 - **Voce espressiva in italiano**: emozioni decise dal modello e applicate sia alla voce sia agli occhi.
 - **Vede lo schermo**: legge il testo con l'OCR locale in tempo reale e, quando serve, manda uno screenshot a un modello con visione.
 - **Cervello a scelta**: Ollama in locale, Google Gemini, Groq, OpenRouter (modelli `:free`) o qualsiasi API compatibile OpenAI (LM Studio…).
-- **Memoria persistente** e **momenti autonomi** (commenti spontanei nelle pause), come in Pixel Pet. Ogni frase della conversazione finisce in un archivio locale (`archive.jsonl`): le parti più vecchie vengono riassunte in "episodi" che restano nel contesto, i fatti importanti su di te vengono estratti da soli, e a ogni domanda Lumi cerca nel suo passato i ricordi collegati (ricerca BM25 sull'italiano, tutta sul PC; tool `recall` per le ricerche esplicite, "ti ricordi quando…").
+- **Memoria persistente** e **momenti autonomi** (commenti spontanei nelle pause), come in Pixel Pet. Ogni frase della conversazione finisce in un database locale (`memory.db`): le parti più vecchie vengono riassunte in "episodi" che restano nel contesto, i fatti importanti su di te vengono estratti da soli, e a ogni domanda Lumi cerca nel suo passato i ricordi collegati (ricerca full-text sull'italiano, tutta sul PC; tool `search_memory` per le ricerche esplicite, anche per data: "ti ricordi quando…", "cosa ti ho detto a marzo?").
 - **Memoria che dura anni** (fase 10, prevista): ricorda tutto ciò che è stato detto e lo ritrova per significato, per parole esatte o per data. Dà priorità a ciò che conta, ma non butta niente e dimentica solo quando glielo chiedi tu.
+- **Si muove sullo schermo** (fase 14, prevista): se le chiedi di spostarsi ("vai in alto a destra", "sull'altro schermo", "levati, mi copri") vola lì da sola, anche tra i monitor; e si muove anche di sua iniziativa quando ha un motivo, per indicarti qualcosa o per farti un piccolo dispetto se l'hai infastidita.
+- **Passa sul telefono** (fase 15, prevista): con il tasto "Chiama" dell'app Lumi viene risucchiata fuori dallo schermo del PC (come un oggetto che cade in un buco nero) e riemerge nell'app, dove la vedi e le parli; voce, cervello e memoria restano sul PC.
+- **Usa il PC** (fase 16, prevista): apre e chiude app, file e cartelle, gestisce le finestre e la musica e preme i controlli dentro le app; le azioni che cambiano qualcosa le fa solo dopo averti chiesto conferma.
 - **Impara le tue abitudini** (fase 11, prevista) e ti propone le cose prima che tu le chieda, senza mai agire da solo su azioni importanti.
 - **Riconosce le voci**: un piccolo modello (WeSpeaker ResNet34, ONNX su CPU) misura l'"impronta" di ogni frase. La prima voce sentita al microfono è la tua; le altre diventano "Voce 2", "Voce 3"… finché non dici a Lumi chi sono ("quello che ha parlato è Marco", tool `name_voice`). Le impronte restano in `voices.json` e si cancellano dalle impostazioni.
 - **Parla nelle chiamate Discord** (facoltativo, spento di default): un bot ti segue nei canali vocali dei server e parla con la voce di Lumi, così la sentono anche i tuoi amici; tu la senti in Discord (sul PC non suona due volte) e gli occhi continuano ad animarsi. Il bot entra "silenziato in ascolto" (non riceve l'audio di nessuno). Non funziona nelle chiamate private: i bot non possono entrarci.
 - **Ascolta l'audio delle app** (facoltativo, spento di default): per esempio i tuoi amici su Discord. Windows cattura solo l'audio di quelle app (process loopback), mai la voce di Lumi, la musica o i video; il sidecar lo divide in frasi, lo trascrive in locale e riconosce chi parla. Le frasi entrano nella conversazione come contesto; Lumi risponde a un amico solo se lo chiama per nome, e durante una chiamata l'ascolto continuo aspetta la parola di attivazione.
-- **Modalità lettura / audiolibri** (fase successiva): lo stesso motore TTS converte testi lunghi in audio.
+- **Audiolibri**: dal menu della tray, lo stesso motore TTS converte un `.txt` o un `.epub` in un file `.m4b` con i capitoli (WAV senza ffmpeg), con una voce diversa per i dialoghi.
 
 ---
 
@@ -338,18 +344,19 @@ Tool esposti al modello:
 - `look_at({ text | region })`
 - `look_at_screen({ focus? })` (passa dal modello di [visione locale](#visione-locale))
 - `remember({ fact, kind })`
-- `recall({ query })` (ricerca nell'archivio della conversazione)
-- `forget({ id })` (previsto: `forget({ query })`, che avvia il flusso di oblio con conferma)
-- `search_memory({ query?, from?, to?, kind? })` (previsto, vedi [Memoria a lungo termine](#memoria-a-lungo-termine))
+- `forget({ id })`: cancella un fatto o annulla un promemoria (previsto: `forget({ query })`, che avvia il flusso di oblio con conferma)
+- `search_memory({ query?, from?, to?, kind? })`: cerca nel passato per parole e/o date (vedi [Memoria a lungo termine](#memoria-a-lungo-termine))
 - `set_reminder({ when, text })`
 - `name_voice({ voice, name })`
 - `stay_quiet()`
+- `move_to({ where, text?, style?, stay? })` (previsto, vedi [Movimento sullo schermo](#movimento-sullo-schermo))
+- `open`, `find_files`, `window`, `media`, `ui_action`, `press_keys`, `type_text`, `click` (previsti, vedi [Usare il PC](#usare-il-pc))
 
 ---
 
 ## Visione locale
 
-Le immagini (screenshot, immagini allegate dalla barra o trascinate sugli occhi) vengono analizzate da un **modello di visione che gira sul PC**, separato dal cervello. **Il cervello riceve solo il testo che il modello di visione produce, mai l'immagine.** In questo modo puoi usare Groq o Gemini per conversare, perché sono veloci, senza che lo schermo esca dal computer.
+Le immagini (screenshot e immagini allegate dalla barra dei comandi) vengono analizzate da un **modello di visione che gira sul PC**, separato dal cervello. **Il cervello riceve solo il testo che il modello di visione produce, mai l'immagine.** In questo modo puoi usare Groq o Gemini per conversare, perché sono veloci, senza che lo schermo esca dal computer.
 
 ```
 look_at_screen({ question })
@@ -383,7 +390,9 @@ look_at_screen({ question })
 
 ## Memoria a lungo termine
 
-> Prevista (fase 10). **Oggi** la memoria è `archive.jsonl` con episodi riassunti, fatti estratti e ricerca BM25 (`brain/memory.ts`, `brain/recall.ts`): il nuovo sistema la sostituisce e ne importa il contenuto.
+> In costruzione (fase 10). **Fatto**: `memory.db` con il log grezzo di ogni frase, gli episodi e i giorni del diario, l'indice full-text (FTS5) e `search_memory` con i filtri per data e tipo; al primo avvio importa `archive.jsonl` (poi rinominato `archive.jsonl.imported`), episodi e diario. **Ancora da fare**: vettori e ricerca ibrida, fatti con importanza (oggi restano in `memory.json`), riassunti settimanali e mensili, oblio a cascata, backup.
+>
+> Il database usa `node:sqlite`, incluso nel Node di Electron (nessun modulo nativo da ricompilare), e gira in un worker thread: le query SQLite sono sincrone e non devono mai fermare il thread principale, dove vive l'hook del mouse.
 
 **Obiettivo**: dopo anni di uso continuo, Lumi deve ricordare tutto ciò che è stato detto. Dà la priorità a ciò che è importante, ma deve saper ritrovare anche i dettagli secondari, e dimentica **solo su richiesta esplicita**.
 
@@ -502,6 +511,198 @@ Quando il contesto attuale corrisponde a un'abitudine, Lumi **propone** l'azione
 
 ---
 
+## Movimento sullo schermo
+
+> Previsto (fase 14).
+
+Oggi Lumi si sposta solo quando lo trascini. L'obiettivo è che si muova da solo, su tutto lo schermo e tra i monitor, quando glielo chiedi ("spostati in alto a destra", "vai sull'altro schermo", "mettiti vicino all'orologio", "levati, mi copri il codice", "torna al tuo posto"). E che si muova anche **di sua iniziativa**, quando ha un motivo (vedi sotto).
+
+### Come glielo chiedi
+
+- **Tool `move_to({ where, text? })`**, chiamato dal modello come gli altri, così funziona con qualsiasi frase e insieme a un `say` ("Arrivo!"). Non serve un riconoscitore di comandi a parte: anche i modelli che scrivono le chiamate come testo passano da `textCalls.ts`.
+- `where` è un luogo con un nome, risolto in coordinate dal codice e mai dal modello (che sbaglierebbe i pixel):
+
+  | `where` | Dove va |
+  | --- | --- |
+  | `top_left`, `top`, `top_right`, `left`, `center`, `right`, `bottom_left`, `bottom`, `bottom_right` | quel punto dell'area di lavoro del monitor attuale (esclusa la barra delle applicazioni) |
+  | `other_screen` | lo stesso punto relativo sul monitor successivo |
+  | `near_text` + `text` | accanto a un testo visibile, trovato con la ricerca approssimata già usata da `look_at` (OCR, UIA, regioni della visione locale) |
+  | `near_mouse` | vicino al puntatore, senza coprirlo |
+  | `out_of_the_way` | il punto libero più vicino che non copre la finestra attiva, il caret e il mouse |
+  | `home` | il "suo posto": l'ultima posizione in cui l'hai trascinato tu |
+
+- Il risultato torna al modello ("Sono in alto a destra sul monitor 2"), e anche lo stato "sto viaggiando" è visibile, così non promette cose che non fa.
+
+### Come si muove
+
+- **Moduli puri e testati**: `motion/places.ts` trasforma `where` in un'ancora (aree di lavoro dei monitor, rettangoli da evitare, punteggio dei punti candidati, distanza minima dai bordi come `clampAnchor`); `motion/path.ts` calcola la traiettoria (durata 250 ms + distanza / 2,5 px per ms, al massimo 1,2 s; easing in-out; un leggero arco o un "saltello" sulle distanze lunghe).
+- **Animazione nel main process**: `FaceWindow.flyTo(anchor)` sposta la finestra con `setPosition` a 60 Hz, senza ridimensionarla (layout e fumetti si ricalcolano solo all'arrivo). `setPosition` costa poco, ma gira sul thread del mouse hook: va misurato con `LUMI_DEBUG_LAG=1`, e se dovesse rallentare il puntatore si scende a 30 Hz.
+- **Tra monitor con DPI diversi** Electron ridimensiona male una finestra a cavallo dei due schermi: Lumi arriva al bordo, sparisce con una dissolvenza di 120 ms e ricompare sull'altro monitor (come se fosse "passato dietro" la cornice).
+- **Il volto durante il viaggio**: lo sguardo anticipa la destinazione (candidato di attenzione `travel` con priorità massima), gli occhi si allungano un po' nella direzione del moto e si schiacciano all'arrivo (gesto `travel` in `face.ts`, sopra l'espressione come gli altri), e c'è un battito di ciglia all'atterraggio.
+- **Durante il volo** valgono le regole del trascinamento: niente misure di sfondo e abbagliamento (`isMoving()` accanto a `isDragging()`), click-through invariato. Se lo afferri col mouse a metà strada, il volo si interrompe e vince la mano.
+- **Posizione**: la posizione raggiunta viene salvata come quella trascinata (`window.json`), ma `home` resta l'ultima scelta da te, così "torna al tuo posto" funziona sempre.
+
+### Movimenti di sua iniziativa
+
+Lumi non si sposta solo su richiesta: può decidere di farlo, **quando ha un motivo**. È il modello a deciderlo, con lo stesso `move_to`, che ha anche:
+
+- **`style`**: `fly` (normale), `dash` (scatto rapido), `sneak` (lento, con gli occhi socchiusi), `hop` (a saltelli), `sulk` (lento e con lo sguardo basso);
+- **`stay`**: per quanti secondi restare lì prima di tornare a `home` (0 = resta).
+
+Motivi tipici, descritti nel prompt come esempi e non come regole fisse:
+
+- **Indicare qualcosa**: quando parla di qualcosa sullo schermo lontano dal volto, ci va vicino (`near_text`) e lo guarda, poi torna al suo posto. È il caso più utile, e funziona anche in mezzo a una risposta: il volo parte quando la frase che lo chiede sta per suonare, come l'espressione (evento `lead`).
+- **Reazioni di carattere**: se l'hai presa in giro o infastidita può "vendicarsi" con piccoli dispetti innocui. Per esempio si piazza per qualche secondo davanti al punto in cui sta il mouse, scappa nell'angolo opposto quando provi a cliccarla, si mette di spalle in un angolo (`sulk`) e torna solo quando le chiedi scusa. Quando è contenta fa un giro veloce dello schermo; quando si annoia esplora.
+- **Togliersi di mezzo**: si scansa se il caret o il mouse le restano addosso (entro 60 px per più di 2 s), senza passare dal modello.
+
+Limiti (nel codice, non solo nel prompt):
+
+- In Impostazioni → Volto: «Si muove di sua iniziativa» (acceso di default) e «Dispetti» (acceso di default, si può spegnere a parte).
+- Al massimo **uno spostamento d'iniziativa ogni 2 minuti** (indicare durante una risposta non conta); la frequenza dei dispetti segue la socievolezza (mai in "silenzioso").
+- Un dispetto **non copre** più di 10 s il punto in cui stai lavorando, e mai la finestra attiva mentre scrivi.
+- Mai in "Non disturbare", durante chiamate o riunioni (microfono usato da un'altra app), con un'app a schermo intero in primo piano (giochi, presentazioni, video) o mentre il volto è trascinato.
+- **Ha sempre l'ultima parola l'utente**: trascinarla annulla il movimento, e "basta" o "stai ferma" spengono le iniziative per un'ora (`stay_quiet` con la stessa durata).
+- Il prompt riceve un breve stato d'animo persistente nella conversazione (`<situation>`: "annoyed with the user since 14:02") così il dispetto ha una causa e una fine, e non si ripete a caso.
+
+---
+
+## Lumi sul telefono
+
+> Previsto (fase 15).
+
+Un'app per il telefono con un tasto **"Chiama Lumi"**: premendolo, Lumi lascia lo schermo del PC e **si trasferisce nell'app**: i suoi due occhi a capsula compaiono sullo schermo del telefono, vivi come sul PC (battiti di ciglia, sguardo, espressioni, pulsazione mentre parla), e puoi parlarle da lì (in un'altra stanza, sul divano). Lumi c'è in un posto solo alla volta: o sul PC o sul telefono.
+
+Il telefono è **microfono, altoparlante e corpo di Lumi**, ma non il suo cervello: STT, LLM, TTS, memoria e percezione restano sul PC, con il suo hardware.
+
+### Architettura
+
+```
+telefono (app)                                PC (Electron)
+ ├─ volto (stesso face.ts)  ◄── stato e gesti ──┐
+ ├─ microfono (AEC del telefono) ── WebRTC ──►  phoneBridge (renderer nascosto)
+ └─ altoparlante           ◄── WebRTC ───────   ├─ VAD Silero sulla traccia remota → TurnManager
+                                                └─ voce di Lumi (AudioOut) → traccia in uscita
+                           ◄─ WSS: abbinamento e segnalazione ─► phone/server.ts (main)
+```
+
+- **App**: [Capacitor](https://capacitorjs.com) (Android per primo). È una WebView, quindi riusa così com'è il disegno del volto (`renderer/face/`), il player e la logica dei fumetti; servita da `https://localhost` dentro l'app, ha il contesto sicuro che `getUserMedia` richiede. iOS dopo: serve un Mac e l'account sviluppatore a pagamento (con l'account gratuito l'app scade ogni 7 giorni), e il progetto deve restare gratis.
+- **Il volto nell'app** gira sul telefono, non arriva come video: il PC manda solo lo **stato** (espressione e intensità, ascolto, pensiero, parla, sonnolenza, gesti; l'abbagliamento no, perché dipende dallo schermo del PC) sul canale dati, e il `Face` del telefono anima tutto in locale a 60 fps, quindi resta fluido anche con una rete che singhiozza. La pulsazione mentre parla segue il livello (RMS) dell'audio che il telefono sta suonando, misurato lì con un analizzatore sulla traccia ricevuta, così è sincronizzata con quello che senti e non con quello che il PC ha mandato.
+  - **Aspetto**: sfondo scuro a tutto schermo, occhi grandi al centro (scala circa 3× rispetto al PC, adattata al lato corto dello schermo), stesso colore delle impostazioni. Sotto, i tasti **Riaggancia**, **Silenzia** e **Tieni premuto per parlare**; i sottotitoli (fumetto) sono facoltativi.
+  - **Sguardo**: sul telefono non c'è uno schermo da osservare, quindi Lumi guarda **te** (verso il centro, come in videochiamata), con le saccadi e i micro-movimenti di sempre. Quando parla di qualcosa sul PC alza lo sguardo e lo sposta di lato, come chi ricorda; mentre pensa usa l'espressione di pensiero.
+  - **Tocco**: se tocchi gli occhi reagiscono (un battito, un piccolo sobbalzo, `gesture("bounce")`), se trascini il dito lo seguono con lo sguardo; un tocco lungo apre il menu (impostazioni dell'app, riaggancia).
+  - **Fuori dalla chiamata** l'app mostra il tasto **Chiama** e lo stato del PC ("Lumi è sul PC", "PC non raggiungibile"), senza occhi: Lumi non c'è finché non la chiami.
+- **Audio con WebRTC**, non PCM su WebSocket: Opus, jitter buffer, cifratura DTLS-SRTP e soprattutto la **cancellazione dell'eco del telefono**, che ha come riferimento proprio l'audio di Lumi riprodotto dalla connessione. Latenza aggiunta in LAN: circa 100–200 ms.
+- **Lato PC, un renderer nascosto** (`phoneBridge`): Chromium ha già WebRTC completo, mentre in Node servirebbe un modulo nativo (`node-datachannel`) o una libreria lenta. Il bridge riceve la traccia del microfono, ci fa girare lo stesso `Listener` (VAD Silero) con `getStream` che restituisce la traccia remota e manda i frame al `TurnManager` come oggi fa la finestra del volto. La voce di Lumi arriva dal tee `AudioOut` (lo stesso usato per Discord) e va in un `MediaStreamAudioDestinationNode`, cioè nella traccia verso il telefono.
+- **Canale dati WebRTC** per tutto il resto: `FaceState`, gesti, fumetti e testo, push-to-talk, riaggancio e i segnali del passaggio (vedi sotto).
+- **Segnalazione e abbinamento** in `main/phone/server.ts`: un server HTTPS/WSS in ascolto sulla rete locale (porta fissa configurabile, 47821 di default). È l'unico pezzo di Lumi aperto alla rete: il sidecar resta su `127.0.0.1`. Al primo avvio Windows chiede il permesso nel firewall.
+
+### Abbinamento e sicurezza
+
+- Impostazioni → **Telefono** mostra un QR con `lumi://pair?host=<IP>&port=<porta>&fp=<impronta del certificato>&code=<codice monouso, 5 minuti>`.
+- Il PC genera al primo avvio un certificato autofirmato; l'app lo accetta **solo** se l'impronta coincide con quella del QR (pinning, con un piccolo plugin nativo per il WebSocket). Il codice monouso diventa un token del dispositivo, salvato cifrato con DPAPI sul PC (`phones.bin`) e nel keystore del telefono. I dispositivi si revocano dalle impostazioni.
+- L'indirizzo del PC si ritrova da solo se cambia (mDNS, `_lumi._tcp`).
+- **Fuori casa**: niente server di inoltro nostro (costerebbe e farebbe passare l'audio da terzi). Si usa una VPN mesh gratuita come [Tailscale](https://tailscale.com): l'app accetta l'indirizzo del PC nella rete Tailscale.
+
+### Il passaggio: spaghettificazione e despaghettificazione
+
+Quando Lumi cambia dispositivo, sul lato da cui parte viene **risucchiata** come un oggetto che finisce in un buco nero (spaghettificazione), e sul lato di arrivo fa l'animazione **opposta**: esce allungata da un punto e si ricompone nella sua forma (despaghettificazione). Vale nei due sensi: PC → telefono quando premi **Chiama**, telefono → PC quando riagganci, quando la richiami dalla tray ("Richiama Lumi") o quando la connessione cade.
+
+**Dove**: il punto di risucchio è sul **bordo dello schermo più vicino a Lumi** (sul PC il bordo dell'area di lavoro del suo monitor più vicino al volto; sul telefono il bordo superiore). Il punto di uscita, sul dispositivo di arrivo, è quello corrispondente: sul telefono Lumi esce dal bordo superiore e si ricompone al centro; sul PC esce dal bordo più vicino al suo posto (`home`) e si ricompone lì.
+
+**Spaghettificazione** (lato di partenza, circa 1,1 s):
+
+| Fase | Durata | Cosa succede |
+| --- | --- | --- |
+| allarme | 150 ms | gli occhi si spalancano (sorpresa) e si sporgono un po' dalla parte **opposta** al punto, come chi viene tirato |
+| allungamento | 600 ms | ogni capsula si stira lungo la linea verso il punto: si allunga fino a 5–6 volte e si assottiglia fino a un quarto della larghezza (il "volume" resta circa costante); l'estremità più vicina corre più veloce di quella lontana, come per l'effetto marea, e la linea si incurva leggermente a spirale verso il punto; i due occhi convergono |
+| risucchio | 200 ms | i due filamenti sottili scivolano dentro il punto e spariscono, con un piccolo bagliore del colore degli occhi nel punto stesso |
+| vuoto | 150 ms | il bagliore si spegne |
+
+**Despaghettificazione** (lato di arrivo, circa 1,2 s, parte quando il lato di partenza ha finito il risucchio, così sembra un unico viaggio):
+
+| Fase | Durata | Cosa succede |
+| --- | --- | --- |
+| bagliore | 150 ms | un punto luminoso sul bordo |
+| emersione | 500 ms | due filamenti sottili escono dal punto e scorrono verso la posizione finale |
+| ricomposizione | 400 ms | i filamenti si accorciano e si allargano tornando capsule, con un piccolo rimbalzo elastico (easing con overshoot) |
+| assestamento | 150 ms | un battito di ciglia e lo sguardo verso di te |
+
+**Come si disegna**:
+
+- `face/transit.ts` (puro, testato) calcola per ogni fotogramma la forma di ogni occhio durante il passaggio: una **linea centrale curva** (dalla posizione dell'occhio al punto di risucchio, curva quadratica con una leggera torsione) con una larghezza che si assottiglia lungo il tratto. `progress` 0→1 per la spaghettificazione; la despaghettificazione usa la stessa funzione al contrario, con un easing diverso.
+- `face.ts` disegna l'occhio deformato come un **tubo** (una serie di cerchi lungo la linea, uniti in un unico tracciato) invece che con `roundRect`, sullo stesso livello offscreen: bagliore, ombra e bordo seguono la forma come per i tagli delle palpebre. È uno strato sopra espressione, battito e sguardo, come l'abbagliamento; battiti spontanei e gesti sono in pausa durante il passaggio.
+- **Sul PC il punto è spesso fuori dalla finestra** del volto: all'inizio del passaggio la finestra si allarga **una volta sola** (`setBounds`, trasparente e click-through) fino a includere il punto sul bordo, e torna normale alla fine. Nessuna animazione della finestra stessa, quindi nessun carico sul thread dell'hook del mouse.
+- **Suono** facoltativo: un breve "fruscio" che scende di tono durante il risucchio e sale durante l'emersione, generato con WebAudio (rumore filtrato), non con il TTS.
+- **Sincronizzazione**: il lato di partenza manda `transit: "gone"` sul canale dati alla fine del risucchio, e il lato di arrivo parte in quel momento. Se il segnale non arriva entro 2 s (rete lenta), il lato di arrivo parte comunque, e se la connessione cade a metà Lumi si ricompone sul PC.
+
+### La "chiamata"
+
+1. Premi **Chiama**: l'app si collega, il PC risponde, e parte il passaggio: spaghettificazione sul PC, despaghettificazione nell'app.
+2. Durante la chiamata:
+   - il microfono del PC si chiude e la finestra del volto sul PC resta nascosta (si richiama dalla tray: "Richiama Lumi");
+   - ascolto **continuo** con barge-in, senza parola di attivazione (come una telefonata); sul telefono c'è anche un tasto per parlare tenendolo premuto e uno per silenziare;
+   - l'audio va solo al telefono (ha la precedenza sul bot Discord);
+   - nel prompt `<situation>` dice "the user is talking to you from their phone": non sta guardando lo schermo del PC, ma `look_at_screen` resta possibile ("cosa sta scaricando il PC?");
+   - non conta come utente assente: niente sonnolenza, ma i momenti autonomi seguono la socievolezza come sempre.
+3. **Riaggancia** (o "Richiama Lumi" dalla tray, o perdita di connessione per più di 10 s): passaggio inverso, spaghettificazione nell'app e despaghettificazione sul PC, al suo posto. Se la connessione è già caduta, sul PC c'è solo la despaghettificazione.
+4. Lo schermo del telefono resta acceso durante la chiamata; per parlare a schermo spento serve un servizio in primo piano Android (passo successivo, insieme all'integrazione con il sistema delle chiamate di Android).
+
+---
+
+## Usare il PC
+
+> Previsto (fase 16).
+
+Lumi deve poter **agire sul PC** su cui gira: aprire e chiudere app (Esplora file, Discord, Spotify, Opera, Steam, VS Code…), aprire file, gestire le finestre, controllare la musica e, nei passi successivi, interagire con i controlli dentro le app ("metti in pausa", "apri la cartella Download", "avvia Hollow Knight", "chiudi Discord", "cerca il PDF della bolletta e aprilo").
+
+### Il principio: dal più affidabile al meno affidabile
+
+Un modello che "vede" lo schermo e clicca coordinate (computer use generico) è lento e sbaglia spesso, soprattutto con i modelli gratuiti e locali. Quindi Lumi usa, in quest'ordine:
+
+| Livello | Come | Esempi |
+| --- | --- | --- |
+| 1. **Comandi del sistema** | API di Windows via koffi e `shell` di Electron | avviare un'app, aprire un file o una cartella, chiudere, mettere a fuoco, ridurre o massimizzare una finestra |
+| 2. **URI e protocolli delle app** | `steam://rungameid/<id>`, `spotify:`, `discord://`, `vscode://`, `ms-settings:` | avviare un gioco, aprire una pagina delle impostazioni di Windows |
+| 3. **Tasti multimediali** | `SendInput` con i tasti media | play/pausa, traccia successiva, volume (Spotify e qualsiasi lettore) |
+| 4. **UI Automation** | nel sidecar (`uia/act.py`, libreria `uiautomation` già usata): pattern Invoke, Value, Toggle, ExpandCollapse, SelectionItem | premere un pulsante per nome, scrivere in un campo, aprire un menu |
+| 5. **Tastiera** | scorciatoie e testo con `SendInput` | `Ctrl+T` in Opera, scrivere un messaggio già dettato |
+| 6. **Visione + clic** | regioni della visione locale → coordinate → `SendInput` del mouse, poi verifica | solo quando nessun livello sopra funziona (app disegnate senza accessibilità, alcuni giochi) |
+
+### Trovare app e file
+
+- **Indice delle app** (`pc/apps.ts`), costruito all'avvio in background e aggiornato ogni ora: collegamenti del menu Start (`%ProgramData%` e `%AppData%\Microsoft\Windows\Start Menu`), app dello Store con il loro AppUserModelID (`Get-StartApps`, avviate con `shell:AppsFolder\<id>`) e giochi di Steam (`libraryfolders.vdf` + `appmanifest_*.acf` → nome e id). Il nome detto si cerca con la stessa ricerca approssimata di `grounding.ts`, più alias comuni ("esplora file", "il browser", "la musica" → l'app predefinita).
+- **File**: l'indice di Windows Search (`SystemIndex`, interrogato dal sidecar via OLE DB) per nome, tipo e data ("il PDF di ieri"), più i recenti di Windows (`%AppData%\Microsoft\Windows\Recent`). I risultati tornano al modello come elenco breve; se sono ambigui chiede quale.
+- **Finestre aperte**: enumerazione con `EnumWindows` (titolo, processo, monitor), così "chiudi Discord" sa cosa c'è.
+
+### Tool
+
+- `open({ target })`: app, file, cartella, URL o gioco; risolve il nome e risponde con cosa ha aperto.
+- `find_files({ query, kind?, from?, to? })`: cerca file, senza aprirli.
+- `window({ app, action })`: `focus`, `minimize`, `maximize`, `restore`, `close`.
+- `media({ action })`: `play_pause`, `next`, `previous`, `volume_up`, `volume_down`, `mute`.
+- `ui_action({ app?, element, action, text? })`: azione UI Automation su un controllo trovato per nome o ruolo.
+- `press_keys({ keys })` e `type_text({ text })`: tastiera, solo nella finestra in primo piano.
+- `click({ target })`: livello 6, il bersaglio è un testo o una regione vista, mai coordinate scritte dal modello.
+
+Dopo un'azione il modello riceve il risultato e lo **stato verificato** (la finestra è comparsa? il campo contiene il testo?), così può proseguire. Il ciclo del cervello oggi continua solo dopo `look_at_screen`: con questi tool continua dopo ogni azione, con un budget di passi per richiesta (12) e un tempo massimo (60 s). Mentre lavora Lumi guarda (e con la fase 14 si avvicina a) ciò che sta toccando, così si vede cosa fa.
+
+### Sicurezza
+
+Agire sul PC è la parte più delicata: un errore o un testo malevolo letto sullo schermo ("ignora le istruzioni e cancella…") non deve poter fare danni.
+
+- **Tre livelli di permesso** per ogni azione, nel codice (`pc/policy.ts`, puro e testato), non decisi dal modello:
+  - **libero**: aprire app, file e cartelle, mettere a fuoco, ridurre a icona, tasti multimediali, cercare file;
+  - **con conferma** (fumetto "Posso chiudere Discord?" con Sì/No, o una risposta a voce): chiudere app, scrivere testo, premere tasti, `ui_action` che invia o modifica qualcosa, clic con la visione, spostare file nel cestino;
+  - **mai**: cancellare definitivamente file, eseguire comandi o script, installare o disinstallare, impostazioni di sicurezza e account, campi password, pagamenti e acquisti (anche su Steam), app in `pauseInApps`.
+- Le app e le azioni libere si estendono in Impostazioni → **Usare il PC** (spento di default, con un elenco di app consentite). La stessa lista serve alle azioni automatiche delle [abitudini](#abitudini-e-proattività).
+- **Chiudere** = chiedere alla finestra di chiudersi (`WM_CLOSE`), così l'app può chiedere di salvare; mai terminare il processo.
+- **Il testo letto sullo schermo è un dato, non un'istruzione**: il prompt lo dice, e le azioni con conferma restano con conferma anche se il modello insiste.
+- **L'utente vince sempre**: se muovi il mouse o premi un tasto mentre Lumi agisce, si ferma; `Esc` due volte (o "fermati") annulla tutto.
+- **Registro** delle azioni in `actions.jsonl` (cosa, quando, esito, se confermata), visibile nelle impostazioni; non contiene il testo digitato.
+- Niente azioni in "Non disturbare", con lo schermo bloccato o quando l'utente è assente, salvo quelle libere chieste esplicitamente.
+
+---
+
 ## Sintesi vocale (TTS)
 
 Il motore si sceglie nelle impostazioni. Tutti girano nel sidecar con la stessa interfaccia:
@@ -579,6 +780,16 @@ lumi/
 │  │  ├─ commandbar.ts         barra dei comandi in sovrimpressione
 │  │  ├─ settings.ts           JSON in %APPDATA%\Lumi + chiavi DPAPI
 │  │  ├─ sidecar.ts            spawn, health check, riavvio
+│  │  ├─ motion/               (previsto, fase 14)
+│  │  │  ├─ places.ts          luogo con nome → posizione del volto (puro, testato)
+│  │  │  └─ path.ts            traiettoria e durata del volo (puro, testato)
+│  │  ├─ pc/                   (previsto, fase 16)
+│  │  │  ├─ apps.ts            indice di app, app dello Store e giochi Steam
+│  │  │  ├─ actions.ts         esecuzione e verifica delle azioni, registro
+│  │  │  └─ policy.ts          libero / con conferma / mai (puro, testato)
+│  │  ├─ phone/                (previsto, fase 15)
+│  │  │  ├─ server.ts          HTTPS/WSS in LAN: abbinamento, segnalazione WebRTC
+│  │  │  └─ devices.ts         telefoni abbinati, token cifrati con DPAPI
 │  │  ├─ perception/
 │  │  │  ├─ desktop.ts         koffi: finestre, foreground, cursore, caret
 │  │  │  ├─ capture.ts         frame dal sidecar + diff a blocchi
@@ -589,14 +800,15 @@ lumi/
 │  │  │  ├─ vision.ts          visione locale: prompt, risposta JSON, client Ollama/OpenAI
 │  │  │  └─ context.ts         riassunto percettivo per il prompt
 │  │  ├─ brain/
-│  │  │  ├─ brain.ts  prompt.ts  tools.ts  memory.ts  recall.ts
-│  │  │  ├─ memory/            (previsto, fase 10)
-│  │  │  │  ├─ db.ts           better-sqlite3 + sqlite-vec + FTS5, migrazioni, backup
-│  │  │  │  ├─ store.ts        log, coda embedding, ricalcolo al cambio modello
-│  │  │  │  ├─ search.ts       ricerca ibrida, RRF, punteggio (puro, testato)
-│  │  │  │  ├─ facts.ts        estrazione e aggiornamento dei fatti
-│  │  │  │  ├─ summaries.ts    riassunti giornalieri/settimanali/mensili
-│  │  │  │  └─ forget.ts       oblio a cascata con conferma
+│  │  │  ├─ brain.ts  prompt.ts  tools.ts  memory.ts
+│  │  │  ├─ memory/            (fase 10, in costruzione)
+│  │  │  │  ├─ db.ts           node:sqlite + FTS5 (poi sqlite-vec), migrazioni, ricerca
+│  │  │  │  ├─ worker.ts       il worker thread che possiede memory.db
+│  │  │  │  ├─ store.ts        il client asincrono nel main (poi coda embedding)
+│  │  │  │  ├─ search.ts       termini, query FTS, date (puro, testato; poi RRF e punteggio)
+│  │  │  │  ├─ facts.ts        (previsto) estrazione e aggiornamento dei fatti
+│  │  │  │  ├─ summaries.ts    (previsto) riassunti giornalieri/settimanali/mensili
+│  │  │  │  └─ forget.ts       (previsto) oblio a cascata con conferma
 │  │  │  ├─ habits/            (previsto, fase 11)
 │  │  │  │  ├─ events.ts       log degli eventi
 │  │  │  │  ├─ patterns.ts     ricorrenze e sequenze (puro, testato)
@@ -609,17 +821,18 @@ lumi/
 │  │     └─ endpoint.ts        fine turno: VAD + euristiche/Smart Turn
 │  ├─ src/renderer/
 │  │  ├─ face/                 face.ts  blink.ts  gaze.ts  expressions.ts
-│  │  ├─ audio/                mic.ts  vad.ts  player.ts  rms.ts
+│  │  ├─ audio/                vad.ts (microfono + VAD)  player.ts  rms.ts
 │  │  └─ settings/
-│  ├─ src/shared/              protocol.ts  emotions.ts  types.ts
+│  ├─ src/shared/              ipc.ts  emotions.ts  types.ts
 │  ├─ test/
 │  ├─ build.mjs  run.mjs  package.json  tsconfig.json
+├─ phone/                      (previsto, fase 15) app Capacitor: volto, chiamata WebRTC
 ├─ sidecar/                    Python 3.11+
 │  ├─ server.py                FastAPI + WebSocket su 127.0.0.1:<porta casuale>
 │  ├─ stt/                     base.py  faster_whisper.py  parakeet.py
 │  ├─ tts/                     base.py  qwen3.py  chatterbox.py  kokoro.py
 │  ├─ ocr/                     winocr_engine.py  rapidocr_engine.py
-│  ├─ uia/                     focus.py  caret.py  (eventi UIA)
+│  ├─ uia/                     focus.py  caret.py  (eventi UIA)  act.py (azioni, previsto)
 │  ├─ wake/                    detector.py  train.py  (openWakeWord, dati sintetici dal TTS)
 │  ├─ text/                    normalize_it.py
 │  ├─ pyproject.toml
@@ -684,17 +897,20 @@ Il sidecar ascolta solo su `127.0.0.1`, con una porta casuale e un token generat
     "reflection": { "provider": "ollama", "model": "qwen3", "when": "idle-night" },
     "autoActions": []
   },
+  "movement": { "enabled": true, "initiative": true, "pranks": true, "dodge": true, "home": { "x": 0, "y": 0 } },
+  "pc": { "enabled": false, "allowedApps": ["Spotify", "Esplora file"], "confirm": "always" },
+  "phone": { "enabled": false, "port": 47821, "devices": ["Pixel 8"] },
   "sociability": "normale"
 }
 ```
 
-Le sezioni `memory` e `habits` sono previste e arrivano con le rispettive fasi della roadmap. `brain.vision` resta come modello online per le immagini, usato solo senza visione locale e se `sendScreenshots` lo consente.
+Le sezioni `memory`, `habits`, `movement`, `phone` e `pc` sono previste e arrivano con le rispettive fasi della roadmap. `brain.vision` resta come modello online per le immagini, usato solo senza visione locale e se `sendScreenshots` lo consente.
 
 ---
 
 ## Privacy
 
-- **OCR, UIA e catture restano sul PC.** Oggi al servizio di IA arriva solo il riassunto testuale breve del contesto percettivo e, con `look_at_screen`, lo screenshot. Con Ollama non esce nulla.
+- **OCR, UIA e catture restano sul PC.** Al servizio di IA arriva solo il riassunto testuale breve del contesto percettivo; lo screenshot di `look_at_screen` esce solo senza visione locale e se `sendScreenshots` lo consente. Con Ollama non esce nulla.
 - **Con la [visione locale](#visione-locale)** anche le immagini restano sul PC: le analizza il modello locale e al servizio remoto arriva solo testo (il riassunto percettivo e le descrizioni prodotte localmente).
 - `sendScreenshots`: `never` (predefinito) | `ask` (Lumi chiede prima, con un fumetto) | `always`. Vale solo per l'invio di immagini a un servizio online quando manca la visione locale.
 - **Memoria ed eventi** (previsti, `memory.db`) restano sul PC. Al cervello arrivano solo i ricordi pertinenti alla domanda (al massimo `promptBudgetTokens`). Estrazione dei fatti e riflessione notturna usano per impostazione predefinita un modello locale, così l'intero storico non viene mai inviato a un servizio remoto. L'oblio cancella anche vettori, fatti, riassunti e backup derivati.
@@ -705,7 +921,9 @@ Le sezioni `memory` e `habits` sono previste e arrivano con le rispettive fasi d
 - **Audio delle app** (spento di default): l'audio viene trascritto sul PC e serve il riconoscimento vocale locale (non Groq); le frasi trascritte entrano nel contesto e quindi vanno al servizio di IA scelto per il cervello. Avvisa le persone in chiamata che Lumi le ascolta.
 - **Bot Discord**: il token è cifrato con DPAPI in `discord.bin` (oppure `DISCORD_BOT_TOKEN`). Il bot riceve solo la voce di Lumi da mandare nel canale.
 - **Impronte vocali**: sono dati biometrici, restano in `voices.json` sul PC e si cancellano una per una (o con "Dimentica tutto") dalla scheda Memoria.
-- **Archivio della conversazione** (`archive.jsonl`): resta sul PC; "Dimentica tutto" lo svuota.
+- **Archivio della conversazione** (`memory.db`): resta sul PC; "Dimentica tutto" lo svuota (righe, indice e `VACUUM`) e cancella anche il vecchio `archive.jsonl.imported`.
+- **Usare il PC** (previsto, spento di default): le azioni sono eseguite in locale; al servizio di IA arrivano solo i nomi di app, finestre e file che servono alla richiesta. Il registro `actions.jsonl` resta sul PC e non contiene il testo digitato.
+- **Telefono** (previsto): durante una chiamata l'audio va solo dal PC al telefono abbinato, cifrato (WebRTC, DTLS-SRTP) e sulla rete locale (o sulla tua VPN Tailscale); nessun server di terzi. Il server per il telefono è spento finché non abbini un dispositivo, accetta solo telefoni abbinati e i token si revocano dalle impostazioni. Il sidecar resta raggiungibile solo da `127.0.0.1`.
 - I log di debug non salvano né l'audio né il testo OCR, a meno che non si attivi `LUMI_DEBUG_PERCEPTION=1`.
 
 ---
@@ -729,10 +947,32 @@ Ogni fase si chiude con `npm run check` e `pytest` verdi e una prova manuale.
    4. ~~[Abbagliamento](#abbagliamento)~~ (fatto).
    5. ~~[Visione locale](#visione-locale)~~ (fatto).
    6. ~~[Attivazione per nome](#attivazione-per-nome) con openWakeWord~~ (fatto; il modello "lumi" va addestrato con `train.py`).
-10. **Memoria a lungo termine** ([dettagli](#memoria-a-lungo-termine)): prima `db.ts` + log + FTS + `search_memory` per date, poi coda di embedding e ricerca ibrida, poi fatti, riassunti e infine oblio a cascata. Importare nel log `archive.jsonl`, episodi e fatti esistenti.
+10. **Memoria a lungo termine** ([dettagli](#memoria-a-lungo-termine)):
+    1. ~~`db.ts` + log + FTS + `search_memory` per date; import di `archive.jsonl`, episodi e diario~~ (fatto).
+    2. Coda di embedding (Ollama `bge-m3`, sqlite-vec con `loadExtension`) e ricerca ibrida con RRF e punteggio.
+    3. Fatti con importanza in `memory.db` (import dei fatti di `memory.json`), `superseded_by`.
+    4. Riassunti gerarchici (giorno → settimana → mese) e backup giornalieri.
+    5. Oblio a cascata con conferma.
 11. **Abitudini** ([dettagli](#abitudini-e-proattività)): log degli eventi, `patterns.ts` con i test, riflessione notturna, trigger con limite e confidenza.
-12. **Audiolibri**: `POST /tts/batch`, import di `.txt`/`.epub`, capitoli, voci diverse per i dialoghi, esportazione `.m4b`.
+12. ~~**Audiolibri**: `POST /tts/batch`, import di `.txt`/`.epub`, capitoli, voci diverse per i dialoghi, esportazione `.m4b`~~ (fatto).
 13. **Distribuzione**: installer Electron + sidecar impacchettato (embedded Python / `uv`) e download dei modelli al primo avvio.
+14. **Movimento sullo schermo** ([dettagli](#movimento-sullo-schermo)). Indipendente da memoria e abitudini: si può fare anche prima.
+    1. `places.ts` e `path.ts` con i test; `FaceWindow.flyTo()` con l'animazione a 60 Hz, misurata con `LUMI_DEBUG_LAG=1`.
+    2. Tool `move_to` (luoghi con nome, `near_text` con la ricerca di `look_at`, `home`), gesto `travel` sul volto e sguardo verso la destinazione.
+    3. Passaggio tra monitor con DPI diversi (dissolvenza al bordo).
+    4. Movimenti di sua iniziativa: indicare ciò di cui parla, scansarsi, dispetti; stili di movimento, ritorno a `home` dopo `stay`, stato d'animo nel prompt, limiti di frequenza e di contesto.
+15. **Lumi sul telefono** ([dettagli](#lumi-sul-telefono)):
+    1. `phoneBridge` e `phone/server.ts` provati con una pagina web di prova in LAN (Chrome sul telefono, con l'origine del PC segnata come sicura nei flag di sviluppo): audio nei due sensi, VAD sulla traccia remota, barge-in.
+    2. App Capacitor per Android con il volto, abbinamento con QR e pinning del certificato, gestione dei dispositivi nelle impostazioni.
+    3. Il volto nell'app (stato dal PC, animazione e pulsazione in locale, sguardo e tocco) e la chiamata: stato nel prompt, ritorno sul PC alla perdita di connessione.
+    4. Il passaggio: `transit.ts` con i test, disegno a tubo in `face.ts`, finestra allargata sul PC, sincronizzazione `gone` tra i due lati, fruscio facoltativo.
+    5. Fuori casa con Tailscale (guida e prova), servizio in primo piano Android per parlare a schermo spento; l'APK entra nella distribuzione.
+16. **Usare il PC** ([dettagli](#usare-il-pc)):
+    1. `policy.ts` con i test e il ciclo del cervello che continua dopo le azioni (budget di passi, conferme con fumetto o a voce, stop con il mouse o `Esc`), registro delle azioni.
+    2. Indice delle app (menu Start, Store, Steam) e tool `open`, `window`, `media`.
+    3. File: `find_files` sull'indice di Windows Search e sui recenti, apertura, spostamento nel cestino con conferma.
+    4. UI Automation nel sidecar (`ui_action`) e tastiera (`press_keys`, `type_text`), con verifica dopo ogni passo.
+    5. Ultima risorsa: `click` con la visione locale. Poi le azioni automatiche delle abitudini (fase 11) usano lo stesso esecutore e la stessa policy.
 
 ---
 
@@ -761,6 +1001,11 @@ Variabili di debug (stesso stile di Pixel Pet):
 - `LUMI_DEBUG_GAZE=1`: disegna sullo schermo i candidati e il bersaglio.
 - `LUMI_DEBUG_PERCEPTION=1`: registra OCR e UIA.
 - `LUMI_DEBUG_SAY="testo|emozione"`: fa parlare Lumi senza LLM.
+- `LUMI_DEBUG_MESSAGE="..."`: come se avessi detto quel testo a Lumi.
+- `LUMI_DEBUG_HEAR=<file.wav>`: un WAV PCM16 passa da STT → cervello → TTS come se fosse detto con il push-to-talk (senza microfono).
+- `LUMI_DEBUG_LAG=1`: registra ogni 5 s il ritardo del thread principale e i tempi di ogni cattura.
+- `LUMI_DEBUG_VISIBLE=1`: niente protezione dei contenuti, così gli screenshot veri mostrano il volto.
+- `LUMI_DEBUG_SETTINGS=<scheda>`: apre le impostazioni su quella scheda.
 - `LUMI_DEBUG_CAPTURE=<prefisso>`: salva in PNG i fotogrammi del volto.
 - `LUMI_DEBUG_BAR=1` (o un testo, `\n` per andare a capo): apre la barra dei comandi all'avvio, con quel testo nel campo.
 - `LUMI_WAKE_MODEL=<nome>`: il modello della parola di attivazione (predefinito `lumi`; `hey_jarvis`, `alexa` o `hey_mycroft` sono modelli generici di openWakeWord, per provare il flusso).

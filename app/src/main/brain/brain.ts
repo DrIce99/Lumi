@@ -10,7 +10,7 @@ import { guessEmotion, type Emotion } from "../../shared/emotions";
 import { PROVIDERS } from "../../shared/providers";
 import { FACT_KINDS, type FactKind, type Settings } from "../../shared/types";
 import { log } from "../log";
-import { RECENT_LINES, speakerLabel, type ConversationEntry, type Memory } from "./memory";
+import { describeHit, RECENT_LINES, speakerLabel, type ConversationEntry, type Memory } from "./memory";
 import { buildContext, buildSystemPrompt, messageForHistory, type Situation, type Trigger } from "./prompt";
 import { ProviderError, type ChatProvider, type LiveSay, type MomentSession, type ToolCallOut, type ToolResultIn } from "./providers/types";
 import { parseToolCall, type LookRegion, type ToolCall } from "./tools";
@@ -64,6 +64,9 @@ export interface BrainHost {
 }
 
 const MAX_ROUNDS = 4;
+/** search_memory results per call, and characters per result. */
+const MEMORY_RESULTS = 6;
+const MEMORY_HIT_CHARS = 700;
 /** Facts an episode summary may add at once (a small model can get carried away). */
 const MAX_EPISODE_FACTS = 4;
 
@@ -214,7 +217,7 @@ export class Brain {
   /** Turns finished days of conversation into diary entries. */
   async writeDiary(): Promise<void> {
     const settings = this.host.settings();
-    for (const day of this.host.memory.pendingDiaryDays()) {
+    for (const day of await this.host.memory.pendingDiaryDays()) {
       let summary = day.episodes.map((e) => e.summary).join(" ") || `Abbiamo scambiato ${day.entries.length} messaggi.`;
       const chosen = this.authFailed ? null : this.host.provider("idle");
       if (chosen && day.entries.length + day.episodes.length >= 2) {
@@ -248,7 +251,7 @@ export class Brain {
       reminders: host.memory.reminders(),
       diary: host.memory.diary(),
       episodes: host.memory.recentEpisodes(),
-      recalled: isMessage ? host.memory.search(trigger.text, 3, settings.userName || "Utente") : [],
+      recalled: isMessage ? await host.memory.recall(trigger.text, 3) : [],
       conversation: host.memory.recentConversation(RECENT_LINES),
       trigger,
     });
@@ -369,11 +372,15 @@ export class Brain {
       case "remember":
         return done(`Saved as [${memory.remember(call.fact, call.kind).id}].`);
       case "forget":
-        return done(memory.forget(call.id) ? `Forgot [${call.id}].` : `There is no memory with id ${call.id}.`);
-      case "recall": {
-        const hits = memory.search(call.query, 5, this.host.settings().userName || "Utente");
-        if (!hits.length) return done("Nothing found in your memory about that.");
-        return done(hits.map((h) => `[${h.doc.at.slice(0, 16).replace("T", " ")}] ${h.doc.text}`).join("\n---\n"));
+        return done(memory.forget(call.id) ? `Forgot [${call.id}].` : `There is no memory or reminder with id ${call.id}.`);
+      case "search_memory": {
+        const result = await memory.searchMemory({ query: call.query, from: call.from, to: call.to, kind: call.kind, limit: MEMORY_RESULTS });
+        if (!result) return done("Your long-term memory is not available right now.");
+        if (result.badRange) return done("Those dates can't be read: use from/to like '2026-03', '2026-03-12' or '2026-03-12 18:00'.");
+        if (!result.hits.length) return done("Nothing found in your memory about that.");
+        const user = this.host.settings().userName || "Utente";
+        const text = result.hits.map((h) => describeHit(h, user, MEMORY_HIT_CHARS)).join("\n---\n");
+        return done(result.more ? `${text}\n(${result.more} more results: narrow the search with more words or a shorter period)` : text);
       }
       case "set_reminder": {
         const reminder = memory.addReminder(call.text, call.due);

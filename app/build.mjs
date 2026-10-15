@@ -21,6 +21,15 @@ const jobs = [
   }),
   build({
     ...common,
+    // memory.db lives in a worker thread: SQLite calls are synchronous
+    entryPoints: ["src/main/brain/memory/worker.ts"],
+    outfile: "dist/main/memoryWorker.js",
+    platform: "node",
+    format: "cjs",
+    packages: "external",
+  }),
+  build({
+    ...common,
     entryPoints: ["src/discord/bot.ts"],
     outfile: "dist/discord/bot.js",
     platform: "node",

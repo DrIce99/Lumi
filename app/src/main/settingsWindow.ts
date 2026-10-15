@@ -15,7 +15,7 @@ export interface SettingsBackend {
   testVoice(text: string): Promise<ConnectionReport>;
   applyProfile(profile: Profile): SettingsSnapshot;
   pickVoiceFile(window: BrowserWindow): Promise<string | null>;
-  forgetFact(id: string): SettingsSnapshot;
+  forgetMemory(id: string): SettingsSnapshot;
   clearMemory(): SettingsSnapshot;
   forgetVoice(id: string): SettingsSnapshot;
   setDiscordToken(token: string): SettingsSnapshot;
@@ -59,7 +59,7 @@ export class SettingsWindow {
       return backend.applyProfile(profile as Profile);
     });
     handle(IPC.settingsPickVoice, () => backend.pickVoiceFile(this.win!));
-    handle(IPC.settingsForget, (id) => backend.forgetFact(String(id)));
+    handle(IPC.settingsForget, (id) => backend.forgetMemory(String(id)));
     handle(IPC.settingsClear, () => backend.clearMemory());
     handle(IPC.settingsForgetVoice, (id) => backend.forgetVoice(String(id)));
     handle(IPC.settingsDiscordToken, (token) => backend.setDiscordToken(String(token ?? "")));
