@@ -58,5 +58,6 @@ export const IPC = {
   barTyping: "bar:typing",
   // main -> settings window
   settingsStatus: "settings:status",
+  travel: "face:travel",
   settingsForgetQuery: "settings:forget-query",
 } as const;

@@ -31,6 +31,7 @@ import { listVisionModels } from "./perception/vision";
 import type { Frame } from "./perception/diff";
 import { GlareDetector, glareStats, thumbnail } from "./perception/glare";
 import { foregroundWindow, systemCaret } from "./perception/desktop";
+import { findText, type TextItem } from "./perception/grounding";
 import { Perception, type OcrLine } from "./perception/perception";
 import { UiaClient } from "./perception/uia";
 import { APP_ORIGIN, registerAppScheme, serveAppScheme } from "./protocol";
@@ -58,6 +59,8 @@ import { isEcho, TurnManager, type SttBackend } from "./voice/turns";
 import { Voice, type AudioOut } from "./voice/voice";
 import { readWav, toFrames16k } from "./voice/wavInput";
 import { Vision } from "./vision";
+import { Mover } from "./motion/mover";
+import { parseToolCall } from "./brain/tools";
 import { describeResults, Web } from "./web";
 import { FaceWindow, type Point } from "./window";
 
@@ -83,6 +86,8 @@ if (!app.requestSingleInstanceLock()) {
 
 interface WindowState {
   anchor?: Point;
+  /** The user's own place for Lumi: the last position they dragged it to (flights don't change it). */
+  home?: Point;
 }
 
 /** Settings whose change needs a new sidecar configuration. */
@@ -171,8 +176,12 @@ function start(): void {
         if (event.type === "ready") log.info("Microphone and voice activity detection ready");
         turns.mic(event);
       },
-      moved: (anchor) => {
+      moved: (anchor, byUser) => {
         windowState.anchor = anchor;
+        if (byUser) {
+          windowState.home = anchor;
+          mover.userMoved();
+        }
         writeJson(stateFile, windowState);
       },
     },
@@ -490,7 +499,7 @@ function start(): void {
   });
 
   function sampleBackdrop(displays: Display[], frames: Frame[]): void {
-    if (!settings().face.adaptiveShadow || !backdrop.wantsSample(Date.now()) || face.isDragging()) return;
+    if (!settings().face.adaptiveShadow || !backdrop.wantsSample(Date.now()) || face.isDragging() || face.isMoving()) return;
     const i = displays.findIndex((d) => d.id === lumiDisplay().id);
     const frame = frames[i];
     if (!frame) return;
@@ -523,7 +532,7 @@ function start(): void {
     const i = displays.findIndex((d) => d.id === watched.id);
     if (i < 0 || !frames[i]) return;
     const asleep = mood.state().drowsy || effectiveFace() === "sonno";
-    const event = glare.push(glareStats(thumbnail(frames[i])), Date.now(), watched.id, asleep || face.isDragging() || !visible);
+    const event = glare.push(glareStats(thumbnail(frames[i])), Date.now(), watched.id, asleep || face.isDragging() || face.isMoving() || !visible);
     if (!event) return;
     const b = watched.bounds;
     const light = { x: b.x + event.centroid.x * b.width, y: b.y + event.centroid.y * b.height };
@@ -596,6 +605,38 @@ function start(): void {
   sidecar.on("ready", updateWake);
   sidecar.on("down", updateWake);
 
+  /** What Lumi looks at on demand: the active window when it is small enough, else its whole display. */
+  function lookAreaNow() {
+    const fg = foregroundWindow();
+    const window = fg?.rect ? screen.screenToDipRect(null, fg.rect) : null;
+    const display = window ? screen.getDisplayMatching(window) : screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+    const index = screen.getAllDisplays().findIndex((d) => d.id === display.id) + 1;
+    const crop = window && fg ? lookArea(window, display.bounds) : null;
+    return crop && fg ? { display, rect: crop, label: `the active window (${appName(fg.process)}) on screen ${index}` } : { display, rect: display.bounds, label: `screen ${index}` };
+  }
+
+  /**
+   * Where a piece of text is on screen, to fly next to it. A screen that
+   * doesn't change is never read by the change-driven OCR, so when the text
+   * isn't among what was read lately (or named by the vision model), the
+   * active window is read now.
+   */
+  async function locateOnScreen(text: string): Promise<Rectangle | null> {
+    const known = perception.locateText(text);
+    if (known || !perception.watching() || !sidecar.endpoint() || !voice.configured) return known;
+    const area = lookAreaNow();
+    const started = Date.now();
+    const result = await sidecar.request<{ lines: OcrLine[] }>("/ocr", { region: screen.dipToScreenRect(null, area.rect), lang: "it" }, 5000);
+    const items: TextItem[] = result.lines.map((l) => ({
+      text: l.text,
+      rect: screen.screenToDipRect(null, l.rect),
+      words: l.words.map((w) => ({ text: w.text, rect: screen.screenToDipRect(null, w.rect) })),
+    }));
+    const found = findText(text, items);
+    log.info(`Looked for "${text.slice(0, 40)}" on ${area.label}: ${result.lines.length} lines in ${Date.now() - started} ms, ${found ? "found" : "not found"}`);
+    return found?.rect ?? null;
+  }
+
   // ---- vision: real screenshots, only on demand ----
   let visionProblemAt = 0;
   const screenshots = new Screenshots(
@@ -619,14 +660,7 @@ function start(): void {
         const choice = await bubbles.ask(question, [{ id: "yes", label: "Sì" }, { id: "no", label: "No" }], 20_000);
         return choice === "yes";
       },
-      area: () => {
-        const fg = foregroundWindow();
-        const window = fg?.rect ? screen.screenToDipRect(null, fg.rect) : null;
-        const display = window ? screen.getDisplayMatching(window) : screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-        const index = screen.getAllDisplays().findIndex((d) => d.id === display.id) + 1;
-        const crop = window && fg ? lookArea(window, display.bounds) : null;
-        return crop && fg ? { display, rect: crop, label: `the active window (${appName(fg.process)}) on screen ${index}` } : { display, rect: display.bounds, label: `screen ${index}` };
-      },
+      area: () => lookAreaNow(),
       ocr: async (rect) => {
         if (!sidecar.endpoint() || !voice.configured) return [];
         const result = await sidecar.request<{ lines: OcrLine[] }>("/ocr", { region: screen.dipToScreenRect(null, rect), lang: "it", exclude: ownWindowsPhysical() }, 8000);
@@ -696,6 +730,17 @@ function start(): void {
         return `Reading the page failed: ${err instanceof Error ? err.message : String(err)}.`;
       }
     },
+    moveTo: (call, requested) => mover.move(call, requested),
+    // The user's words mention the screen: the local OCR reads it now (it never leaves the PC except as this text)
+    readScreen: async () => {
+      if (!perception.watching() || !sidecar.endpoint() || !voice.configured) return null;
+      const area = lookAreaNow();
+      const started = Date.now();
+      const result = await sidecar.request<{ lines: OcrLine[] }>("/ocr", { region: screen.dipToScreenRect(null, area.rect), lang: "it" }, 4000);
+      const text = result.lines.map((l) => l.text).join("\n").slice(0, 3000);
+      log.info(`Screen read for the message: ${result.lines.length} lines in ${Date.now() - started} ms`);
+      return text ? { label: area.label, text } : null;
+    },
     openForget: (query) => {
       settingsWindow.openForget(query);
       return `The forget list for "${query}" is open in the settings (tab Memoria): the user chooses what goes and confirms there. Nothing is forgotten yet: say so briefly.`;
@@ -708,6 +753,43 @@ function start(): void {
     },
   };
   const brain = new Brain(host);
+
+  // ---- moving around the screen ----
+  // Never dragged yet: where it starts is its place
+  windowState.home ??= windowState.anchor ?? face.getAnchor();
+  /** The active window covers its whole display (a game, a presentation, a video). */
+  const fullscreenApp = () => {
+    const fg = foregroundWindow();
+    if (!fg?.rect) return false;
+    const r = screen.screenToDipRect(null, fg.rect);
+    const b = screen.getDisplayMatching(r).bounds;
+    return r.x <= b.x + 2 && r.y <= b.y + 2 && r.width >= b.width - 4 && r.height >= b.height - 4;
+  };
+  const mover = new Mover({
+    settings,
+    face,
+    areas: () => screen.getAllDisplays().map((d) => d.workArea),
+    cursor: () => screen.getCursorScreenPoint(),
+    home: () => windowState.home ?? null,
+    locate: (text) => locateOnScreen(text),
+    caret: () => perception.recentCaret(3000),
+    typingWindow: () => {
+      if (!perception.recentCaret(3000)) return null;
+      const fg = foregroundWindow();
+      return fg?.rect ? screen.screenToDipRect(null, fg.rect) : null;
+    },
+    busy: () => {
+      if (!visible) return "you are hidden";
+      if (settings().doNotDisturb) return "the user doesn't want to be disturbed";
+      if (inCall()) return "the user is in a call";
+      if (fullscreenApp()) return "a fullscreen app is open";
+      return null;
+    },
+    answering: () => brain.answering(),
+    // The eyes go where Lumi is going
+    lookAt: (point) => perception.add({ id: "travel", kind: "speaking", rect: { x: point.x, y: point.y, width: 1, height: 1 }, salience: 1, t: Date.now() }),
+  });
+  setInterval(() => mover.dodgeTick(), 500).unref();
 
   // ---- memory: embeddings for search by meaning, in the background ----
   let memoryIndex: MemoryIndexStatus | null = null;
@@ -783,6 +865,7 @@ function start(): void {
       vision: settings().vision.provider !== "none" && settings().vision.model ? "local" : settings().perception.sendScreenshots,
       voices: voicesSummary(),
       web: ((p) => (p ? webSources[p] : ""))(web.provider()),
+      movement: mover.status(),
     };
   }
 
@@ -826,6 +909,16 @@ function start(): void {
         if (!win || !capturePrefix) return;
         writeFileSync(`${capturePrefix}_settings.png`, (await win.webContents.capturePage()).toPNG());
       }, 3500);
+    }
+    // Development aid: fly to these places one after the other (e.g. "top_left,other_screen,home"), as if asked
+    const debugMove = process.env.LUMI_DEBUG_MOVE;
+    if (debugMove) {
+      debugMove.split(",").forEach((where, i) => {
+        setTimeout(async () => {
+          const call = parseToolCall("move_to", { where: where.trim() });
+          if (call?.name === "move_to") log.info(`Debug move to ${where}: ${await mover.move(call, true)} -> ${JSON.stringify(face.win.getBounds())}`);
+        }, 2000 + i * 2500);
+      });
     }
     // Development aid: show expressions one after the other (e.g. "saccente,paura"), on a dark
     // background, and with LUMI_DEBUG_CAPTURE save each one at a few moments of its animation

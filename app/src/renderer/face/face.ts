@@ -38,7 +38,7 @@ export const EYE_GAP = 22;
 const BLINK_MIN = 0.1;
 /** Talk pulse: ±5% height following the speech level. */
 const TALK_PULSE = 0.05;
-const GESTURE_MS: Record<FaceGesture, number> = { nod: 520, shake: 460, bounce: 480, tremble: 380, freeze: 900, glassesPush: GLASSES_PUSH_MS };
+const GESTURE_MS: Record<FaceGesture, number> = { nod: 520, shake: 460, bounce: 480, tremble: 380, freeze: 900, glassesPush: GLASSES_PUSH_MS, land: 320 };
 /** A shock freezes the eyes this long before the jolt. */
 const FREEZE_MS = 500;
 /** Changing the eyes' shape (capsule, ring, chevron) crossfades this long. */
@@ -88,6 +88,9 @@ export class Face {
   private gestures: { kind: FaceGesture; start: number; seed: number }[] = [];
   private bounceAt = Number.NEGATIVE_INFINITY;
   private glarePlay: GlarePlay | null = null;
+  /** Flying: the eyes stretch along the motion and trail a little behind it. */
+  private readonly travelX = new Tween(0);
+  private readonly travelY = new Tween(0);
   /** The side the last suspicious look went to. */
   private lastSide: -1 | 1 = 1;
   /** The eyes' shape now, and the one fading out. */
@@ -191,6 +194,18 @@ export class Face {
     this.wake();
   }
 
+  /** Lumi flies across the screen (window moved by main): `vx, vy` -1..1; `landed` squashes the eyes once. */
+  travel(vx: number, vy: number, landed: boolean): void {
+    const now = performance.now();
+    this.travelX.set(clamp(vx, -1, 1), 90, now);
+    this.travelY.set(clamp(vy, -1, 1), 90, now);
+    if (landed) {
+      this.gesture("land");
+      this.blinker.trigger(now + 120);
+    }
+    this.wake();
+  }
+
   /** A sentence starts playing: a small lift of the eyes. */
   sentenceStart(): void {
     this.bounceAt = performance.now();
@@ -249,8 +264,12 @@ export class Face {
     const bounce = this.bounceOffset(now);
     const closure = this.blinker.closure(now);
     const talk = this.speaking() ? TALK_PULSE * (2 * this.level - 1) : 0;
-    const width = EYE_WIDTH * v("width") * s * motion.sx;
-    const baseHeight = EYE_HEIGHT * v("height") * s * (1 + talk) * motion.sy;
+    const tx = this.travelX.value(now);
+    const ty = this.travelY.value(now);
+    // Stretched along the flight, a little thinner across it; squashed on landing
+    const land = this.landSquash(now);
+    const width = EYE_WIDTH * v("width") * s * motion.sx * (1 + 0.28 * Math.abs(tx) - 0.1 * Math.abs(ty)) * (1 + 0.12 * land);
+    const baseHeight = EYE_HEIGHT * v("height") * s * (1 + talk) * motion.sy * (1 + 0.32 * Math.abs(ty) - 0.12 * Math.abs(tx)) * (1 - 0.18 * land);
     const lid = clamp(v("lid"), 0, 0.95);
     const half = (EYE_GAP + EYE_WIDTH) / 2 + v("spread") / 2;
     const tilt = (v("tilt") * Math.PI) / 180;
@@ -266,8 +285,8 @@ export class Face {
       // The resting lid lowers the top of the eye; blinks squash toward the middle
       const lidDrop = (baseHeight * asym * lid) / 2;
       return {
-        cx: cx + side * half * s + (look.x + motion.gazeX * MAX_OFFSET_X * 0.5 - side * look.vergence + gesture.x + away + motion.dx) * s,
-        cy: cy + (v("y") + look.y + gesture.y + bounce + motion.dy) * s + lidDrop,
+        cx: cx + side * half * s + (look.x + motion.gazeX * MAX_OFFSET_X * 0.5 - side * look.vergence + gesture.x + away + motion.dx - 3 * tx) * s,
+        cy: cy + (v("y") + look.y + gesture.y + bounce + motion.dy - 3 * ty) * s + lidDrop,
         width,
         height,
         angle: side * tilt,
@@ -342,6 +361,14 @@ export class Face {
     return { x, y };
   }
 
+  /** 0..1..0 over the landing gesture. */
+  private landSquash(now: number): number {
+    const g = this.gestures.find((x) => x.kind === "land");
+    if (!g) return 0;
+    const t = (now - g.start) / GESTURE_MS.land;
+    return t < 0 || t >= 1 ? 0 : Math.sin(Math.PI * t) * (1 - t * 0.5);
+  }
+
   /** The gaze held by a shock's freeze, or null. */
   private frozen(now: number): { x: number; y: number; vergence: number } | null {
     const freeze = this.gestures.find((g) => g.kind === "freeze");
@@ -364,6 +391,9 @@ export class Face {
       now - this.bounceAt < 240 ||
       this.glarePlay !== null ||
       now - this.glyph.since < GLYPH_FADE_MS ||
+      this.travelX.active(now) ||
+      this.travelY.active(now) ||
+      Math.abs(this.travelX.value(now)) + Math.abs(this.travelY.value(now)) > 0.001 ||
       this.pupil.active(now) ||
       ACCESSORIES.some((a) => this.props[a].active(now)) ||
       (this.motion !== null && (this.motionStrength.value(now) > 0.001 || this.motionStrength.active(now))) ||

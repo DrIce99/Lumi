@@ -10,6 +10,7 @@ import { guessEmotion, type Emotion } from "../../shared/emotions";
 import { PROVIDERS } from "../../shared/providers";
 import { FACT_KINDS, type FactKind, type Settings } from "../../shared/types";
 import { log } from "../log";
+import { PROMISES, readIntents } from "./intents";
 import { describeHit, factFromRow, importanceOf, RECENT_LINES, speakerLabel, type ConversationEntry, type Memory, type RewriteMaterial, type SummaryRecord } from "./memory";
 import { buildContext, buildSystemPrompt, messageForHistory, type Situation, type Trigger } from "./prompt";
 import { ProviderError, type ChatProvider, type LiveSay, type MomentSession, type ToolCallOut, type ToolResultIn } from "./providers/types";
@@ -61,6 +62,10 @@ export interface BrainHost {
   backOff(minutes: number): void;
   /** Names a recognized voice; returns what happened, for the model. */
   nameVoice?(voice: string, name: string): string;
+  /** Flies the face somewhere (move_to); `requested`: the user asked in this moment. Returns what happened, for the model. */
+  moveTo?(call: Extract<ToolCall, { name: "move_to" }>, requested: boolean): string | Promise<string>;
+  /** The text on screen now (local OCR of the active window or its display), or null when perception is off or paused. */
+  readScreen?(): Promise<{ label: string; text: string } | null>;
   /** Opens the forget list for `query`: the user chooses and confirms there. Returns what happened, for the model. */
   openForget?(query: string): string;
   /** Web search and page reading; return what the model reads. */
@@ -318,6 +323,17 @@ export class Brain {
     const found = isMessage ? await host.memory.recall(trigger.text, 8) : [];
     const relatedFacts = found.flatMap((h) => (h.kind === "fact" ? [factFromRow(h.fact).id] : []));
     const facts = host.memory.promptFacts(relatedFacts);
+    // The user's words mention the screen: read it now, rather than hoping the model looks
+    const intents = isMessage ? readIntents(trigger.text) : { remember: false, screen: false, move: false };
+    let screenNow: { label: string; text: string } | null = null;
+    if (intents.screen && host.readScreen) {
+      try {
+        screenNow = await host.readScreen();
+        if (screenNow) host.memory.addFinding("screen_now", screenNow.text, screenNow.label);
+      } catch (err) {
+        log.warn("Reading the screen for the message failed", err);
+      }
+    }
     const context = buildContext({
       situation: host.situation(),
       settings,
@@ -328,6 +344,9 @@ export class Brain {
       episodes: host.memory.recentEpisodes(),
       recalled: found.filter((h) => h.kind !== "fact").slice(0, 3),
       conversation: host.memory.recentConversation(RECENT_LINES),
+      // What tools found earlier, except the screen just read (it is in <screen_now>)
+      findings: host.memory.recentFindings().filter((f) => !(screenNow && f.source === "screen_now" && f.text === screenNow.text)),
+      screenNow,
       trigger,
     });
     if (isMessage) {
@@ -353,6 +372,9 @@ export class Brain {
     this.speech = speech;
     const says: SayCall[] = [];
     let nudged = false;
+    /** Tools called in any round of this moment, and the promises already held to (once each). */
+    const calledSoFar = new Set<string>();
+    const heldTo = new Set<string>();
     let thinking = isMessage;
 
     if (isMessage) host.setThinking(true);
@@ -387,6 +409,17 @@ export class Brain {
         // that text is often just their reasoning.
         if (!ran.said && isMessage && result.text) says.push({ text: result.text, ...guessEmotion(result.text) });
         speech.live(says.map((s) => ({ ...s, complete: true })));
+        for (const name of ran.called) calledSoFar.add(name);
+        // Asked to remember or to move, and the tool wasn't called (small models just say "te lo segno", "arrivo"): one more round to do it
+        const broken = PROMISES.filter((p) => intents[p.intent] && !calledSoFar.has(p.tool) && !heldTo.has(p.tool));
+        if (broken.length && ran.results.length && round < MAX_ROUNDS - 1) {
+          for (const p of broken) heldTo.add(p.tool);
+          log.info(`Asked for ${broken.map((p) => p.tool).join(", ")} but it wasn't called: one more round`);
+          const last = ran.results[ran.results.length - 1];
+          last.text = [last.text, ...broken.map((p) => p.nudge)].filter(Boolean).join(" ");
+          session.addResults(ran.results);
+          continue;
+        }
         if (!ran.followUp) {
           // Small models sometimes only act after a message: give them one more round to answer
           if (!isMessage || says.length || !ran.results.length || nudged) break;
@@ -407,8 +440,9 @@ export class Brain {
     if (heard.text) host.memory.addMessage("lumi", heard.text, heard.interrupted);
   }
 
-  private async runTools(calls: ToolCallOut[], says: SayCall[], requestedByUser: boolean): Promise<{ results: ToolResultIn[]; said: boolean; followUp: boolean }> {
+  private async runTools(calls: ToolCallOut[], says: SayCall[], requestedByUser: boolean): Promise<{ results: ToolResultIn[]; said: boolean; followUp: boolean; called: Set<string> }> {
     const results: ToolResultIn[] = [];
+    const called = new Set<string>();
     let said = false;
     let followUp = false;
     for (const call of calls) {
@@ -421,15 +455,19 @@ export class Brain {
       // Tools that bring something back: the model needs another round to use it
       if (FOLLOW_UP.has(parsed.name)) followUp = true;
       if (parsed.name === "say") said = true;
+      called.add(parsed.name);
       try {
         const out = await this.execute(parsed, says, requestedByUser);
+        // A refused move must reach the model, or it goes on believing it moved
+        if (parsed.name === "move_to" && /^You did NOT|^You can't/.test(out.text)) followUp = true;
         results.push({ id: call.id, name: call.name, text: out.text, images: out.images, isError: false });
       } catch (err) {
         log.error(`Tool ${parsed.name} failed`, err);
         results.push({ id: call.id, name: call.name, text: err instanceof Error ? err.message : String(err), images: [], isError: true });
       }
     }
-    return { results, said, followUp };
+    if (called.size) log.info(`Tools called: ${[...called].join(", ")}`);
+    return { results, said, followUp, called };
   }
 
   private async execute(call: ToolCall, says: SayCall[], requestedByUser: boolean): Promise<{ text: string; images: LookResult["images"] }> {
@@ -443,6 +481,7 @@ export class Brain {
         return done(this.host.lookAt({ text: call.text, region: call.region }));
       case "look_at_screen": {
         const look = await this.host.lookAtScreen(call.focus, requestedByUser);
+        if (look.notes.length) memory.addFinding("look_at_screen", look.notes.join("\n"), call.focus);
         return { text: look.notes.join("\n") || (look.images.length ? "" : "Nothing to show."), images: look.images };
       }
       case "remember": {
@@ -467,16 +506,29 @@ export class Brain {
         if (!result.hits.length) return done("Nothing found in your memory about that.");
         const user = this.host.settings().userName || "Utente";
         const text = result.hits.map((h) => describeHit(h, user, MEMORY_HIT_CHARS)).join("\n---\n");
+        memory.addFinding("search_memory", text, call.query ?? [call.from, call.to].filter(Boolean).join(" - "));
         return done(result.more ? `${text}\n(${result.more} more results: narrow the search with more words or a shorter period)` : text);
       }
       case "set_reminder": {
         const reminder = memory.addReminder(call.text, call.due);
         return done(`Reminder [${reminder.id}] set for ${call.due.toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.`);
       }
+      case "move_to":
+        return done(this.host.moveTo ? await this.host.moveTo(call, requestedByUser) : "You can't move now.");
       case "web_search":
-        return done(this.host.webSearch ? await this.host.webSearch(call.query) : "You can't search the web now.");
+        if (!this.host.webSearch) return done("You can't search the web now.");
+        {
+          const found = await this.host.webSearch(call.query);
+          memory.addFinding("web_search", found, call.query);
+          return done(found);
+        }
       case "read_page":
-        return done(this.host.readPage ? await this.host.readPage(call.url) : "You can't read web pages now.");
+        if (!this.host.readPage) return done("You can't read web pages now.");
+        {
+          const page = await this.host.readPage(call.url);
+          memory.addFinding("read_page", page, call.url);
+          return done(page);
+        }
       case "name_voice":
         return done(this.host.nameVoice ? this.host.nameVoice(call.voice, call.person) : "You can't recognize voices now.");
       case "stay_quiet":

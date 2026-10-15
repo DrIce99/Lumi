@@ -278,6 +278,24 @@ Work one roadmap phase at a time; finish each with checks green.
   table copied to a new one (sqlite-vec deletes only flip a validity bit,
   the bytes stay), VACUUM, WAL checkpoint; a test greps the file bytes.
   Then the old archive and all backups go (a fresh one is made).
+- Short-term memory and kept promises (found with gemini-flash-lite: it
+  said "te lo segno" / "eccolo" without calling remember or looking, and
+  mangled a 9-digit UID because the prompt said never to read long
+  numbers). Now: `brain/intents.ts` (pure) reads "ricordati/segnati/..."
+  and screen words from the message; a screen mention makes the brain
+  OCR the look area itself (`host.readScreen`, local OCR of the active
+  window or its display, only while perception watches) into
+  `<screen_now>`; a remember or move request ("spostati", "altro
+  schermo", "stai ferma"...) whose tool wasn't called gets one more round
+  with an explicit instruction (`PROMISES` in intents.ts). A refused
+  move_to is a follow-up result, so the model learns it didn't move.
+  Each round logs the tool names called ("Tools called: ...") and the
+  mover logs refusals: "said it but didn't do it" shows in lumi.log. Tool results (look_at_screen,
+  web_search, read_page, search_memory, screen_now) stay 30 min in RAM as
+  `<recent_findings>` (max 5, 1200 chars, never on disk). Recent window
+  24 lines (was 16). The prompt asks numbers/codes exactly as digits and
+  forbids claiming an action without its tool call. The sidecar reads
+  numbers of 7+ digits, and 3+ after UID/PIN/codice/..., digit by digit.
 - `<recalled>` comes from `Memory.recall` (650 ms timeout, recent window
   excluded) for every message; the model calls `search_memory({ query?,
   from?, to?, kind? })` with local dates ("2026-03", "2026-03-12 18:00",
@@ -367,6 +385,34 @@ Work one roadmap phase at a time; finish each with checks green.
   stay 2 px higher). Geometry is pure in `face/glyphs.ts`. Checked by eye
   with `LUMI_DEBUG_FACE` + `LUMI_DEBUG_CAPTURE` (+ `LUMI_DATA_DIR` and an
   unreachable `LUMI_SIDECAR_URL` to keep the real data and models out).
+- Moving (phase 14, `main/motion/`): the model calls `move_to({ where,
+  text?, style?, stay? })`; `where` is a named place (`places.ts`, pure:
+  nine grid spots 24 px inside the work area, other_screen at the same
+  relative spot, near_text via `locateOnScreen` in main (recent OCR +
+  vision regions through `Perception.locateText`, else the active window
+  is OCR'd now: change-driven OCR never reads a static screen), near_mouse, out_of_the_way (nearest
+  grid spot not on caret / typing window / mouse), home, stop). `path.ts`
+  (pure): 250 ms + dist/2.5, max 1.2 s, times the style factor; arc for
+  fly, hops for hop. `FaceWindow.flyTo` moves the window at 60 Hz through
+  `applyBounds` like a drag (measured: max 18 ms loop delay, no stalls),
+  fades (setOpacity) across displays with different scaleFactor, a drag
+  stops it; `face:travel` {vx, vy, landed} stretches the eyes along the
+  motion and squashes them on landing (`land` gesture + blink).
+  `rules.ts` (pure): asked moves always go (unless movement off or held);
+  initiative needs settings, 1 per 2 min (near_text while answering
+  free), no pranks (dash/hop/sulk) when off or "silenzioso", never in
+  DND/call/fullscreen/hidden/after `stop` (1 h), never over the typing
+  window, max 10 s over caret/mouse. `mover.ts`: stay -> back home,
+  sulk mood (30 min) and position go into `<situation>` ("Your body:"),
+  dodge = caret within 60 px for 2 s (not the mouse: the user clicks the
+  eyes), every 20 s max. `home` = last user drag (`window.json.home`,
+  defaults to the start position). The flight starts when the tool call
+  completes, not on the sentence's lead. `Mover.move` is async (the
+  locate may OCR). Refusals read "You did NOT move: ..." + "correct
+  yourself" and are follow-up results: the model says "eccomi" in the
+  same reply as the call, before the result, so the prompt asks for a
+  neutral say there and no moving when it can't find the target.
+  `LUMI_DEBUG_MOVE=a,b,c`.
 - Glare: `perception/glare.ts` (pure) turns the change detector's luma
   frames of the watched display (gaze target's, else the foreground's)
   into a 64x36 linear-light thumbnail (sRGB decoding of the luma: an
@@ -419,7 +465,7 @@ Work one roadmap phase at a time; finish each with checks green.
   Lumi and `appAudio.apps` don't count). `LUMI_WAKE_MODEL` picks another
   model (e.g. `hey_jarvis`) to try the flow.
 
-## Planned features (not built yet; roadmap phases 10, 11, 14, 15, 16)
+## Planned features (not built yet; roadmap phases 10, 11, 15, 16)
 
 Decisions already taken for the next phases. Nothing here exists in the
 code yet; when a piece lands, move its notes to the sections above.
@@ -472,36 +518,6 @@ the notes above. Still planned: sidecar CPU embeddings without Ollama.
   lowers it, archive below 0.3, at most one proposal per 20 min, none in
   "Non disturbare", calls or heavy typing. Auto-actions only for harmless
   actions the user enabled explicitly in settings.
-
-### Moving around the screen (`main/motion/`, phase 14)
-
-- The model moves Lumi with `move_to({ where, text? })`; `where` is a named
-  place (corners, edges, center, `other_screen`, `near_text` via the
-  `look_at` grounding, `near_mouse`, `out_of_the_way`, `home`). Code turns
-  it into coordinates (`places.ts`, pure); the model never sends pixels.
-- `path.ts` (pure): 250 ms + distance / 2.5 px per ms, max 1.2 s, ease
-  in-out, a small arc on long trips. `FaceWindow.flyTo()` moves the window
-  with `setPosition` at 60 Hz, no resize; layout recomputed on arrival.
-  It runs on the mouse-hook thread: check with `LUMI_DEBUG_LAG=1`, drop to
-  30 Hz if the pointer suffers.
-- Across monitors with different DPI: fade out at the edge, reposition,
-  fade in (Electron resizes windows that straddle mixed-DPI displays).
-- While flying: `isMoving()` blocks backdrop and glare like `isDragging()`;
-  a user drag cancels the flight. `home` = last position the user dragged
-  to, kept apart from the current anchor.
-- Lumi also moves on its own initiative, decided by the model with the
-  same tool (`style`: fly/dash/sneak/hop/sulk; `stay` seconds, then back
-  to `home`): pointing at what it talks about (the flight starts on the
-  sentence's "lead" event, like the emotion), playful pranks when annoyed
-  (stand where the mouse is, flee from clicks, sulk in a corner), dodging
-  the caret/mouse (no model involved). Limits live in code, not only in
-  the prompt: settings `initiative` and `pranks` (both on by default), at
-  most one initiative move per 2 min (pointing during an answer excluded),
-  pranks scale with sociability, never cover the work spot > 10 s or the
-  active window while typing, never in "Non disturbare", calls, fullscreen
-  apps or while dragged; a drag cancels, "basta" stops initiatives for an
-  hour. A short persistent mood ("annoyed since 14:02") goes into
-  `<situation>` so a prank has a cause and an end.
 
 ### Lumi on the phone (`main/phone/`, `phone/`, phase 15)
 
@@ -596,7 +612,8 @@ face, to check it on screen),
 `LUMI_DEBUG_SETTINGS=<tab>` (opens the settings on a tab; captured with
 LUMI_DEBUG_CAPTURE), `LUMI_DEBUG_FACE=<expr,...>` (cycles expressions on a
 dark background, no greeting; with LUMI_DEBUG_CAPTURE saves each at 250,
-650, 1500 ms), `LUMI_DATA_DIR=<dir>` (another userData: settings, memory,
+650, 1500 ms), `LUMI_DEBUG_MOVE=<places>` (flies there one after the other),
+`LUMI_DATA_DIR=<dir>` (another userData: settings, memory,
 logs), `LUMI_DEBUG_BAR=1|<text>` (opens the command bar at
 startup, with that text typed; with LUMI_DEBUG_VISIBLE=1 a real screenshot
 shows the acrylic). Logs: `%APPDATA%\Lumi\logs\` (`lumi.log`,

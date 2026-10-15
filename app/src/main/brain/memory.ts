@@ -89,7 +89,21 @@ const MAX_CONVERSATION = 120;
 const MAX_DIARY = 60;
 const MAX_EPISODES = 300;
 /** Lines the prompt shows verbatim; older ones are summarized into episodes. */
-export const RECENT_LINES = 16;
+export const RECENT_LINES = 24;
+/** What tools brought back (a look at the screen, a web search...) stays in view this long, at most this many. */
+const FINDING_MS = 30 * 60_000;
+const MAX_FINDINGS = 5;
+const FINDING_CHARS = 1200;
+
+/** Something a tool brought back in an earlier moment, kept so a follow-up question can use it. */
+export interface Finding {
+  at: string;
+  /** What produced it: "look_at_screen", "web_search", "read_page", "search_memory", "screen_now". */
+  source: string;
+  /** What was asked ("meteo Torino"), when there was a question. */
+  about?: string;
+  text: string;
+}
 /** Unsummarized older lines that make an episode worth writing. */
 const EPISODE_LINES = 20;
 /**
@@ -185,6 +199,8 @@ export class Memory {
   private readonly writer: DebouncedWriter | null;
   /** The old archive (before memory.db); renamed once imported. */
   private readonly legacyArchive: string | null;
+  /** Tool results of the last half hour: in memory only, never on disk. */
+  private findings: Finding[] = [];
   /** Where the daily backups go, and how many to keep (0: none). */
   private backups: { dir: string; keep: () => number } | null = null;
 
@@ -330,6 +346,7 @@ export class Memory {
 
   /** Wipes everything Lumi knows, keeping only its birthday. */
   clear(): void {
+    this.findings = [];
     const bornAt = this.data.stats.bornAt;
     this.data = this.empty();
     this.data.stats.bornAt = bornAt;
@@ -345,6 +362,26 @@ export class Memory {
       }
     }
     this.save();
+  }
+
+  // ---- short-term: what tools brought back ----
+
+  /** Keeps a tool's result for the next moments (RAM only, 30 minutes). */
+  addFinding(source: string, text: string, about?: string): void {
+    const clean = text.trim();
+    if (!clean) return;
+    const clipped = clean.length > FINDING_CHARS ? `${clean.slice(0, FINDING_CHARS - 1)}…` : clean;
+    // The same question asked again replaces its older answer
+    this.findings = this.findings.filter((f) => !(f.source === source && f.about === about));
+    this.findings.push({ at: this.now().toISOString(), source, ...(about ? { about } : {}), text: clipped });
+    if (this.findings.length > MAX_FINDINGS) this.findings.splice(0, this.findings.length - MAX_FINDINGS);
+  }
+
+  /** The findings still fresh, oldest first. */
+  recentFindings(): Finding[] {
+    const now = this.now().getTime();
+    this.findings = this.findings.filter((f) => now - Date.parse(f.at) < FINDING_MS);
+    return [...this.findings];
   }
 
   // ---- backups (10.4) ----

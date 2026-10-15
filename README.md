@@ -46,7 +46,7 @@ L'obiettivo è che sembri **il più umano possibile**, cioè con poca latenza, t
 - **Cerca sul web**: quando non sa una cosa aggiornata (meteo, notizie, orari, prezzi) dice "un attimo, controllo", cerca e risponde citando il sito; se serve legge la pagina. Gratis: la ricerca web di Ollama (con la chiave di Ollama Cloud), DuckDuckGo senza chiave o un tuo SearXNG.
 - **Memoria persistente** e **momenti autonomi** (commenti spontanei nelle pause), come in Pixel Pet. Ogni frase della conversazione finisce in un database locale (`memory.db`): le parti più vecchie vengono riassunte in "episodi" che restano nel contesto, i fatti importanti su di te vengono estratti da soli, e a ogni domanda Lumi cerca nel suo passato i ricordi collegati (ricerca per parole e per significato, tutta sul PC; tool `search_memory` per le ricerche esplicite, anche per data: "ti ricordi quando…", "cosa ti ho detto a marzo?").
 - **Memoria che dura anni** (fase 10, prevista): ricorda tutto ciò che è stato detto e lo ritrova per significato, per parole esatte o per data. Dà priorità a ciò che conta, ma non butta niente e dimentica solo quando glielo chiedi tu.
-- **Si muove sullo schermo** (fase 14, prevista): se le chiedi di spostarsi ("vai in alto a destra", "sull'altro schermo", "levati, mi copri") vola lì da sola, anche tra i monitor; e si muove anche di sua iniziativa quando ha un motivo, per indicarti qualcosa o per farti un piccolo dispetto se l'hai infastidita.
+- **Si muove sullo schermo**: se le chiedi di spostarsi ("vai in alto a destra", "sull'altro schermo", "levati, mi copri") vola lì da sola, anche tra i monitor; e si muove anche di sua iniziativa quando ha un motivo, per indicarti qualcosa o per farti un piccolo dispetto se l'hai infastidita.
 - **Passa sul telefono** (fase 15, prevista): con il tasto "Chiama" dell'app Lumi viene risucchiata fuori dallo schermo del PC (come un oggetto che cade in un buco nero) e riemerge nell'app, dove la vedi e le parli; voce, cervello e memoria restano sul PC.
 - **Usa il PC** (fase 16, prevista): apre e chiude app, file e cartelle, gestisce le finestre e la musica e preme i controlli dentro le app; le azioni che cambiano qualcosa le fa solo dopo averti chiesto conferma.
 - **Impara le tue abitudini** (fase 11, prevista) e ti propone le cose prima che tu le chieda, senza mai agire da solo su azioni importanti.
@@ -366,7 +366,7 @@ Tool esposti al modello:
 - `name_voice({ voice, name })`
 - `web_search({ query })` e `read_page({ url })`: cerca sul web e legge una pagina (vedi sotto)
 - `stay_quiet()`
-- `move_to({ where, text?, style?, stay? })` (previsto, vedi [Movimento sullo schermo](#movimento-sullo-schermo))
+- `move_to({ where, text?, style?, stay? })`: vola in un altro punto dello schermo (vedi [Movimento sullo schermo](#movimento-sullo-schermo))
 - `open`, `find_files`, `window`, `media`, `ui_action`, `press_keys`, `type_text`, `click` (previsti, vedi [Usare il PC](#usare-il-pc))
 
 ### Ricerca sul web
@@ -483,6 +483,15 @@ Come funziona (fatto, passo 10.2):
 
 **Dimensioni**: con circa 200 scambi al giorno per 5 anni si arriva a circa 365.000 righe. Con vettori da 1024 dimensioni in float32 sono circa 1,5 GB, molto meno se quantizzati (int8 o binari, con un riordino finale sui float). Per SQLite è un volume gestibile, con ricerche nell'ordine dei decimi di secondo.
 
+### Memoria a breve termine
+
+- Nel prompt entrano le ultime **24** frasi della conversazione (prima 16); le più vecchie diventano episodi.
+- Ciò che i tool hanno trovato (uno sguardo allo schermo, una ricerca sul web o in memoria, una pagina letta) resta per **30 minuti** in `<recent_findings>`, così una domanda successiva ("e cosa diceva sotto?") non perde il filo. Resta solo in RAM, mai su disco.
+- **Quando parli dello schermo** ("guarda lo schermo", "leggi in basso a destra", "quello che c'è scritto qui"), Lumi legge subito il testo della finestra attiva con l'OCR locale e lo mette in `<screen_now>`, senza aspettare che il modello decida di guardare. Funziona con la percezione dello schermo attiva e non in pausa.
+- **Quando le chiedi di ricordare qualcosa o di spostarsi** e il modello risponde "te lo segno" o "arrivo" senza farlo davvero, il codice se ne accorge e gli dà un giro in più per chiamare `remember` o `move_to`. Se un movimento viene rifiutato (per esempio perché è spento nelle impostazioni), il motivo torna al modello, che può spiegartelo. Il log registra i nomi dei tool chiamati a ogni risposta. Il prompt gli vieta di dire di aver fatto qualcosa senza averlo fatto, e chiede numeri e codici esatti, in cifre.
+- I codici si leggono una cifra alla volta: i numeri di 7 o più cifre, e quelli di 3 o più dopo parole come UID, PIN o codice.
+- I modelli più piccoli (per esempio `gemini-flash-lite-latest`) seguono peggio queste regole: per la conversazione è meglio un modello un po' più grande, come `gemini-flash-latest`.
+
 ### Oblio (solo su richiesta)
 
 Quando dici "dimentica X", non basta cancellare la riga originale: X è anche nel suo embedding, nei fatti estratti e nei riassunti che lo citano. Per questo fatti e riassunti salvano `source_ids`.
@@ -549,56 +558,53 @@ Quando il contesto attuale corrisponde a un'abitudine, Lumi **propone** l'azione
 
 ## Movimento sullo schermo
 
-> Previsto (fase 14).
+> Fatto (fase 14).
 
-Oggi Lumi si sposta solo quando lo trascini. L'obiettivo è che si muova da solo, su tutto lo schermo e tra i monitor, quando glielo chiedi ("spostati in alto a destra", "vai sull'altro schermo", "mettiti vicino all'orologio", "levati, mi copri il codice", "torna al tuo posto"). E che si muova anche **di sua iniziativa**, quando ha un motivo (vedi sotto).
+Lumi si sposta su tutto lo schermo e tra i monitor quando glielo chiedi ("spostati in alto a destra", "vai sull'altro schermo", "mettiti vicino al pulsante Salva", "levati, mi copri", "torna al tuo posto"), e qualche volta **di sua iniziativa**, quando ha un motivo.
 
 ### Come glielo chiedi
 
-- **Tool `move_to({ where, text? })`**, chiamato dal modello come gli altri, così funziona con qualsiasi frase e insieme a un `say` ("Arrivo!"). Non serve un riconoscitore di comandi a parte: anche i modelli che scrivono le chiamate come testo passano da `textCalls.ts`.
+- **Tool `move_to({ where, text?, style?, stay? })`**, chiamato dal modello come gli altri, così funziona con qualsiasi frase e insieme a un `say` ("Arrivo!").
 - `where` è un luogo con un nome, risolto in coordinate dal codice e mai dal modello (che sbaglierebbe i pixel):
 
   | `where` | Dove va |
   | --- | --- |
-  | `top_left`, `top`, `top_right`, `left`, `center`, `right`, `bottom_left`, `bottom`, `bottom_right` | quel punto dell'area di lavoro del monitor attuale (esclusa la barra delle applicazioni) |
+  | `top_left`, `top`, `top_right`, `left`, `center`, `right`, `bottom_left`, `bottom`, `bottom_right` | quel punto dell'area di lavoro del monitor attuale (esclusa la barra delle applicazioni), a 24 px dai bordi |
   | `other_screen` | lo stesso punto relativo sul monitor successivo |
-  | `near_text` + `text` | accanto a un testo visibile, trovato con la ricerca approssimata già usata da `look_at` (OCR, UIA, regioni della visione locale) |
+  | `near_text` + `text` | accanto a un testo visibile (a destra, a sinistra, sotto o sopra, senza coprirlo). Cerca con la stessa ricerca approssimata di `look_at` tra l'OCR recente e le regioni indicate dalla visione locale; se non c'è, **legge subito la finestra attiva** con l'OCR (una schermata ferma non viene mai letta dall'OCR a zone). Le icone e i pulsanti senza scritta non hanno testo: il modello guarda prima lo schermo (`look_at_screen`) e usa il nome che la visione dà loro |
   | `near_mouse` | vicino al puntatore, senza coprirlo |
-  | `out_of_the_way` | il punto libero più vicino che non copre la finestra attiva, il caret e il mouse |
-  | `home` | il "suo posto": l'ultima posizione in cui l'hai trascinato tu |
+  | `out_of_the_way` | il punto libero più vicino che non copre il cursore del testo, la finestra in cui stai scrivendo e il mouse |
+  | `home` | il "suo posto": l'ultima posizione in cui l'hai trascinata tu (all'inizio, quella di partenza) |
+  | `stop` | "basta", "stai ferma": torna al suo posto e non si muove di sua iniziativa per un'ora |
 
-- Il risultato torna al modello ("Sono in alto a destra sul monitor 2"), e anche lo stato "sto viaggiando" è visibile, così non promette cose che non fa.
+- `style`: `fly` (normale, con un leggero arco), `dash` (scatto che frena), `sneak` (lenta), `hop` (a saltelli), `sulk` (lenta, offesa). `stay`: dopo quanti secondi tornare al suo posto (al massimo 300; 0 = resta).
+- Il risultato torna al modello ("Flying to the top right corner", oppure "You did NOT move: ..." con il motivo), che deve correggersi se aveva già detto di essere arrivata. Il prompt gli chiede di restare neutro nella stessa risposta di `move_to` ("Vediamo", "Ti faccio vedere"), perché l'esito lo conosce solo dopo, e di non muoversi "tanto per" se non trova ciò che deve indicare.
 
 ### Come si muove
 
-- **Moduli puri e testati**: `motion/places.ts` trasforma `where` in un'ancora (aree di lavoro dei monitor, rettangoli da evitare, punteggio dei punti candidati, distanza minima dai bordi come `clampAnchor`); `motion/path.ts` calcola la traiettoria (durata 250 ms + distanza / 2,5 px per ms, al massimo 1,2 s; easing in-out; un leggero arco o un "saltello" sulle distanze lunghe).
-- **Animazione nel main process**: `FaceWindow.flyTo(anchor)` sposta la finestra con `setPosition` a 60 Hz, senza ridimensionarla (layout e fumetti si ricalcolano solo all'arrivo). `setPosition` costa poco, ma gira sul thread del mouse hook: va misurato con `LUMI_DEBUG_LAG=1`, e se dovesse rallentare il puntatore si scende a 30 Hz.
-- **Tra monitor con DPI diversi** Electron ridimensiona male una finestra a cavallo dei due schermi: Lumi arriva al bordo, sparisce con una dissolvenza di 120 ms e ricompare sull'altro monitor (come se fosse "passato dietro" la cornice).
-- **Il volto durante il viaggio**: lo sguardo anticipa la destinazione (candidato di attenzione `travel` con priorità massima), gli occhi si allungano un po' nella direzione del moto e si schiacciano all'arrivo (gesto `travel` in `face.ts`, sopra l'espressione come gli altri), e c'è un battito di ciglia all'atterraggio.
-- **Durante il volo** valgono le regole del trascinamento: niente misure di sfondo e abbagliamento (`isMoving()` accanto a `isDragging()`), click-through invariato. Se lo afferri col mouse a metà strada, il volo si interrompe e vince la mano.
-- **Posizione**: la posizione raggiunta viene salvata come quella trascinata (`window.json`), ma `home` resta l'ultima scelta da te, così "torna al tuo posto" funziona sempre.
+- **Moduli puri e testati**: `motion/places.ts` trasforma `where` in una posizione; `motion/path.ts` calcola la traiettoria (250 ms + distanza / 2,5 px per ms, al massimo 1,2 s, moltiplicata per lo stile; easing; arco sulle distanze lunghe; saltelli per `hop`); `motion/rules.ts` decide se il movimento è permesso.
+- **Animazione nel main process**: `FaceWindow.flyTo()` sposta la finestra a 60 Hz come già fa il trascinamento. Il rischio era il thread del mouse hook: misurato con `LUMI_DEBUG_LAG=1` durante cinque voli consecutivi tra due monitor, il ritardo massimo è 18 ms, cioè la normale granularità dei timer di Windows, senza blocchi.
+- **Tra monitor con scala diversa** (DPI) Windows ridimensiona male una finestra a cavallo dei due schermi: Lumi sparisce in dissolvenza (circa 150 ms), salta e ricompare sull'altro monitor. Tra monitor con la stessa scala vola normalmente.
+- **Il volto durante il viaggio**: lo sguardo va subito verso la destinazione, gli occhi si allungano nella direzione del moto (e restano un po' indietro), all'atterraggio si schiacciano un attimo e sbattono le palpebre.
+- **Durante il volo** niente misure dello sfondo né abbagliamento (`isMoving()` come `isDragging()`). Se la afferri col mouse a metà strada, il volo si ferma lì: vince la mano.
+- **Posizione**: la posizione raggiunta viene salvata in `window.json`, ma il "suo posto" (`home`) cambia solo quando la trascini tu.
 
 ### Movimenti di sua iniziativa
 
-Lumi non si sposta solo su richiesta: può decidere di farlo, **quando ha un motivo**. È il modello a deciderlo, con lo stesso `move_to`, che ha anche:
+È il modello a deciderli, con lo stesso `move_to`; il prompt li descrive come rari e con un motivo:
 
-- **`style`**: `fly` (normale), `dash` (scatto rapido), `sneak` (lento, con gli occhi socchiusi), `hop` (a saltelli), `sulk` (lento e con lo sguardo basso);
-- **`stay`**: per quanti secondi restare lì prima di tornare a `home` (0 = resta).
+- **Indicare qualcosa**: quando parla di qualcosa sullo schermo lontano dal volto, ci va vicino (`near_text`) con `stay`, così poi torna al suo posto. Il volo parte quando la chiamata al tool è completa (di solito mentre parla), non sincronizzato con la frase come l'espressione.
+- **Umori**: se la prendi in giro può andare a tenere il broncio in un angolo (`sulk`) finché non fai pace, oppure fare un saltello quando è contenta. Lo stato ("sei nell'angolo in alto a sinistra dalle 14:02, a tenere il broncio") entra in `<situation>`, così il broncio ha una causa e una fine; dopo 30 minuti si scorda di essere offesa.
+- **Togliersi di mezzo**: se il cursore del testo le resta sotto (entro 60 px) per 2 secondi, si sposta nel punto libero più vicino, senza passare dal modello, al massimo ogni 20 secondi. Il mouse non la fa scappare: avvicinarlo agli occhi è il modo di cliccarla.
 
-Motivi tipici, descritti nel prompt come esempi e non come regole fisse:
+Limiti, nel codice (`rules.ts`) e non solo nel prompt:
 
-- **Indicare qualcosa**: quando parla di qualcosa sullo schermo lontano dal volto, ci va vicino (`near_text`) e lo guarda, poi torna al suo posto. È il caso più utile, e funziona anche in mezzo a una risposta: il volo parte quando la frase che lo chiede sta per suonare, come l'espressione (evento `lead`).
-- **Reazioni di carattere**: se l'hai presa in giro o infastidita può "vendicarsi" con piccoli dispetti innocui. Per esempio si piazza per qualche secondo davanti al punto in cui sta il mouse, scappa nell'angolo opposto quando provi a cliccarla, si mette di spalle in un angolo (`sulk`) e torna solo quando le chiedi scusa. Quando è contenta fa un giro veloce dello schermo; quando si annoia esplora.
-- **Togliersi di mezzo**: si scansa se il caret o il mouse le restano addosso (entro 60 px per più di 2 s), senza passare dal modello.
+- In Impostazioni → Generale: «Si sposta quando glielo chiedi», «Si muove anche di sua iniziativa», «Dispetti» (`dash`, `hop` e `sulk` presi di sua iniziativa) e «Si sposta se il cursore del testo le finisce sotto», tutti accesi di default.
+- Quello che chiedi tu si fa sempre (anche in "Non disturbare"), salvo se hai spento il movimento o la stai tenendo col mouse.
+- Di sua iniziativa: al massimo **uno spostamento ogni 2 minuti** (indicare qualcosa mentre ti risponde non conta), niente dispetti in socievolezza "silenzioso", mai in "Non disturbare", durante una chiamata, con un'app a schermo intero, mentre è nascosta o dopo uno `stop`.
+- Mai sopra la finestra in cui stai scrivendo; se un movimento coprirebbe il cursore o il mouse, resta lì al massimo 10 secondi e poi torna al suo posto.
 
-Limiti (nel codice, non solo nel prompt):
-
-- In Impostazioni → Volto: «Si muove di sua iniziativa» (acceso di default) e «Dispetti» (acceso di default, si può spegnere a parte).
-- Al massimo **uno spostamento d'iniziativa ogni 2 minuti** (indicare durante una risposta non conta); la frequenza dei dispetti segue la socievolezza (mai in "silenzioso").
-- Un dispetto **non copre** più di 10 s il punto in cui stai lavorando, e mai la finestra attiva mentre scrivi.
-- Mai in "Non disturbare", durante chiamate o riunioni (microfono usato da un'altra app), con un'app a schermo intero in primo piano (giochi, presentazioni, video) o mentre il volto è trascinato.
-- **Ha sempre l'ultima parola l'utente**: trascinarla annulla il movimento, e "basta" o "stai ferma" spengono le iniziative per un'ora (`stay_quiet` con la stessa durata).
-- Il prompt riceve un breve stato d'animo persistente nella conversazione (`<situation>`: "annoyed with the user since 14:02") così il dispetto ha una causa e una fine, e non si ripete a caso.
+Rispetto al piano non ci sono: la fuga quando provi a cliccarla (renderebbe impossibile aprire la chat) e il volo sincronizzato con la frase che lo nomina.
 
 ---
 
@@ -826,9 +832,11 @@ lumi/
 │  │  ├─ commandbar.ts         barra dei comandi in sovrimpressione
 │  │  ├─ settings.ts           JSON in %APPDATA%\Lumi + chiavi DPAPI
 │  │  ├─ sidecar.ts            spawn, health check, riavvio
-│  │  ├─ motion/               (previsto, fase 14)
+│  │  ├─ motion/
 │  │  │  ├─ places.ts          luogo con nome → posizione del volto (puro, testato)
-│  │  │  └─ path.ts            traiettoria e durata del volo (puro, testato)
+│  │  │  ├─ path.ts            traiettoria e durata del volo (puro, testato)
+│  │  │  ├─ rules.ts           quando può muoversi di sua iniziativa (puro, testato)
+│  │  │  └─ mover.ts           move_to, ritorno a casa, stop, schivata del cursore
 │  │  ├─ pc/                   (previsto, fase 16)
 │  │  │  ├─ apps.ts            indice di app, app dello Store e giochi Steam
 │  │  │  ├─ actions.ts         esecuzione e verifica delle azioni, registro
@@ -945,14 +953,14 @@ Il sidecar ascolta solo su `127.0.0.1`, con una porta casuale e un token generat
     "reflection": { "provider": "ollama", "model": "qwen3", "when": "idle-night" },
     "autoActions": []
   },
-  "movement": { "enabled": true, "initiative": true, "pranks": true, "dodge": true, "home": { "x": 0, "y": 0 } },
+  "movement": { "enabled": true, "initiative": true, "pranks": true, "dodge": true },
   "pc": { "enabled": false, "allowedApps": ["Spotify", "Esplora file"], "confirm": "always" },
   "phone": { "enabled": false, "port": 47821, "devices": ["Pixel 8"] },
   "sociability": "normale"
 }
 ```
 
-Le sezioni `memory`, `habits`, `movement`, `phone` e `pc` sono previste e arrivano con le rispettive fasi della roadmap. `brain.vision` resta come modello online per le immagini, usato solo senza visione locale e se `sendScreenshots` lo consente.
+Le sezioni `habits`, `phone` e `pc` sono previste e arrivano con le rispettive fasi della roadmap. `brain.vision` resta come modello online per le immagini, usato solo senza visione locale e se `sendScreenshots` lo consente.
 
 ---
 
@@ -1006,11 +1014,7 @@ Ogni fase si chiude con `npm run check` e `pytest` verdi e una prova manuale.
 11. **Abitudini** ([dettagli](#abitudini-e-proattività)): log degli eventi, `patterns.ts` con i test, riflessione notturna, trigger con limite e confidenza.
 12. ~~**Audiolibri**: `POST /tts/batch`, import di `.txt`/`.epub`, capitoli, voci diverse per i dialoghi, esportazione `.m4b`~~ (fatto).
 13. **Distribuzione**: installer Electron + sidecar impacchettato (embedded Python / `uv`) e download dei modelli al primo avvio.
-14. **Movimento sullo schermo** ([dettagli](#movimento-sullo-schermo)). Indipendente da memoria e abitudini: si può fare anche prima.
-    1. `places.ts` e `path.ts` con i test; `FaceWindow.flyTo()` con l'animazione a 60 Hz, misurata con `LUMI_DEBUG_LAG=1`.
-    2. Tool `move_to` (luoghi con nome, `near_text` con la ricerca di `look_at`, `home`), gesto `travel` sul volto e sguardo verso la destinazione.
-    3. Passaggio tra monitor con DPI diversi (dissolvenza al bordo).
-    4. Movimenti di sua iniziativa: indicare ciò di cui parla, scansarsi, dispetti; stili di movimento, ritorno a `home` dopo `stay`, stato d'animo nel prompt, limiti di frequenza e di contesto.
+14. ~~**Movimento sullo schermo** ([dettagli](#movimento-sullo-schermo)): luoghi, traiettorie, volo a 60 Hz, passaggio tra monitor, tool `move_to`, iniziative con limiti, schivata del cursore~~ (fatto).
 15. **Lumi sul telefono** ([dettagli](#lumi-sul-telefono)):
     1. `phoneBridge` e `phone/server.ts` provati con una pagina web di prova in LAN (Chrome sul telefono, con l'origine del PC segnata come sicura nei flag di sviluppo): audio nei due sensi, VAD sulla traccia remota, barge-in.
     2. App Capacitor per Android con il volto, abbinamento con QR e pinning del certificato, gestione dei dispositivi nelle impostazioni.
@@ -1065,6 +1069,7 @@ Variabili di debug (stesso stile di Pixel Pet):
 - `LUMI_DEBUG_CAPTURE=<prefisso>`: salva in PNG i fotogrammi del volto.
 - `LUMI_DEBUG_BAR=1` (o un testo, `\n` per andare a capo): apre la barra dei comandi all'avvio, con quel testo nel campo.
 - `LUMI_DEBUG_FACE=<espressioni>` (separate da virgole): le mostra una dopo l'altra su sfondo scuro, senza saluto; con `LUMI_DEBUG_CAPTURE` ne salva tre fotogrammi ciascuna.
+- `LUMI_DEBUG_MOVE=<luoghi>` (separati da virgole, per esempio `top_left,other_screen,home`): vola in quei punti uno dopo l'altro, come se glielo chiedessi; con `LUMI_DEBUG_LAG=1` si misura l'effetto sul thread del mouse.
 - `LUMI_DATA_DIR=<cartella>`: usa un'altra cartella per impostazioni, memoria e log (per provare l'app senza toccare quella vera). Con `LUMI_SIDECAR_URL` puntato a un indirizzo irraggiungibile l'app parte in modalità testo senza caricare modelli.
 - `LUMI_WAKE_MODEL=<nome>`: il modello della parola di attivazione (predefinito `lumi`; `hey_jarvis`, `alexa` o `hey_mycroft` sono modelli generici di openWakeWord, per provare il flusso).
 

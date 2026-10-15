@@ -395,6 +395,10 @@ function fill(next: SettingsSnapshot): void {
   $("subtitles").checked = s.face.subtitles;
   $("adaptiveShadow").checked = s.face.adaptiveShadow;
   $("glare").checked = s.face.glare;
+  $("moveEnabled").checked = s.movement.enabled;
+  $("moveInitiative").checked = s.movement.initiative;
+  $("movePranks").checked = s.movement.pranks;
+  $("moveDodge").checked = s.movement.dodge;
   $("showInCaptures").checked = s.face.showInCaptures;
   $("voicesEnabled").checked = s.voices.enabled;
   $("onlyMe").checked = s.voices.onlyMe;
@@ -515,6 +519,7 @@ function collect(): Settings {
     launchAtLogin: $("launchAtLogin").checked,
     face: { scale: num("scale", s.face.scale), color: $("color").value, subtitles: $("subtitles").checked, adaptiveShadow: $("adaptiveShadow").checked, glare: $("glare").checked, showInCaptures: $("showInCaptures").checked },
     voices: { enabled: $("voicesEnabled").checked, onlyMe: $("onlyMe").checked },
+    movement: { enabled: $("moveEnabled").checked, initiative: $("moveInitiative").checked, pranks: $("movePranks").checked, dodge: $("moveDodge").checked },
     web: { provider: $<HTMLSelectElement>("webProvider").value as Settings["web"]["provider"], searxngUrl: $("searxngUrl").value.trim() },
     memory: {
       ...s.memory,

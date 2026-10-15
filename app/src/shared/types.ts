@@ -84,6 +84,12 @@ export interface Settings {
     fillers: boolean;
     micDevice: string;
   };
+  /**
+   * Moving around the screen: `enabled` (move_to at all), `initiative`
+   * (Lumi moves on its own: pointing, moods), `pranks` (playful moves when
+   * annoyed), `dodge` (out of the way of the text cursor).
+   */
+  movement: { enabled: boolean; initiative: boolean; pranks: boolean; dodge: boolean };
   /** Searching the web (web_search, read_page): which free service, or none. */
   web: { provider: WebProvider; searxngUrl: string };
   /** Long-term memory (memory.db): where the embeddings come from, and how results are ordered. */
@@ -163,6 +169,7 @@ export const DEFAULT_SETTINGS: Settings = {
   vision: { provider: "ollama", model: "qwen3-vl:8b", keepAlive: "2m", maxSide: 1344 },
   stt: { engine: "faster-whisper", model: "large-v3-turbo", device: "auto", vocabulary: [] },
   tts: { engine: "qwen3", model: "1.7B-CustomVoice", voice: "ryan", speed: 1, volume: 1, seed: 7, pronunciations: [] },
+  movement: { enabled: true, initiative: true, pranks: true, dodge: true },
   web: { provider: "auto", searxngUrl: "" },
   memory: { embeddings: { provider: "ollama", model: "bge-m3" }, weights: { relevance: 1, recency: 0.5, importance: 0.5 }, backupDays: 7 },
   listen: {
@@ -274,7 +281,7 @@ export interface FaceState {
 
 /** A short eye gesture, independent of the expression. */
 /** freeze: half a second still, then a jolt (shock); glassesPush: a finger pushes the glasses up (saccente). */
-export type FaceGesture = "nod" | "shake" | "bounce" | "tremble" | "freeze" | "glassesPush";
+export type FaceGesture = "nod" | "shake" | "bounce" | "tremble" | "freeze" | "glassesPush" | "land";
 
 export type BubbleKind = "speech" | "system" | "question";
 
@@ -391,6 +398,8 @@ export interface FaceBridge {
   onGesture(cb: (gesture: FaceGesture) => void): void;
   onContrast(cb: (contrast: FaceContrast) => void): void;
   onGlare(cb: (msg: { lightDx: number }) => void): void;
+  /** Flying across the screen: direction and speed (-1..1), `landed` at the end of a flight. */
+  onTravel(cb: (msg: { vx: number; vy: number; landed: boolean }) => void): void;
   onBubbleStart(cb: (msg: BubbleStart) => void): void;
   onBubbleChunk(cb: (msg: BubbleChunk) => void): void;
   onBubbleEnd(cb: (msg: BubbleEnd) => void): void;

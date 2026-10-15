@@ -182,7 +182,7 @@ test("episodes: facts come with importance and corrections name the fact they re
   let t = Date.parse(at(2026, 3, 1, 8));
   const memory = new Memory(null, MemoryStore.local(db), () => new Date((t += 60_000)));
   const torino = memory.remember("Vive a Torino.", "user", { importance: 9 });
-  for (let i = 0; i < 40; i++) memory.addMessage(i % 2 ? "lumi" : "user", i === 3 ? "Mi sono trasferito a Milano la settimana scorsa" : `chiacchiera ${i}`);
+  for (let i = 0; i < 48; i++) memory.addMessage(i % 2 ? "lumi" : "user", i === 3 ? "Mi sono trasferito a Milano la settimana scorsa" : `chiacchiera ${i}`);
   const prompts: string[] = [];
   const provider = {
     id: "ollama",

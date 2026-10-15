@@ -340,12 +340,8 @@ export class Perception {
 
   /** Looks at visible text (while saying something about it). Returns a description for the model. */
   lookAtText(text: string, holdMs = 6000): string {
-    const items: TextItem[] = this.screenText.map((s) => s.item);
-    const f = this.uia?.focus;
-    if (f && !f.isPassword && f.rect && f.name) items.push({ text: f.name, rect: this.host.toDip(f.rect) });
     const fg = this.foreground;
-    if (fg?.rect && fg.title) items.push({ text: fg.title, rect: { ...this.host.toDip(fg.rect), height: 32 } });
-    const match = findText(text, items);
+    const match = findText(text, this.textItems());
     if (!match) {
       if (fg?.rect) {
         this.focusOn(this.host.toDip(fg.rect), "the active window", holdMs);
@@ -355,6 +351,28 @@ export class Perception {
     }
     this.focusOn(match.rect, `"${match.text.slice(0, 80)}"`, holdMs);
     return `Looking at "${match.text.slice(0, 120)}".`;
+  }
+
+  /** What Lumi can read on screen now (OCR lines, the focused element, the window title), for grounding. */
+  private textItems(): TextItem[] {
+    const items: TextItem[] = this.screenText.map((s) => s.item);
+    const f = this.uia?.focus;
+    if (f && !f.isPassword && f.rect && f.name) items.push({ text: f.name, rect: this.host.toDip(f.rect) });
+    const fg = this.foreground;
+    if (fg?.rect && fg.title) items.push({ text: fg.title, rect: { ...this.host.toDip(fg.rect), height: 32 } });
+    return items;
+  }
+
+  /** Where some visible text is (screen DIP), without moving the eyes; null when not found or paused. */
+  locateText(text: string): Rect | null {
+    if (!this.watching()) return null;
+    return findText(text, this.textItems())?.rect ?? null;
+  }
+
+  /** The text cursor, when it moved in the last `withinMs` (the user is typing there). */
+  recentCaret(withinMs = 3000): Rect | null {
+    const caret = this.attention.candidatesNow().find((c) => c.kind === "caret" && c.id === "caret");
+    return caret && this.now() - caret.t <= withinMs ? caret.rect : null;
   }
 
   /**

@@ -3,6 +3,8 @@
 // values that don't match the schema.
 import { clampIntensity, EMOTIONS, guessEmotion, toEmotion, type Emotion } from "../../shared/emotions";
 import { FACT_KINDS, type FactKind } from "../../shared/types";
+import { STYLES, type MoveStyle } from "../motion/path";
+import { PLACES, type Place } from "../motion/places";
 
 export interface ToolSpec {
   name: string;
@@ -181,6 +183,26 @@ export const TOOLS: ToolSpec[] = [
     },
   },
   {
+    name: "move_to",
+    description:
+      "Fly your face to another place on the screen. When the user asks (\"spostati in alto a destra\", \"vai sull'altro schermo\", \"levati, mi copri\", \"torna al tuo posto\"), and sometimes on your own: next to something you are talking about, or as a playful mood. \"stop\" when the user tells you to stop moving: you go back to your place and stay still for an hour. To point at something on the screen use near_text with the text written on it (for an icon or a button without text, call look_at_screen first and use the name it gives). The result tells you whether you really moved: until then don't say you did.",
+    parameters: {
+      type: "object",
+      properties: {
+        where: {
+          type: "string",
+          enum: [...PLACES, "stop"],
+          description: "A place: corners and sides of the current screen, other_screen, near_text (next to visible text, give text), near_mouse, out_of_the_way (a free spot), home (your usual place), or stop.",
+        },
+        text: { type: "string", description: "For near_text: a short piece of visible text to fly next to." },
+        style: { type: "string", enum: [...STYLES], description: "fly (default), dash (a quick dart), sneak (slow), hop (little jumps), sulk (slow, offended)." },
+        stay: { type: "number", minimum: 0, maximum: 300, description: "Seconds to stay there before going back to your place (0 or missing: stay)." },
+      },
+      required: ["where"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "stay_quiet",
     description:
       "Choose to say nothing now (the best choice in most autonomous moments, and when the user is busy). Optionally, how many minutes to wait before your next autonomous moment.",
@@ -203,7 +225,8 @@ export type ToolCall =
   | { name: "web_search"; query: string }
   | { name: "read_page"; url: string }
   | { name: "name_voice"; voice: string; person: string }
-  | { name: "stay_quiet"; minutes?: number };
+  | { name: "stay_quiet"; minutes?: number }
+  | { name: "move_to"; where: Place | "stop"; text?: string; style?: MoveStyle; stay?: number };
 
 /** Parses `when` ("+20", "20", "15:30", "2026-10-14 09:00") into a date after `now`; null when unreadable. */
 export function parseWhen(when: unknown, now: Date): Date | null {
@@ -305,6 +328,15 @@ export function parseToolCall(name: string, input: unknown, now = new Date()): T
       const due = parseWhen(o.when ?? o.minutes, now);
       const value = text(o.text, 400);
       return due && value ? { name, due, text: value } : null;
+    }
+    case "move_to": {
+      const where = typeof o.where === "string" ? o.where.trim().toLowerCase() : "";
+      if (!(PLACES as readonly string[]).includes(where) && where !== "stop") return null;
+      const value = text(o.text, 200);
+      const style = typeof o.style === "string" && (STYLES as readonly string[]).includes(o.style) ? (o.style as MoveStyle) : undefined;
+      const stay = typeof o.stay === "number" && Number.isFinite(o.stay) ? Math.min(300, Math.max(0, Math.round(o.stay))) : undefined;
+      if (where === "near_text" && !value) return null;
+      return { name, where: where as Place | "stop", ...(value ? { text: value } : {}), ...(style ? { style } : {}), ...(stay ? { stay } : {}) };
     }
     case "stay_quiet": {
       const minutes = typeof o.minutes === "number" && Number.isFinite(o.minutes) && o.minutes >= 1 && o.minutes <= 240 ? o.minutes : undefined;

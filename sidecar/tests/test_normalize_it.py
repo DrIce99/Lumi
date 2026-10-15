@@ -66,3 +66,12 @@ def test_urls_emails_symbols_emoji_markdown():
     assert normalize("**Attenzione**: usa `npm install`") == "Attenzione: usa npm install"
     assert normalize("e/o") == "e o"
     assert normalize("es. questo, ecc.") == "per esempio questo, eccetera"
+
+
+def test_codes_and_long_numbers_are_read_digit_by_digit():
+    assert normalize("UID 710351080") == "u i di sette uno zero tre cinque uno zero otto zero"
+    assert normalize("il PIN è 4821") == "il pi i enne è quattro otto due uno"
+    assert normalize("il codice 573") == "il codice cinque sette tre"
+    assert normalize("nel 2026") == "nel duemilaventisei"
+    assert normalize("costa 4821 euro") == "costa quattromilaottocentoventuno euro"
+    assert normalize("sono 1.200.000 abitanti") == "sono un milione e duecentomila abitanti"

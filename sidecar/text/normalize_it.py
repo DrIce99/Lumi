@@ -314,11 +314,17 @@ def _decimal(match: re.Match[str]) -> str:
     return sign + _number(match.group(2), match.group(3))
 
 
+# Words after which a number is a code, read digit by digit ("UID 710351080", "PIN 4821")
+_CODE_BEFORE = re.compile(r"(?:\b(?:uid|id|pin|otp|puk|codice|cod|matricola|seriale|tessera|pratica|ordine|tracking|iban|cvv|partita iva)\W{0,3}(?:(?:è|e'|era|sarebbe)\W{1,3})?)$", re.IGNORECASE)
+
+
 def _integer(match: re.Match[str]) -> str:
     sign = "meno " if match.group(1) else ""
     digits = match.group(2)
-    # Long digit strings (phone numbers, codes) are read one digit at a time
-    if len(digits) > 9 or (len(digits) > 1 and digits.startswith("0")):
+    before = match.string[max(0, match.start() - 24) : match.start()]
+    # Long digit strings (phone numbers, IDs) and codes are read one digit at a time;
+    # amounts that long come with thousands separators ("1.200.000")
+    if len(digits) > 6 or (len(digits) > 1 and digits.startswith("0")) or (len(digits) >= 3 and _CODE_BEFORE.search(before)):
         return sign + " ".join(cardinal(int(d)) for d in digits)
     return sign + cardinal(int(digits))
 

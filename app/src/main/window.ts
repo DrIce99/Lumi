@@ -24,6 +24,7 @@ import {
   type PlaybackEvent,
 } from "../shared/types";
 import { clampAnchor, computeLayout, type Point } from "./layout";
+import { flightMs, pathPoint, velocityAt, type MoveStyle } from "./motion/path";
 import { log } from "./log";
 
 export type { Point } from "./layout";
@@ -38,8 +39,8 @@ export interface FaceWindowHandlers {
   bubbleChoice(bubbleId: number, choice: string): void;
   playback(event: PlaybackEvent): void;
   mic(event: MicEvent): void;
-  /** The user dropped the face somewhere else. */
-  moved(anchor: { x: number; y: number }): void;
+  /** The face is somewhere else: dropped by the user (`byUser`), or arrived after a flight. */
+  moved(anchor: { x: number; y: number }, byUser: boolean): void;
 }
 
 export class FaceWindow {
@@ -51,6 +52,9 @@ export class FaceWindow {
   private layout: FaceLayout;
   private drag: { dx: number; dy: number; timer: NodeJS.Timeout } | null = null;
   private lastContrast: FaceContrast | null = null;
+  private flight: { timer: NodeJS.Timeout; done: (arrived: boolean) => void } | null = null;
+  /** A flight between monitors with different scales: fading out, jumping, fading in. */
+  private fading = false;
 
   constructor(
     private readonly handlers: FaceWindowHandlers,
@@ -155,6 +159,87 @@ export class FaceWindow {
 
   isDragging(): boolean {
     return this.drag !== null;
+  }
+
+  /** Flying to a new place (not dragged by the user). */
+  isMoving(): boolean {
+    return this.flight !== null || this.fading;
+  }
+
+  /** The face's size now (DIP). */
+  faceSize(): { width: number; height: number } {
+    return { width: FACE_WIDTH * this.scale, height: FACE_HEIGHT * this.scale };
+  }
+
+  /**
+   * Flies the face to `target` (its new top-left corner, screen DIP), moving
+   * the window at 60 Hz like a drag does. Between monitors with different
+   * scales it fades out and in instead (a window across two DPIs gets
+   * resized by Windows). `done(true)` on arrival, `done(false)` when
+   * interrupted (a drag, another flight).
+   */
+  flyTo(target: Point, style: MoveStyle, done: (arrived: boolean) => void = () => undefined): void {
+    this.stopFlight();
+    if (this.drag) return done(false);
+    const to = this.validAnchor(target);
+    const from = { ...this.anchor };
+    const displayOf = (p: Point) => screen.getDisplayNearestPoint({ x: Math.round(p.x + (FACE_WIDTH * this.scale) / 2), y: Math.round(p.y + (FACE_HEIGHT * this.scale) / 2) });
+    const a = displayOf(from);
+    const b = displayOf(to);
+    if (a.id !== b.id && a.scaleFactor !== b.scaleFactor) return this.fadeTo(to, done);
+    const duration = Math.max(1, flightMs(from, to, style));
+    const start = Date.now();
+    const timer = setInterval(() => {
+      const t = Math.min(1, (Date.now() - start) / duration);
+      this.anchor = pathPoint(from, to, t, style);
+      this.applyBounds();
+      const v = velocityAt(from, to, t, style);
+      this.send(IPC.travel, { vx: v.vx, vy: v.vy, landed: false });
+      if (t >= 1) this.finishFlight(true);
+    }, 16);
+    this.flight = { timer, done };
+  }
+
+  /** Stops a flight where it is (the user grabbed the face). */
+  stopFlight(): void {
+    if (this.flight) this.finishFlight(false);
+  }
+
+  private finishFlight(arrived: boolean): void {
+    const flight = this.flight;
+    if (!flight) return;
+    clearInterval(flight.timer);
+    this.flight = null;
+    this.send(IPC.travel, { vx: 0, vy: 0, landed: arrived });
+    if (arrived) {
+      this.anchor = this.validAnchor(this.anchor);
+      this.applyBounds();
+      this.handlers.moved(this.anchor, false);
+    }
+    flight.done(arrived);
+  }
+
+  private fadeTo(to: Point, done: (arrived: boolean) => void): void {
+    this.fading = true;
+    const steps = 8;
+    let i = 0;
+    const out = setInterval(() => {
+      this.win.setOpacity(Math.max(0, 1 - ++i / steps));
+      if (i < steps) return;
+      clearInterval(out);
+      this.anchor = to;
+      this.applyBounds();
+      let j = 0;
+      const back = setInterval(() => {
+        this.win.setOpacity(Math.min(1, ++j / steps));
+        if (j < steps) return;
+        clearInterval(back);
+        this.fading = false;
+        this.send(IPC.travel, { vx: 0, vy: 0, landed: true });
+        this.handlers.moved(this.anchor, false);
+        done(true);
+      }, 18);
+    }, 18);
   }
 
   setAppearance(scale: number, color: string): void {
@@ -294,6 +379,8 @@ export class FaceWindow {
 
   private startDrag(): void {
     if (this.drag) return;
+    // The user's hand wins over a flight
+    this.stopFlight();
     const cursor = screen.getCursorScreenPoint();
     this.drag = {
       dx: cursor.x - this.anchor.x,
@@ -313,7 +400,7 @@ export class FaceWindow {
     this.drag = null;
     this.anchor = this.validAnchor(this.anchor);
     this.applyBounds();
-    this.handlers.moved(this.anchor);
+    this.handlers.moved(this.anchor, true);
   }
 
   private releaseFocus(): void {

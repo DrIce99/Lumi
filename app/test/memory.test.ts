@@ -186,7 +186,7 @@ test("every line goes to memory.db, and recall finds what left the recent window
 test("older lines become an episode, with the new facts saved; the recent window stays verbatim", async () => {
   const db = new MemoryDb(":memory:");
   const memory = new Memory(null, MemoryStore.local(db), ticking());
-  for (let i = 0; i < 40; i++) memory.addMessage(i % 2 ? "lumi" : "user", i === 2 ? "Venerdì vado a Milano da mia sorella Giulia" : `chiacchiera ${i}`);
+  for (let i = 0; i < 48; i++) memory.addMessage(i % 2 ? "lumi" : "user", i === 2 ? "Venerdì vado a Milano da mia sorella Giulia" : `chiacchiera ${i}`);
   assert.equal(memory.pendingEpisode()?.length, 24);
   const prompts: string[] = [];
   const provider = {
@@ -229,7 +229,7 @@ test("older lines become an episode, with the new facts saved; the recent window
   });
   assert.match(context, /<earlier>\n\[08:\d\d-08:\d\d\] Mi ha detto che venerdì va a Milano/);
   assert.match(context, /<recalled>\n.*Milano/);
-  assert.match(context, /chiacchiera 39/);
+  assert.match(context, /chiacchiera 47/);
 });
 
 test("the episode reply is read leniently", () => {

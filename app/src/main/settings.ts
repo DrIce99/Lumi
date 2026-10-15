@@ -114,6 +114,7 @@ export function sanitizeSettings(input: unknown): Settings {
   const perception = obj(raw.perception);
   const vision = obj(raw.vision);
   const web = obj(raw.web);
+  const movement = obj(raw.movement);
   const memory = obj(raw.memory);
   const embeddings = obj(memory.embeddings);
   const weights = obj(memory.weights);
@@ -160,6 +161,12 @@ export function sanitizeSettings(input: unknown): Settings {
       backchannel: bool(listen.backchannel, d.listen.backchannel),
       fillers: bool(listen.fillers, d.listen.fillers),
       micDevice: str(listen.micDevice, d.listen.micDevice, 200),
+    },
+    movement: {
+      enabled: bool(movement.enabled, d.movement.enabled),
+      initiative: bool(movement.initiative, d.movement.initiative),
+      pranks: bool(movement.pranks, d.movement.pranks),
+      dodge: bool(movement.dodge, d.movement.dodge),
     },
     web: {
       provider: oneOf(web.provider, WEB_PROVIDERS, d.web.provider),
