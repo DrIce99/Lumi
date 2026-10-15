@@ -17,6 +17,8 @@ export interface ForegroundWindow {
   title: string;
   /** Executable name, e.g. "Code.exe". */
   process: string;
+  /** Full path of the executable (to open the app again: habits). */
+  path?: string;
   pid: number;
   /** Visible frame in physical screen pixels. */
   rect: Rect | null;
@@ -110,22 +112,23 @@ export function desktopAvailable(): boolean {
   return load() !== null;
 }
 
-const processNames = new Map<number, string>();
+const processPaths = new Map<number, string>();
 
-function processName(w: Api, pid: number): string {
-  const cached = processNames.get(pid);
+/** The full path of a process's executable ("" when it can't be read). */
+function processPath(w: Api, pid: number): string {
+  const cached = processPaths.get(pid);
   if (cached !== undefined) return cached;
-  let name = "";
+  let path = "";
   const handle = w.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
   if (handle) {
     const buffer = Buffer.alloc(1024);
     const size = [512];
-    if (w.QueryFullProcessImageNameW(handle, 0, buffer, size)) name = buffer.toString("utf16le", 0, size[0] * 2).split("\\").pop() ?? "";
+    if (w.QueryFullProcessImageNameW(handle, 0, buffer, size)) path = buffer.toString("utf16le", 0, size[0] * 2);
     w.CloseHandle(handle);
   }
-  if (processNames.size > 500) processNames.clear();
-  processNames.set(pid, name);
-  return name;
+  if (processPaths.size > 500) processPaths.clear();
+  processPaths.set(pid, path);
+  return path;
 }
 
 /** The window the user is working in, or null when unknown (or it is Lumi itself). */
@@ -147,7 +150,8 @@ export function foregroundWindow(): ForegroundWindow | null {
       const top = frame.readInt32LE(4);
       rect = { x: left, y: top, width: frame.readInt32LE(8) - left, height: frame.readInt32LE(12) - top };
     }
-    return { handle: String(hwnd), title: title.toString("utf16le", 0, length * 2), process: processName(w, pid[0]), pid: pid[0], rect };
+    const path = processPath(w, pid[0]);
+    return { handle: String(hwnd), title: title.toString("utf16le", 0, length * 2), process: path.split("\\").pop() ?? "", path, pid: pid[0], rect };
   } catch (err) {
     log.warn("Reading the foreground window failed", err);
     return null;

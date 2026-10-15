@@ -42,6 +42,30 @@ export function computeLayout(anchor: Point, scale: number, color: string, workA
   };
 }
 
+/**
+ * Where the eyes are sucked in (or come out) when Lumi goes to the phone:
+ * from the face's center toward the nearest edge of the work area, as far
+ * as the window allows (window coordinates). The window is never resized
+ * or animated for it.
+ */
+export function transitPoint(layout: FaceLayout, windowBounds: Rect, workArea: Rect): Point {
+  const f = layout.face;
+  const cx = f.x + f.width / 2;
+  const cy = f.y + f.height / 2;
+  const sx = windowBounds.x + cx;
+  const sy = windowBounds.y + cy;
+  const edges = [
+    { d: sx - workArea.x, x: -1, y: 0 },
+    { d: workArea.x + workArea.width - sx, x: 1, y: 0 },
+    { d: sy - workArea.y, x: 0, y: -1 },
+    { d: workArea.y + workArea.height - sy, x: 0, y: 1 },
+  ].sort((a, b) => a.d - b.d);
+  const dir = edges[0];
+  const margin = 6;
+  const reach = dir.x < 0 ? cx - margin : dir.x > 0 ? layout.windowWidth - cx - margin : dir.y < 0 ? cy - margin : layout.windowHeight - cy - margin;
+  return { x: Math.round(cx + dir.x * reach), y: Math.round(cy + dir.y * reach) };
+}
+
 /** Keeps most of the face inside the work area. */
 export function clampAnchor(anchor: Point, scale: number, area: Rect): Point {
   const faceW = FACE_WIDTH * scale;

@@ -23,7 +23,7 @@ import {
   type MicEvent,
   type PlaybackEvent,
 } from "../shared/types";
-import { clampAnchor, computeLayout, type Point } from "./layout";
+import { clampAnchor, computeLayout, transitPoint, type Point } from "./layout";
 import { flightMs, pathPoint, velocityAt, type MoveStyle } from "./motion/path";
 import { log } from "./log";
 
@@ -290,6 +290,19 @@ export class FaceWindow {
     this.send(IPC.gesture, gesture);
   }
 
+  /** Leaves for the phone ("out": sucked into the edge) or comes back ("in"); `ms`: how long it takes. */
+  transit(kind: "out" | "in"): number {
+    const display = screen.getDisplayMatching(this.win.getBounds());
+    const target = transitPoint(this.layout, this.win.getBounds(), display.workArea);
+    this.send(IPC.transit, { kind, x: target.x, y: target.y });
+    return kind === "out" ? 1100 : 1200;
+  }
+
+  /** Back without the animation (a call that ended before Lumi left). */
+  transitReset(): void {
+    this.send(IPC.transit, { kind: "reset", x: 0, y: 0 });
+  }
+
   /** Dazzled by a screen that turned bright; `lightDx`: the light's horizontal distance from the face center (DIP). */
   glare(lightDx: number): void {
     this.send(IPC.glare, { lightDx });
@@ -303,15 +316,24 @@ export class FaceWindow {
     this.send(IPC.contrast, contrast);
   }
 
+  /** The bubbles' text as it grows (the phone's subtitles during a call). */
+  onSubtitle: ((text: string, done: boolean) => void) | null = null;
+  private subtitle = "";
+
   bubbleStart(msg: BubbleStart): void {
+    this.subtitle = "";
     this.send(IPC.bubbleStart, msg);
   }
 
   bubbleChunk(msg: BubbleChunk): void {
+    this.subtitle += msg.text;
+    this.onSubtitle?.(this.subtitle, false);
     this.send(IPC.bubbleChunk, msg);
   }
 
   bubbleEnd(msg: BubbleEnd): void {
+    this.subtitle = msg.finalText;
+    this.onSubtitle?.(this.subtitle, true);
     this.send(IPC.bubbleEnd, msg);
   }
 

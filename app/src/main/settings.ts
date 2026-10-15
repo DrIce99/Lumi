@@ -115,6 +115,8 @@ export function sanitizeSettings(input: unknown): Settings {
   const vision = obj(raw.vision);
   const web = obj(raw.web);
   const movement = obj(raw.movement);
+  const habits = obj(raw.habits);
+  const phone = obj(raw.phone);
   const memory = obj(raw.memory);
   const embeddings = obj(memory.embeddings);
   const weights = obj(memory.weights);
@@ -167,6 +169,16 @@ export function sanitizeSettings(input: unknown): Settings {
       initiative: bool(movement.initiative, d.movement.initiative),
       pranks: bool(movement.pranks, d.movement.pranks),
       dodge: bool(movement.dodge, d.movement.dodge),
+    },
+    phone: {
+      enabled: bool(phone.enabled, d.phone.enabled),
+      port: Math.round(num(phone.port, d.phone.port, 1024, 65535)),
+    },
+    habits: {
+      enabled: bool(habits.enabled, d.habits.enabled),
+      proposalCooldownMinutes: Math.round(num(habits.proposalCooldownMinutes, d.habits.proposalCooldownMinutes, 5, 240)),
+      minOccurrences: Math.round(num(habits.minOccurrences, d.habits.minOccurrences, 3, 30)),
+      minFrequency: Math.round(num(habits.minFrequency, d.habits.minFrequency, 0.5, 1) * 100) / 100,
     },
     web: {
       provider: oneOf(web.provider, WEB_PROVIDERS, d.web.provider),

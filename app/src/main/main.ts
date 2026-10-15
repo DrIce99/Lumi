@@ -60,6 +60,14 @@ import { Voice, type AudioOut } from "./voice/voice";
 import { readWav, toFrames16k } from "./voice/wavInput";
 import { Vision } from "./vision";
 import { Mover } from "./motion/mover";
+import { hostname } from "node:os";
+import QRCode from "qrcode";
+import { safeStorage } from "electron";
+import { pairingUrl } from "../shared/phone";
+import { PhoneDevices } from "./phone/devices";
+import { PhoneLink } from "./phone/link";
+import { Habits } from "./brain/habits/habits";
+import { readAnswer } from "./brain/habits/triggers";
 import { parseToolCall } from "./brain/tools";
 import { describeResults, Web } from "./web";
 import { FaceWindow, type Point } from "./window";
@@ -69,6 +77,9 @@ const DEBUG = process.argv.includes("--debug");
 const IMAGE_MAX_SIDE = 1344;
 
 registerAppScheme();
+// The phone bridge never opens a microphone, so Chromium would hide its LAN address behind an
+// mDNS name the phone may not resolve; the call only uses host candidates (no STUN)
+app.commandLine.appendSwitch("disable-features", "WebRtcHideLocalIpsWithMdns");
 // Development aid: another data folder (settings, memory, logs), e.g. to try the app without touching the real one
 if (process.env.LUMI_DATA_DIR) app.setPath("userData", process.env.LUMI_DATA_DIR);
 
@@ -149,7 +160,9 @@ function start(): void {
   }
   const stateFile = join(dataDir, "window.json");
   const windowState = readJson<WindowState>(stateFile) ?? {};
-  const activity = new Activity(() => powerMonitor.getSystemIdleTime());
+  const activity = new Activity(() => (phone?.active() ? 0 : powerMonitor.getSystemIdleTime()));
+  /** The phone link (phase 15); set below, read lazily by the closures above it. */
+  let phone: PhoneLink | null = null;
   let gpu: GpuInfo | null = null;
   void detectGpu().then((found) => {
     gpu = found;
@@ -167,7 +180,10 @@ function start(): void {
       },
       click: () => talk(),
       contextMenu: () => tray.popup(face.win),
-      send: (text) => void brain.handle({ kind: "message", text, via: "text" }),
+      send: (text) => {
+        habits.command("text");
+        void brain.handle({ kind: "message", text, via: "text" });
+      },
       inputClosed: () => undefined,
       bubbleClicked: () => face.openInput(),
       bubbleChoice: (id, choice) => bubbles.answered(id, choice),
@@ -187,7 +203,10 @@ function start(): void {
     },
     { url: `${APP_ORIGIN}/renderer/face.html`, anchor: windowState.anchor ?? null, scale: settings().face.scale, color: settings().face.color },
   );
-  const mood = new Mood((state) => face.state(state));
+  const mood = new Mood((state) => {
+    face.state(state);
+    phone?.faceState(state);
+  });
   const bubbles = new Bubbles(
     face,
     () => activity.snapshot().idleSec,
@@ -216,20 +235,26 @@ function start(): void {
     discordVoice.configure(s.enabled && token && s.userId ? { token, userId: s.userId } : null, missing);
   };
   /** Lumi's audio: to the face window, and to the Discord call while the bot is in it. */
+  /** During a phone call the voice goes only to the phone (it wins over the speakers and Discord). */
+  const onPhone = () => phone?.active() === true;
   const audioOut: AudioOut = {
     audioBegin: (msg) => {
+      if (onPhone()) return phone!.audioBegin(msg);
       face.audioBegin(msg);
       discordVoice.begin(msg);
     },
     audioChunk: (msg) => {
+      if (onPhone()) return phone!.audioChunk(msg);
       face.audioChunk(msg);
       discordVoice.chunk(msg.id, new Uint8Array(msg.pcm), msg.sampleRate);
     },
     audioEnd: (id) => {
+      if (onPhone()) return phone!.audioEnd(id);
       face.audioEnd(id);
       discordVoice.end(id);
     },
     audioStop: (fadeMs) => {
+      phone?.audioStop(fadeMs);
       face.audioStop(fadeMs);
       discordVoice.cut();
     },
@@ -275,6 +300,13 @@ function start(): void {
 
   /** A spoken request for Lumi: if the answer is slow to start, a filler covers the wait. */
   function heard(text: string, speaker?: string): void {
+    // A "sì" / "no" right after a habit proposal answers it, it isn't a message for the brain
+    const answer = pendingAnswer && !speaker ? readAnswer(text) : null;
+    if (answer !== null && pendingAnswer) {
+      pendingAnswer(answer);
+      return;
+    }
+    habits.command("voice");
     const asked = Date.now();
     void brain.handle({ kind: "message", text, via: "voice", ...(speaker ? { speaker } : {}) });
     if (!settings().listen.fillers) return;
@@ -338,9 +370,15 @@ function start(): void {
   }, 5000).unref();
 
   const turns = new TurnManager({
-    settings,
+    // On the phone it's a call: continuous listening with barge-in, no wake word
+    settings: () => (onPhone() ? { ...settings(), listen: { ...settings().listen, mode: "continuous" as const, micDevice: "" } } : settings()),
     stt: () => (visible && !settings().doNotDisturb ? sttBackend() : null),
-    micControl: (control) => face.micControl(control),
+    micControl: (control) => {
+      if (onPhone()) {
+        phone!.micControl(control);
+        face.micControl({ ...control, enabled: false });
+      } else face.micControl(control);
+    },
     utterance: (text, print) => {
       if (process.env.LUMI_DEBUG_HEAR) log.info(`Heard: ${text}`);
       else log.perception(`Heard: ${text}`);
@@ -381,7 +419,7 @@ function start(): void {
     backchannel: () => {
       if (settings().listen.backchannel && voice.ready() && !voice.busy()) clips.play("backchannel");
     },
-    inCall: () => inCall(),
+    inCall: () => !onPhone() && inCall(),
     wake: () => (wakeClient.ready ? wakeClient : null),
     wakeAllowed: () => !activity.snapshot().locked && micBusy.length === 0,
     acknowledge: () => {
@@ -791,6 +829,125 @@ function start(): void {
   });
   setInterval(() => mover.dodgeTick(), 500).unref();
 
+  // ---- habits: what the user does, the patterns in it, proposals at the right time ----
+  /** Waiting for the answer to a habit proposal ("sì" / "no" said aloud, or the bubble). */
+  let pendingAnswer: ((yes: boolean) => void) | null = null;
+  const habits = new Habits({
+    settings,
+    store: memoryStore,
+    foreground: () => foregroundWindow(),
+    paused: () => perception.paused(),
+    blocked: () => {
+      const a = activity.snapshot();
+      if (!visible) return "hidden";
+      if (settings().doNotDisturb) return "do not disturb";
+      if (a.away || a.locked) return "the user is away";
+      if (inCall()) return "a call";
+      if (brain.isBusy() || voice.busy() || mood.state().listening) return "a conversation";
+      if (perception.recentCaret(10_000)) return "the user is typing";
+      return null;
+    },
+    idleSec: () => powerMonitor.getSystemIdleTime(),
+    onBattery: () => powerMonitor.isOnBatteryPower(),
+    name: async (list) => {
+      const chosen = services.chosen("idle");
+      if (!chosen) return null;
+      const result = await chosen.provider.complete({
+        model: chosen.model,
+        system:
+          'You name the habits of a computer user, for their desk assistant. For each numbered habit write a short, natural Italian name (at most 8 words), like "musica appena inizi a lavorare" or "Discord dopo VS Code la sera". Reply with only a JSON array of strings, in order.',
+        prompt: list.map((x, i) => `${i + 1}. ${x.text}`).join("\n"),
+      });
+      const json = /\[[\s\S]*\]/.exec(result.text)?.[0];
+      const names = json ? (JSON.parse(json) as unknown[]) : [];
+      return names.length === list.length && names.every((n) => typeof n === "string") ? (names as string[]) : null;
+    },
+    propose: (habit, question) =>
+      new Promise((resolve) => {
+        let done = false;
+        const finish = (answer: boolean | null) => {
+          if (done) return;
+          done = true;
+          pendingAnswer = null;
+          resolve(answer);
+        };
+        pendingAnswer = (yes) => finish(yes);
+        log.info(`Proposing a habit: ${habit.key}`);
+        if (voice.ready()) void voice.say(question, "gioia", 0.5);
+        memory.addMessage("lumi", question);
+        void bubbles.ask(question, [{ id: "yes", label: "Sì" }, { id: "no", label: "No" }], 30_000).then((choice) => finish(choice === "yes" ? true : choice === "no" ? false : null));
+      }),
+    open: async (habit) => {
+      const path = typeof habit.detail.path === "string" ? habit.detail.path : "";
+      if (!/\.exe$/i.test(path)) return "no known path";
+      const error = await shell.openPath(path);
+      log.info(error ? `Opening ${habit.app} failed: ${error}` : `Opened ${habit.app} (habit)`);
+      return error || null;
+    },
+    label: (app) => appName(app),
+    say: (text) => sayLine(text, "gioia"),
+  });
+  void habits.start();
+
+  // ---- the phone: pairing, calls, Lumi leaving the screen for the phone ----
+  const phoneDevices = new PhoneDevices(dataDir, {
+    available: () => safeStorage.isEncryptionAvailable(),
+    encrypt: (text) => safeStorage.encryptString(text),
+    decrypt: (data) => safeStorage.decryptString(data),
+  });
+  phone = new PhoneLink(
+    {
+      config: () => settings().phone,
+      leave: async () => {
+        face.closeInput();
+        face.bubbleHide();
+        const ms = face.transit("out");
+        await new Promise((resolve) => setTimeout(resolve, ms + 50));
+        // The call may have ended while Lumi was leaving: then it stays
+        if (phone?.callState() === "leaving") face.win.hide();
+      },
+      arrive: () => {
+        if (visible) face.win.showInactive();
+        face.transit("in");
+      },
+      callChanged: (active, name) => {
+        log.info(active ? `Lumi is on the phone "${name}"` : "Lumi is back on the PC");
+        voice.stopAll();
+        const control = turns.control();
+        if (active) {
+          face.micControl({ ...control, enabled: false });
+          phone!.micControl(control);
+        } else {
+          phone!.micControl({ ...control, enabled: false });
+          face.micControl(control);
+        }
+        mood.set({ listening: false });
+        turns.refresh();
+        tray.refresh();
+      },
+      mic: (event) => turns.mic(event),
+      playback: (event) => voice.playback(event),
+      ptt: (down) => (down ? turns.pttDown() : turns.pttUp()),
+      faceState: () => mood.state(),
+      faceColor: () => settings().face.color,
+      paired: (name) => {
+        log.info(`Phone paired: ${name}`);
+        settingsWindow.refresh();
+      },
+    },
+    phoneDevices,
+    `${APP_ORIGIN}/renderer/phone/bridge.html`,
+    join(app.getAppPath(), "..", "phone", "www"),
+    hostname(),
+  );
+  face.onSubtitle = (text, done) => phone?.subtitle(text, done);
+  void phone.configure().then(() => {
+    // Development aid: a pairing link written to this file, for a test phone (it holds the key: debug only)
+    const pairFile = process.env.LUMI_DEBUG_PAIR;
+    if (pairFile && phone && settings().phone.enabled) writeFileSync(pairFile, pairingUrl(phone.startPairing()));
+  });
+  if (process.env.LUMI_DEBUG_REFLECT === "1") setTimeout(() => void habits.maybeReflect(true), 20_000);
+
   // ---- memory: embeddings for search by meaning, in the background ----
   let memoryIndex: MemoryIndexStatus | null = null;
   const configureMemory = () => {
@@ -866,6 +1023,8 @@ function start(): void {
       voices: voicesSummary(),
       web: ((p) => (p ? webSources[p] : ""))(web.provider()),
       movement: mover.status(),
+      phone: onPhone() ? phone!.phoneName() : "",
+      habits: habits.summary(),
     };
   }
 
@@ -909,6 +1068,16 @@ function start(): void {
         if (!win || !capturePrefix) return;
         writeFileSync(`${capturePrefix}_settings.png`, (await win.webContents.capturePage()).toPNG());
       }, 3500);
+    }
+    // Development aid: leave as for a phone call and come back (with LUMI_DEBUG_CAPTURE, frames of both)
+    if (process.env.LUMI_DEBUG_TRANSIT === "1") {
+      void face.win.webContents.executeJavaScript('document.body.style.background = "#2b2d31"');
+      setTimeout(() => face.transit("out"), 2000);
+      setTimeout(() => face.transit("in"), 4500);
+      if (capturePrefix) {
+        for (const ms of [100, 300, 550, 750, 850, 1000]) setTimeout(async () => writeFileSync(`${capturePrefix}_out_${ms}.png`, (await face.win.webContents.capturePage()).toPNG()), 2000 + ms);
+        for (const ms of [120, 250, 400, 600, 800, 1000, 1150]) setTimeout(async () => writeFileSync(`${capturePrefix}_in_${ms}.png`, (await face.win.webContents.capturePage()).toPNG()), 4500 + ms);
+      }
     }
     // Development aid: fly to these places one after the other (e.g. "top_left,other_screen,home"), as if asked
     const debugMove = process.env.LUMI_DEBUG_MOVE;
@@ -996,8 +1165,12 @@ function start(): void {
     await brain.writeDiary();
   }
 
-  activity.on("away", () => mood.set({ drowsy: true }));
+  activity.on("away", () => {
+    mood.set({ drowsy: true });
+    habits.session("away");
+  });
   activity.on("back", (minutesAway) => {
+    habits.session("back");
     mood.set({ drowsy: false });
     if (minutesAway >= 10 && canReact()) void brain.handle({ kind: "back", minutesAway });
   });
@@ -1074,6 +1247,7 @@ function start(): void {
       toggleMuted: () => settingsStore.update({ muted: !settings().muted }),
       togglePerception: () => settingsStore.update({ perception: { enabled: !settings().perception.enabled } }),
       setListenMode: (mode) => settingsStore.update({ listen: { mode } }),
+      recallFromPhone: () => phone?.hangup(),
       createAudiobook: () => void audiobooks.create(),
       cancelAudiobook: () => void audiobooks.cancel(),
       openSettings: () => settingsWindow.open(),
@@ -1092,6 +1266,7 @@ function start(): void {
       chatHotkey: settings().chatHotkey,
       talkHotkey: settings().listen.hotkey,
       audiobook: audiobooks.status(),
+      phoneCall: onPhone() ? phone!.phoneName() || "telefono" : null,
     }),
   );
 
@@ -1133,6 +1308,7 @@ function start(): void {
       });
     }
     log.info(`Command bar: ${text.length} characters${context ? ", with the selection" : ""}${attachments.length ? `, ${attachments.length} attachments` : ""}`);
+    habits.command("bar");
     await brain.handle({ kind: "message", text: text || "(guarda gli allegati)", via: "bar", ...(context ? { context } : {}), ...(attachments.length ? { attachments } : {}) });
   }
 
@@ -1165,6 +1341,13 @@ function start(): void {
       appAudioStatus: appAudio.statuses,
       discord: { ...discordVoice.status(), token: discordToken.source() },
       memoryIndex,
+      habits: habits.infos(),
+      phone: {
+        listening: phone?.listening() ?? false,
+        devices: phoneDevices.list().map(({ key: _key, ...d }) => d),
+        call: phone?.callState() ?? "idle",
+        phoneName: phone?.phoneName() ?? "",
+      },
       knownVoices: speakers.voices().map((v) => ({ id: v.id, label: voiceLabel(v, settings().userName), owner: !!v.owner, via: v.via, samples: v.samples, lastHeard: v.lastHeard })),
       dataPath: dataDir,
       sidecar: sidecar.status(),
@@ -1271,6 +1454,23 @@ function start(): void {
           return { ok: false, message: "Non sono riuscito a dimenticare: i dettagli sono nel log.", snapshot: snapshot() };
         }
       },
+      phonePair: async () => {
+        if (!settings().phone.enabled || !phone?.listening()) return { ok: false, url: "", qr: "", hosts: [], message: "Prima attiva le chiamate dal telefono e salva." };
+        const link = phone.startPairing();
+        if (!link.hosts.length) return { ok: false, url: "", qr: "", hosts: [], message: "Il PC non è collegato a nessuna rete." };
+        const url = pairingUrl(link);
+        const qr = await QRCode.toDataURL(url, { margin: 1, width: 240, errorCorrectionLevel: "M" });
+        return { ok: true, url, qr, hosts: link.hosts, message: "Inquadra il codice con l'app Lumi entro 5 minuti." };
+      },
+      phoneRevoke: (id) => {
+        phoneDevices.revoke(id);
+        return snapshot();
+      },
+      habit: async (id, action) => {
+        if (action === "forget") await habits.forget(id);
+        else await habits.setAuto(id, action === "auto");
+        return snapshot();
+      },
       restartSidecar: async () => {
         await sidecar.restart();
         return snapshot();
@@ -1290,6 +1490,7 @@ function start(): void {
     if (next.muted && !prev.muted) voice.stopAll();
     if (JSON.stringify(next.perception) !== JSON.stringify(prev.perception)) updateUia();
     if (JSON.stringify(next.discord) !== JSON.stringify(prev.discord)) updateDiscord();
+    if (JSON.stringify(next.phone) !== JSON.stringify(prev.phone)) void phone?.configure();
     if (JSON.stringify(next.appAudio) !== JSON.stringify(prev.appAudio) || next.doNotDisturb !== prev.doNotDisturb || next.stt.vocabulary !== prev.stt.vocabulary) updateAppAudio();
     turns.refresh();
     tray.refresh();
@@ -1318,6 +1519,8 @@ function start(): void {
     discordVoice.dispose();
     gazeOverlay?.dispose();
     autonomy.stop();
+    habits.stop();
+    phone?.dispose();
     bubbles.dispose();
     mood.dispose();
     voice.stopAll();

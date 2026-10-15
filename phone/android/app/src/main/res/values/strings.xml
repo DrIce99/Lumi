@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Lumi</string>
+    <string name="title_activity_main">Lumi</string>
+    <string name="package_name">it.drice.lumi</string>
+    <string name="custom_url_scheme">it.drice.lumi</string>
+</resources>

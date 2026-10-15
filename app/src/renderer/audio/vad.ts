@@ -24,7 +24,15 @@ export class Listener {
   private speechStartedAt = 0;
   private deviceId = "";
 
-  constructor(private readonly send: (event: MicEvent) => void) {}
+  /**
+   * `source`: where the audio comes from instead of the microphone (the
+   * phone's track in the phone bridge), with the assets' path relative to
+   * the page. That stream's tracks are never stopped on pause.
+   */
+  constructor(
+    private readonly send: (event: MicEvent) => void,
+    private readonly source: { stream: () => Promise<MediaStream>; assets: string } | null = null,
+  ) {}
 
   async apply(control: MicControl): Promise<void> {
     const deviceChanged = control.deviceId !== this.deviceId;
@@ -50,7 +58,10 @@ export class Listener {
     if (this.starting) return this.starting;
     this.deviceId = this.control.deviceId;
     const deviceId = this.deviceId;
-    const getStream = () =>
+    const source = this.source;
+    const getStream = source
+      ? source.stream
+      : () =>
       navigator.mediaDevices.getUserMedia({
         audio: {
           ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
@@ -62,8 +73,8 @@ export class Listener {
       });
     this.starting = MicVAD.new({
       model: "v5",
-      baseAssetPath: "./vad/",
-      onnxWASMBasePath: "./vad/",
+      baseAssetPath: source?.assets ?? "./vad/",
+      onnxWASMBasePath: source?.assets ?? "./vad/",
       ...NORMAL,
       redemptionMs: this.control.redemptionMs,
       preSpeechPadMs: 300,
@@ -71,7 +82,9 @@ export class Listener {
       getStream,
       resumeStream: getStream,
       // Stopping the tracks turns off the microphone (and Windows' indicator) while not listening
-      pauseStream: async (stream) => stream.getTracks().forEach((t) => t.stop()),
+      pauseStream: async (stream) => {
+        if (!source) stream.getTracks().forEach((t) => t.stop());
+      },
       ortConfig: (ort) => {
         ort.env.logLevel = "error";
         ort.env.wasm.numThreads = 1;

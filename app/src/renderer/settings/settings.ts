@@ -320,6 +320,64 @@ function renderStatus(status: SidecarStatus): void {
 
 // ---------------- form ----------------
 
+/** The phone tab: server state, the call, paired phones. */
+function renderPhone(next: SettingsSnapshot): void {
+  const p = next.phone;
+  $<HTMLElement>("phoneStatus").textContent = !next.settings.phone.enabled
+    ? "Spento."
+    : !p.listening
+      ? "La porta non si apre: forse è usata da un altro programma, prova un altro numero."
+      : p.call === "active"
+        ? `In chiamata: Lumi è sul telefono «${p.phoneName}».`
+        : `In ascolto sulla porta ${next.settings.phone.port}.`;
+  listItems(
+    "phones",
+    p.devices.map((d) => ({
+      tag: d.lastSeen ? `visto ${new Date(d.lastSeen).toLocaleString("it-IT", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}` : "mai collegato",
+      text: d.name,
+      action: () => void api.phoneRevoke(d.id).then(fill),
+      actionLabel: "Rimuovi",
+    })),
+    "Nessun telefono abbinato.",
+  );
+}
+
+$<HTMLButtonElement>("phonePair").addEventListener("click", async () => {
+  await save(false);
+  const r = await api.phonePair();
+  $<HTMLElement>("phoneQrBox").hidden = !r.ok;
+  if (r.ok) {
+    $<HTMLImageElement>("phoneQr").src = r.qr;
+    $<HTMLElement>("phoneLink").textContent = `Indirizzi del PC: ${r.hosts.join(", ") || "nessuno"}. Link: ${r.url}`;
+  }
+  setStatus(r.message);
+});
+
+/** The habits found, each with its buttons: do it yourself / ask first, forget. */
+function renderHabits(next: SettingsSnapshot): void {
+  const list = $<HTMLUListElement>("habits");
+  if (!next.habits.length) {
+    list.replaceChildren(Object.assign(document.createElement("li"), { className: "empty", textContent: "Nessuna abitudine ancora: servono alcune settimane di uso." }));
+    return;
+  }
+  list.replaceChildren(
+    ...next.habits.map((h) => {
+      const li = document.createElement("li");
+      const tag = Object.assign(document.createElement("span"), {
+        className: "tag",
+        textContent: h.status === "archived" ? "archiviata" : `${Math.round(h.confidence * 100)}%${h.auto ? " · da sola" : ""}`,
+      });
+      const text = Object.assign(document.createElement("span"), { className: "text", textContent: `${h.name} (sì ${h.accepted}, no ${h.rejected})` });
+      const toggle = Object.assign(document.createElement("button"), { type: "button", textContent: h.auto ? "Chiedi prima" : "Fai da sola" });
+      toggle.addEventListener("click", () => void api.habit(h.id, h.auto ? "ask" : "auto").then(fill));
+      const forget = Object.assign(document.createElement("button"), { type: "button", textContent: "Dimentica" });
+      forget.addEventListener("click", () => void api.habit(h.id, "forget").then(fill));
+      li.append(tag, text, toggle, forget);
+      return li;
+    }),
+  );
+}
+
 /** The embedding queue's state, in words. */
 function memoryIndexText(status: SettingsSnapshot["memoryIndex"], model: string): string {
   if (!status) return "";
@@ -450,6 +508,11 @@ function fill(next: SettingsSnapshot): void {
   $<HTMLSelectElement>("webProvider").value = s.web.provider;
   $("searxngUrl").value = s.web.searxngUrl;
   $("backupDays").value = String(s.memory.backupDays);
+  $("habitsEnabled").checked = s.habits.enabled;
+  $("phoneEnabled").checked = s.phone.enabled;
+  $("phonePort").value = String(s.phone.port);
+  renderPhone(next);
+  renderHabits(next);
   $<HTMLSelectElement>("embeddingProvider").value = s.memory.embeddings.provider;
   $("embeddingModel").value = s.memory.embeddings.model;
   $<HTMLElement>("memoryIndex").textContent = memoryIndexText(next.memoryIndex, s.memory.embeddings.model);
@@ -519,6 +582,8 @@ function collect(): Settings {
     launchAtLogin: $("launchAtLogin").checked,
     face: { scale: num("scale", s.face.scale), color: $("color").value, subtitles: $("subtitles").checked, adaptiveShadow: $("adaptiveShadow").checked, glare: $("glare").checked, showInCaptures: $("showInCaptures").checked },
     voices: { enabled: $("voicesEnabled").checked, onlyMe: $("onlyMe").checked },
+    habits: { ...s.habits, enabled: $("habitsEnabled").checked },
+    phone: { enabled: $("phoneEnabled").checked, port: num("phonePort", s.phone.port) },
     movement: { enabled: $("moveEnabled").checked, initiative: $("moveInitiative").checked, pranks: $("movePranks").checked, dodge: $("moveDodge").checked },
     web: { provider: $<HTMLSelectElement>("webProvider").value as Settings["web"]["provider"], searxngUrl: $("searxngUrl").value.trim() },
     memory: {
@@ -780,6 +845,13 @@ forgetConfirm.addEventListener("click", async () => {
   $<HTMLElement>("forgetResult").textContent = result.message;
   setStatus(result.ok ? "Fatto: ricordi dimenticati." : "Non sono riuscito a dimenticare.");
   window.setTimeout(() => (forgetConfirm.hidden = false), 100);
+});
+api.onRefresh(() => {
+  void api.load().then((next) => {
+    fill(next);
+    if (next.phone.devices.length) $<HTMLElement>("phoneQrBox").hidden = true;
+    setStatus("Telefono abbinato.");
+  });
 });
 api.onForgetQuery((query) => {
   showTab("memory");

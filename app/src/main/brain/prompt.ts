@@ -24,6 +24,10 @@ export interface Situation {
   web?: string;
   /** Where Lumi is and its mood when it moved ("" when in its place). */
   movement?: string;
+  /** The user's habits Lumi noticed ("" when none). */
+  habits?: string;
+  /** Lumi is on the user's phone (a call): its name, else "". */
+  phone?: string;
 }
 
 export type Trigger =
@@ -153,7 +157,9 @@ export function buildContext(input: ContextInput): string {
     }`,
   );
   out.push(`Web search (web_search, read_page): ${s.web ? `on, through ${s.web}` : "off - you can't search the web"}`);
+  if (s.phone) out.push(`You are on the user's phone (${s.phone}), in a call: they talk to you from there and may not be at the computer; your face is on the phone, not on the PC's screen (move_to and pointing at the screen don't make sense now). The PC's screen is still yours to look at if they ask.`);
   if (s.movement) out.push(`Your body: ${s.movement}`);
+  if (s.habits) out.push(`Habits you noticed (you propose them yourself at the right time, with a question: don't propose them in the conversation): ${s.habits}`);
   out.push(`Sociability wanted by the user: ${SOCIABILITY_TEXT[settings.sociability]}`);
   out.push("</situation>");
 

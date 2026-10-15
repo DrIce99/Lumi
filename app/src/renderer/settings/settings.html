@@ -24,6 +24,7 @@
       <button class="tab" data-tab="voice" type="button">Voce</button>
       <button class="tab" data-tab="screen" type="button">Schermo</button>
       <button class="tab" data-tab="memory" type="button">Memoria</button>
+      <button class="tab" data-tab="phone" type="button">Telefono</button>
       <button class="tab" data-tab="status" type="button">Stato</button>
     </nav>
 
@@ -386,6 +387,10 @@
           <span>Backup giornalieri della memoria (giorni da tenere, 0 = nessuno)</span>
           <input id="backupDays" type="number" min="0" max="60" step="1" />
         </label>
+        <h2>Abitudini</h2>
+        <label class="check"><input id="habitsEnabled" type="checkbox" /> Lumi impara le tue abitudini dalle app che apri (solo i nomi delle app, sul PC) e te le propone al momento giusto</label>
+        <p class="hint">Lumi propone soltanto ("apro Spotify?"). Fa da sola solo le abitudini per cui scegli «Fai da sola», e l'unica cosa che fa è aprire l'app di sempre.</p>
+        <ul id="habits" class="list"></ul>
         <h2>Dimentica qualcosa</h2>
         <p class="hint">
           Cerca ciò che vuoi far dimenticare a Lumi: frasi dette, riassunti e fatti. Le voci più pertinenti sono già spuntate, le altre
@@ -408,6 +413,30 @@
           <button id="openData" type="button">Apri la cartella dei dati</button>
           <button id="clearMemory" type="button" class="danger">Dimentica tutto</button>
         </div>
+      </section>
+
+      <section class="panel" data-panel="phone">
+        <p class="note">
+          Con l'app Lumi sul telefono premi «Chiama»: Lumi lascia lo schermo del PC e compare sul telefono, e le parli da lì. Voce, cervello e memoria
+          restano sul PC. Funziona sulla stessa rete Wi-Fi (o con Tailscale anche fuori casa).
+        </p>
+        <label class="check"><input id="phoneEnabled" type="checkbox" /> Accetta le chiamate dai telefoni abbinati (apre una porta sulla rete locale)</label>
+        <label class="field">
+          <span>Porta</span>
+          <input id="phonePort" type="number" min="1024" max="65535" step="1" />
+        </label>
+        <small id="phoneStatus" class="hint"></small>
+        <h2>Abbina un telefono</h2>
+        <p class="hint">Salva con la porta aperta, poi premi il pulsante e inquadra il codice con l'app (oppure copia il link nell'app). Il codice vale 5 minuti e una sola volta.</p>
+        <div class="row">
+          <button id="phonePair" type="button">Mostra il codice per abbinare</button>
+        </div>
+        <div id="phoneQrBox" hidden>
+          <img id="phoneQr" alt="Codice QR per abbinare il telefono" width="240" height="240" />
+          <small id="phoneLink" class="hint"></small>
+        </div>
+        <h2>Telefoni abbinati</h2>
+        <ul id="phones" class="list"></ul>
       </section>
 
       <section class="panel" data-panel="status">

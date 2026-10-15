@@ -17,6 +17,7 @@ const bridge: FaceBridge = {
   onContrast: listen(IPC.contrast),
   onGlare: listen(IPC.glare),
   onTravel: listen(IPC.travel),
+  onTransit: listen(IPC.transit),
   onBubbleStart: listen(IPC.bubbleStart),
   onBubbleChunk: listen(IPC.bubbleChunk),
   onBubbleEnd: listen(IPC.bubbleEnd),

@@ -155,7 +155,7 @@ const CONTEXT_LINES = 1;
 /** Lines shorter than this ("ok", "sì") get no vector: words find them. */
 export const MIN_EMBED_CHARS = 12;
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 const MIGRATIONS: string[] = [
   `CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -223,7 +223,76 @@ const MIGRATIONS: string[] = [
      INSERT INTO summaries_fts(rowid, text) VALUES (new.id, new.text);
    END;
    CREATE INDEX summaries_period ON summaries(period, start);`,
+  // v5: habits (phase 11). The events say what the user does (apps, commands, proposals), never what is on screen
+  `CREATE TABLE events (id INTEGER PRIMARY KEY, ts TEXT NOT NULL, kind TEXT NOT NULL, app TEXT, detail TEXT);
+   CREATE INDEX events_ts ON events(ts);
+   CREATE TABLE habits (
+     id INTEGER PRIMARY KEY,
+     key TEXT NOT NULL UNIQUE,
+     kind TEXT NOT NULL,
+     name TEXT NOT NULL,
+     app TEXT NOT NULL,
+     detail TEXT NOT NULL,
+     confidence REAL NOT NULL,
+     status TEXT NOT NULL DEFAULT 'active',
+     accepted INTEGER NOT NULL DEFAULT 0,
+     rejected INTEGER NOT NULL DEFAULT 0,
+     auto INTEGER NOT NULL DEFAULT 0,
+     created TEXT NOT NULL,
+     updated TEXT NOT NULL,
+     last_proposed TEXT
+   );`,
 ];
+
+/** Something the user did, for the habits (phase 11). */
+export interface EventRow {
+  ts: string;
+  /** "app" (a new app in the foreground), "command" (to Lumi), "proposal", "session". */
+  kind: string;
+  app?: string;
+  detail?: Record<string, unknown>;
+}
+
+export interface HabitRow {
+  id: number;
+  key: string;
+  kind: "time" | "sequence";
+  name: string;
+  app: string;
+  detail: Record<string, unknown>;
+  confidence: number;
+  status: "active" | "archived";
+  accepted: number;
+  rejected: number;
+  /** The user lets Lumi do it without asking. */
+  auto: boolean;
+  created: string;
+  updated: string;
+  lastProposed?: string;
+}
+
+interface HabitDbRow extends Omit<HabitRow, "detail" | "auto" | "lastProposed"> {
+  detail: string;
+  auto: number;
+  last_proposed: string | null;
+}
+
+const toHabit = (r: HabitDbRow): HabitRow => ({
+  id: r.id,
+  key: r.key,
+  kind: r.kind,
+  name: r.name,
+  app: r.app,
+  detail: JSON.parse(r.detail) as Record<string, unknown>,
+  confidence: r.confidence,
+  status: r.status,
+  accepted: r.accepted,
+  rejected: r.rejected,
+  auto: !!r.auto,
+  created: r.created,
+  updated: r.updated,
+  ...(r.last_proposed ? { lastProposed: r.last_proposed } : {}),
+});
 
 const SUMMARY_ORDER: Record<SummaryKind, number> = { episode: 0, day: 1, week: 2, month: 3 };
 
@@ -350,6 +419,64 @@ export class MemoryDb {
   count(): { messages: number; summaries: number } {
     const n = (sql: string) => (this.db.prepare(sql).get() as { n: number }).n;
     return { messages: n("SELECT COUNT(*) AS n FROM messages"), summaries: n("SELECT COUNT(*) AS n FROM summaries") };
+  }
+
+  // ---------------- habits (phase 11) ----------------
+
+  logEvent(event: EventRow): void {
+    this.db.prepare("INSERT INTO events (ts, kind, app, detail) VALUES (?, ?, ?, ?)").run(event.ts, event.kind, event.app ?? null, event.detail ? JSON.stringify(event.detail) : null);
+  }
+
+  /** Events from `from` (ISO) on, oldest first. */
+  eventsSince(from: string, kinds?: string[]): EventRow[] {
+    const filter = kinds?.length ? ` AND kind IN (${kinds.map(() => "?").join(",")})` : "";
+    const rows = this.db.prepare(`SELECT ts, kind, app, detail FROM events WHERE ts >= ?${filter} ORDER BY id`).all(from, ...(kinds ?? [])) as { ts: string; kind: string; app: string | null; detail: string | null }[];
+    return rows.map((r) => ({ ts: r.ts, kind: r.kind, ...(r.app ? { app: r.app } : {}), ...(r.detail ? { detail: JSON.parse(r.detail) as Record<string, unknown> } : {}) }));
+  }
+
+  /** Old events go after a while: patterns look at the last weeks only. */
+  pruneEvents(before: string): number {
+    return Number(this.db.prepare("DELETE FROM events WHERE ts < ?").run(before).changes);
+  }
+
+  listHabits(includeArchived = false): HabitRow[] {
+    const rows = this.db.prepare(`SELECT * FROM habits${includeArchived ? "" : " WHERE status = 'active'"} ORDER BY confidence DESC, id`).all() as unknown as HabitDbRow[];
+    return rows.map(toHabit);
+  }
+
+  /** A new habit, or an existing one (same key) with fresh statistics: name, user choices and history are kept. */
+  upsertHabit(h: { key: string; kind: HabitRow["kind"]; name: string; app: string; detail: Record<string, unknown>; confidence: number }, now = new Date().toISOString()): void {
+    const old = this.db.prepare("SELECT id FROM habits WHERE key = ?").get(h.key) as { id: number } | undefined;
+    if (old) {
+      this.db.prepare("UPDATE habits SET detail = ?, updated = ? WHERE id = ?").run(JSON.stringify(h.detail), now, old.id);
+      return;
+    }
+    this.db
+      .prepare("INSERT INTO habits (key, kind, name, app, detail, confidence, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(h.key, h.kind, h.name, h.app, JSON.stringify(h.detail), h.confidence, now, now);
+  }
+
+  updateHabit(id: number, patch: { confidence?: number; status?: HabitRow["status"]; accepted?: number; rejected?: number; auto?: boolean; lastProposed?: string; name?: string }): void {
+    const sets: string[] = [];
+    const values: SQLInputValue[] = [];
+    const add = (column: string, value: SQLInputValue) => {
+      sets.push(`${column} = ?`);
+      values.push(value);
+    };
+    if (patch.confidence !== undefined) add("confidence", Math.min(1, Math.max(0, patch.confidence)));
+    if (patch.status) add("status", patch.status);
+    if (patch.accepted !== undefined) add("accepted", patch.accepted);
+    if (patch.rejected !== undefined) add("rejected", patch.rejected);
+    if (patch.auto !== undefined) add("auto", patch.auto ? 1 : 0);
+    if (patch.lastProposed) add("last_proposed", patch.lastProposed);
+    if (patch.name) add("name", patch.name);
+    if (!sets.length) return;
+    add("updated", new Date().toISOString());
+    this.db.prepare(`UPDATE habits SET ${sets.join(", ")} WHERE id = ?`).run(...values, id);
+  }
+
+  deleteHabit(id: number): void {
+    this.db.prepare("DELETE FROM habits WHERE id = ?").run(id);
   }
 
   // ---------------- summaries ----------------
@@ -867,7 +994,7 @@ export class MemoryDb {
   clear(): void {
     const tables = this.db.prepare("SELECT name FROM vec_tables").all() as { name: string }[];
     for (const t of tables) this.db.exec(`DROP TABLE IF EXISTS ${t.name}`);
-    this.db.exec("DELETE FROM vec_tables; DELETE FROM embeddings; DELETE FROM messages; DELETE FROM summaries; DELETE FROM facts;");
+    this.db.exec("DELETE FROM vec_tables; DELETE FROM embeddings; DELETE FROM messages; DELETE FROM summaries; DELETE FROM facts; DELETE FROM events; DELETE FROM habits;");
     this.db.exec(
       "INSERT INTO messages_fts(messages_fts) VALUES ('rebuild'); INSERT INTO summaries_fts(summaries_fts) VALUES ('rebuild'); INSERT INTO facts_fts(facts_fts) VALUES ('rebuild');",
     );

@@ -18,6 +18,8 @@ export interface TrayState {
   talkHotkey: string;
   /** Progress of an audiobook being made, or null. */
   audiobook: string | null;
+  /** Lumi is on this phone (a call), or null. */
+  phoneCall: string | null;
 }
 
 export interface TrayActions {
@@ -30,6 +32,8 @@ export interface TrayActions {
   togglePerception(): void;
   setListenMode(mode: ListenMode): void;
   createAudiobook(): void;
+  /** Lumi comes back from the phone. */
+  recallFromPhone(): void;
   cancelAudiobook(): void;
   openSettings(): void;
   openDataFolder(): void;
@@ -92,6 +96,7 @@ export class LumiTray {
       click: () => a.setListenMode(mode),
     }));
     return Menu.buildFromTemplate([
+      ...(s.phoneCall ? ([{ label: `Richiama Lumi (è sul telefono: ${s.phoneCall})`, click: () => a.recallFromPhone() }, { type: "separator" }] as MenuItemConstructorOptions[]) : []),
       { label: "Chiedi a Lumi…", accelerator: s.chatHotkey || undefined, registerAccelerator: false, click: () => a.ask() },
       { label: "Chat con Lumi", click: () => a.talk() },
       { label: "Come ti ascolto", submenu: modes, enabled: s.voiceReady },

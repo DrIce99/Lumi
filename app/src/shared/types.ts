@@ -90,6 +90,13 @@ export interface Settings {
    * annoyed), `dodge` (out of the way of the text cursor).
    */
   movement: { enabled: boolean; initiative: boolean; pranks: boolean; dodge: boolean };
+  /**
+   * Habits (phase 11): logging the apps the user opens (names only, on this
+   * PC), finding patterns, proposing them at the right time.
+   */
+  habits: { enabled: boolean; proposalCooldownMinutes: number; minOccurrences: number; minFrequency: number };
+  /** The phone app (phase 15): the LAN server for pairing and calls, off until enabled. */
+  phone: { enabled: boolean; port: number };
   /** Searching the web (web_search, read_page): which free service, or none. */
   web: { provider: WebProvider; searxngUrl: string };
   /** Long-term memory (memory.db): where the embeddings come from, and how results are ordered. */
@@ -170,6 +177,8 @@ export const DEFAULT_SETTINGS: Settings = {
   stt: { engine: "faster-whisper", model: "large-v3-turbo", device: "auto", vocabulary: [] },
   tts: { engine: "qwen3", model: "1.7B-CustomVoice", voice: "ryan", speed: 1, volume: 1, seed: 7, pronunciations: [] },
   movement: { enabled: true, initiative: true, pranks: true, dodge: true },
+  habits: { enabled: true, proposalCooldownMinutes: 20, minOccurrences: 5, minFrequency: 0.7 },
+  phone: { enabled: false, port: 47821 },
   web: { provider: "auto", searxngUrl: "" },
   memory: { embeddings: { provider: "ollama", model: "bge-m3" }, weights: { relevance: 1, recency: 0.5, importance: 0.5 }, backupDays: 7 },
   listen: {
@@ -391,6 +400,24 @@ export interface BarBridge {
   pathFor(file: File): string;
 }
 
+/** The phone bridge's hidden window (renderer/phone/bridge.ts). */
+export interface PhoneBridgeApi {
+  onOffer(cb: (msg: { sdp: string }) => void): void;
+  onSend(cb: (msg: unknown) => void): void;
+  onHangup(cb: () => void): void;
+  onAudioBegin(cb: (msg: AudioBegin) => void): void;
+  onAudioChunk(cb: (msg: AudioChunk) => void): void;
+  onAudioEnd(cb: (msg: { id: number }) => void): void;
+  onAudioStop(cb: (msg: { fadeMs: number }) => void): void;
+  onMicControl(cb: (control: MicControl) => void): void;
+  answer(result: { sdp?: string; error?: string }): void;
+  message(msg: unknown): void;
+  connection(state: string): void;
+  mic(event: MicEvent): void;
+  playback(event: PlaybackEvent): void;
+  log(text: string): void;
+}
+
 export interface FaceBridge {
   onLayout(cb: (layout: FaceLayout) => void): void;
   onState(cb: (state: FaceState) => void): void;
@@ -400,6 +427,8 @@ export interface FaceBridge {
   onGlare(cb: (msg: { lightDx: number }) => void): void;
   /** Flying across the screen: direction and speed (-1..1), `landed` at the end of a flight. */
   onTravel(cb: (msg: { vx: number; vy: number; landed: boolean }) => void): void;
+  /** Leaving for the phone or coming back, at a point of the window. */
+  onTransit(cb: (msg: { kind: "out" | "in" | "reset"; x: number; y: number }) => void): void;
   onBubbleStart(cb: (msg: BubbleStart) => void): void;
   onBubbleChunk(cb: (msg: BubbleChunk) => void): void;
   onBubbleEnd(cb: (msg: BubbleEnd) => void): void;
@@ -475,6 +504,10 @@ export interface SettingsSnapshot {
   discord: { state: string; detail: string; token: "env" | "saved" | "none" };
   /** The memory's embedding queue: how much has vectors of the chosen model. */
   memoryIndex: MemoryIndexStatus | null;
+  /** Habits found (phase 11), archived ones included. */
+  habits: HabitInfo[];
+  /** The phone link: paired phones (no keys), the server and the call. */
+  phone: { listening: boolean; devices: { id: string; name: string; paired: string; lastSeen?: string }[]; call: string; phoneName: string };
 }
 
 /** A memory the user may choose to forget (memory/db.ts ForgetItem). */
@@ -486,6 +519,17 @@ export interface ForgetCandidate {
   label: string;
   /** A clear match: selected by default. */
   strong: boolean;
+}
+
+export interface HabitInfo {
+  id: number;
+  name: string;
+  confidence: number;
+  status: "active" | "archived";
+  /** Lumi does it by itself (the user allowed it), instead of asking. */
+  auto: boolean;
+  accepted: number;
+  rejected: number;
 }
 
 export interface MemoryIndexStatus {
@@ -542,6 +586,13 @@ export interface SettingsBridge {
   /** Forgets the chosen items, with everything that depends on them. */
   forgetItems(selection: { messages: number[]; summaries: number[]; facts: number[] }): Promise<{ ok: boolean; message: string; snapshot: SettingsSnapshot }>;
   onStatus(cb: (status: SidecarStatus) => void): void;
+  /** A new phone pairing: the link and its QR code (an image data URL), valid 5 minutes. */
+  phonePair(): Promise<{ ok: boolean; url: string; qr: string; hosts: string[]; message: string }>;
+  phoneRevoke(id: string): Promise<SettingsSnapshot>;
+  /** A habit: let Lumi do it by itself, ask first again, or forget it. */
+  habit(id: number, action: "auto" | "ask" | "forget"): Promise<SettingsSnapshot>;
+  /** Something changed outside the window (a phone was paired): reload. */
+  onRefresh(cb: () => void): void;
   /** Lumi asked to forget something: the Memory tab opens on it. */
   onForgetQuery(cb: (query: string) => void): void;
 }

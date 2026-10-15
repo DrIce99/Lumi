@@ -22,6 +22,9 @@ export interface SettingsBackend {
   openDataFolder(): void;
   restartSidecar(): Promise<SettingsSnapshot>;
   findForget(query: string): Promise<ForgetCandidate[]>;
+  habit(id: number, action: "auto" | "ask" | "forget"): Promise<SettingsSnapshot>;
+  phonePair(): Promise<{ ok: boolean; url: string; qr: string; hosts: string[]; message: string }>;
+  phoneRevoke(id: string): SettingsSnapshot;
   forgetItems(selection: { messages: number[]; summaries: number[]; facts: number[] }): Promise<{ ok: boolean; message: string; snapshot: SettingsSnapshot }>;
 }
 
@@ -72,6 +75,12 @@ export class SettingsWindow {
     handle(IPC.settingsDiscordToken, (token) => backend.setDiscordToken(String(token ?? "")));
     handle(IPC.settingsOpenData, () => backend.openDataFolder());
     handle(IPC.settingsRestartSidecar, () => backend.restartSidecar());
+    handle(IPC.settingsPhonePair, () => backend.phonePair());
+    handle(IPC.settingsPhoneRevoke, (id) => backend.phoneRevoke(String(id)));
+    handle(IPC.settingsHabit, (id, action) => {
+      if (!Number.isInteger(id) || !["auto", "ask", "forget"].includes(String(action))) throw new Error("Bad habit request");
+      return backend.habit(id as number, action as "auto" | "ask" | "forget");
+    });
     handle(IPC.settingsFindForget, (query) => backend.findForget(typeof query === "string" ? query.slice(0, 300) : ""));
     handle(IPC.settingsForgetItems, (selection) => {
       const s = (selection ?? {}) as Record<string, unknown>;
@@ -81,6 +90,11 @@ export class SettingsWindow {
 
   isOpen(): boolean {
     return this.win !== null;
+  }
+
+  /** Asks the open window to reload its snapshot (something changed outside it: a phone was paired). */
+  refresh(): void {
+    if (this.win && !this.win.isDestroyed()) this.win.webContents.send(IPC.settingsRefresh);
   }
 
   /** Pushes the voice engines' status to the open window. */

@@ -19,11 +19,15 @@
     "discord.js": "^14.27.0",
     "koffi": "^3.3.3",
     "opusscript": "^0.1.1",
-    "sqlite-vec": "0.1.9"
+    "qrcode": "1.5.4",
+    "sqlite-vec": "0.1.9",
+    "ws": "8.22.0"
   },
   "devDependencies": {
     "@ricky0123/vad-web": "^0.0.31",
     "@types/node": "^24.0.0",
+    "@types/qrcode": "1.5.6",
+    "@types/ws": "8.18.2",
     "electron": "^44.7.0",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2"

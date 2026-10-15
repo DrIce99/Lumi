@@ -6,11 +6,13 @@ import { Worker } from "node:worker_threads";
 import { log } from "../../log";
 import { makeBackup } from "./backup";
 import type {
+  EventRow,
   FactInput,
   FactRow,
   ForgetItem,
   ForgetResult,
   ForgetSelection,
+  HabitRow,
   LegacyImport,
   LineInput,
   MemoryDb,
@@ -51,6 +53,13 @@ export const STORE_METHODS = [
   "forget",
   "compact",
   "backup",
+  "logEvent",
+  "eventsSince",
+  "pruneEvents",
+  "listHabits",
+  "upsertHabit",
+  "updateHabit",
+  "deleteHabit",
 ] as const;
 export type StoreMethod = (typeof STORE_METHODS)[number];
 
@@ -197,6 +206,36 @@ export class MemoryStore {
   /** Makes deletions final in the file (FTS merge, vector tables rewritten, VACUUM). */
   compact(): Promise<void> {
     return this.call("compact", []) as Promise<void>;
+  }
+
+  // ---- habits (phase 11) ----
+
+  logEvent(event: EventRow): void {
+    this.write("logEvent", [event]);
+  }
+
+  async eventsSince(from: string, kinds?: string[]): Promise<EventRow[]> {
+    return (this.call("eventsSince", [from, kinds]) as Promise<EventRow[]>).catch(() => []);
+  }
+
+  pruneEvents(before: string): void {
+    this.write("pruneEvents", [before]);
+  }
+
+  async listHabits(includeArchived = false): Promise<HabitRow[]> {
+    return (this.call("listHabits", [includeArchived]) as Promise<HabitRow[]>).catch(() => []);
+  }
+
+  upsertHabit(habit: Parameters<MemoryDb["upsertHabit"]>[0]): Promise<void> {
+    return this.call("upsertHabit", [habit]) as Promise<void>;
+  }
+
+  updateHabit(id: number, patch: Parameters<MemoryDb["updateHabit"]>[1]): Promise<void> {
+    return this.call("updateHabit", [id, patch]) as Promise<void>;
+  }
+
+  deleteHabit(id: number): Promise<void> {
+    return this.call("deleteHabit", [id]) as Promise<void>;
   }
 
   /** Today's backup in `dir` (newest `keep` kept); `reset` deletes the old ones first. The new file, or null. */

@@ -47,9 +47,9 @@ L'obiettivo è che sembri **il più umano possibile**, cioè con poca latenza, t
 - **Memoria persistente** e **momenti autonomi** (commenti spontanei nelle pause), come in Pixel Pet. Ogni frase della conversazione finisce in un database locale (`memory.db`): le parti più vecchie vengono riassunte in "episodi" che restano nel contesto, i fatti importanti su di te vengono estratti da soli, e a ogni domanda Lumi cerca nel suo passato i ricordi collegati (ricerca per parole e per significato, tutta sul PC; tool `search_memory` per le ricerche esplicite, anche per data: "ti ricordi quando…", "cosa ti ho detto a marzo?").
 - **Memoria che dura anni** (fase 10, prevista): ricorda tutto ciò che è stato detto e lo ritrova per significato, per parole esatte o per data. Dà priorità a ciò che conta, ma non butta niente e dimentica solo quando glielo chiedi tu.
 - **Si muove sullo schermo**: se le chiedi di spostarsi ("vai in alto a destra", "sull'altro schermo", "levati, mi copri") vola lì da sola, anche tra i monitor; e si muove anche di sua iniziativa quando ha un motivo, per indicarti qualcosa o per farti un piccolo dispetto se l'hai infastidita.
-- **Passa sul telefono** (fase 15, prevista): con il tasto "Chiama" dell'app Lumi viene risucchiata fuori dallo schermo del PC (come un oggetto che cade in un buco nero) e riemerge nell'app, dove la vedi e le parli; voce, cervello e memoria restano sul PC.
+- **Passa sul telefono**: con il tasto "Chiama" dell'app Lumi viene risucchiata fuori dallo schermo del PC (come un oggetto che cade in un buco nero) e riemerge nell'app, dove la vedi e le parli; voce, cervello e memoria restano sul PC.
 - **Usa il PC** (fase 16, prevista): apre e chiude app, file e cartelle, gestisce le finestre e la musica e preme i controlli dentro le app; le azioni che cambiano qualcosa le fa solo dopo averti chiesto conferma.
-- **Impara le tue abitudini** (fase 11, prevista) e ti propone le cose prima che tu le chieda, senza mai agire da solo su azioni importanti.
+- **Impara le tue abitudini**: dalle app che apri (solo i nomi, sul PC) capisce che "nei feriali verso le 9 apri Spotify" o che "dopo VS Code apri Discord", e al momento giusto ti chiede se aprirle. Fa da sola solo quando glielo permetti tu, per singola abitudine.
 - **Riconosce le voci**: un piccolo modello (WeSpeaker ResNet34, ONNX su CPU) misura l'"impronta" di ogni frase. La prima voce sentita al microfono è la tua; le altre diventano "Voce 2", "Voce 3"… finché non dici a Lumi chi sono ("quello che ha parlato è Marco", tool `name_voice`). Le impronte restano in `voices.json` e si cancellano dalle impostazioni.
 - **Parla nelle chiamate Discord** (facoltativo, spento di default): un bot ti segue nei canali vocali dei server e parla con la voce di Lumi, così la sentono anche i tuoi amici; tu la senti in Discord (sul PC non suona due volte) e gli occhi continuano ad animarsi. Il bot entra "silenziato in ascolto" (non riceve l'audio di nessuno). Non funziona nelle chiamate private: i bot non possono entrarci.
 - **Ascolta l'audio delle app** (facoltativo, spento di default): per esempio i tuoi amici su Discord. Windows cattura solo l'audio di quelle app (process loopback), mai la voce di Lumi, la musica o i video; il sidecar lo divide in frasi, lo trascrive in locale e riconosce chi parla. Le frasi entrano nella conversazione come contesto; Lumi risponde a un amico solo se lo chiama per nome, e durante una chiamata l'ascolto continuo aspetta la parola di attivazione.
@@ -513,46 +513,39 @@ Lumi da sola non può cancellare frasi o riassunti: può solo aprire l'elenco. C
 
 ## Abitudini e proattività
 
-> Previste (fase 11).
+> Fatto (fase 11). Si spegne in Impostazioni → Memoria → Abitudini.
 
-Le abitudini si vedono da **quello che fai**, non solo da quello che dici. Per questo, accanto alla memoria delle conversazioni, c'è un **log degli eventi**.
+Le abitudini si vedono da **quello che fai**, non solo da quello che dici. Per questo, accanto alla memoria delle conversazioni, c'è un **log degli eventi** (`brain/habits/`).
 
-### Eventi raccolti (`events.ts`)
+### Eventi raccolti
 
-- app e finestra in primo piano (cambio e durata);
-- comandi dati a Lumi (voce, barra, chat) e azioni proposte, accettate o rifiutate;
-- ora, giorno della settimana, inizio e fine sessione, pause;
-- facoltativo: categorie di ciò che vede (dal contesto percettivo, solo etichette e non testo integrale).
+Nella tabella `events(ts, kind, app, detail)` di `memory.db`:
 
-Gli eventi stanno nello stesso `memory.db`, nella tabella `events(ts, kind, app, detail)`, con la stessa policy di oblio.
+- **app in primo piano**: il nome dell'eseguibile e il suo percorso (per poterla riaprire), solo quando l'app resta in primo piano almeno 4 secondi. **Mai** il titolo della finestra o ciò che contiene; mai le app di `pauseInApps`, le finestre in incognito o quando la percezione è in pausa;
+- **comandi a Lumi**: solo il canale (voce, barra, chat), non il testo (la conversazione è già in memoria);
+- **proposte** e risposte (sì, no, nessuna risposta), **sessioni** (avvio, chiusura, assenza, ritorno), **riflessioni**.
+
+Gli eventi più vecchi di 12 settimane si cancellano da soli; "Dimentica tutto" cancella eventi e abitudini.
 
 ### Riconoscimento dei pattern (`patterns.ts`, deterministico, senza LLM)
 
-Il codice deterministico è più affidabile ed economico di un LLM per questo compito. Si parte con due tipi di pattern:
+- **Ricorrenze orarie**: "nei giorni feriali verso le 9 apri Spotify". Per ogni app e fascia di mezz'ora (conta anche la fascia accanto: nessuno è un orologio) si contano i giorni con un'apertura sui giorni osservati. Vince il gruppo di giorni più ampio che regge (ogni giorno, feriali, fine settimana, un giorno preciso), ma solo se regge anche in ciascun giorno che contiene: "ogni giorno" per una cosa fatta solo nei feriali sarebbe sbagliato anche se il totale supera la soglia.
+- **Sequenze**: "dopo VS Code apri Discord" (la seconda app entro 10 minuti dalla prima), come una semplice catena di Markov.
+- Un pattern diventa un'**ipotesi** con almeno 5 occorrenze e almeno il 70% di frequenza (regolabili in `settings.json`).
 
-- **Ricorrenze temporali**: "nei giorni feriali verso le 9 apri X". Si contano le occorrenze per fascia oraria (30 minuti) e giorno della settimana.
-- **Sequenze**: "dopo A fai B nell'80% dei casi". Si contano le coppie di eventi consecutivi, come in una semplice catena di Markov.
+### Riflessione (`habits.ts`)
 
-Un pattern diventa un'**ipotesi** solo sopra una soglia, per esempio almeno 5 occorrenze con almeno il 70% di frequenza.
+Gira quando il PC riposa (di notte con 10 minuti di inattività, oppure dopo 30 minuti di inattività con l'alimentazione collegata), al massimo una volta ogni 20 ore. Legge gli eventi delle ultime 8 settimane, trova i pattern, fa dare un nome alle abitudini nuove dal modello dei momenti autonomi ("musica appena inizi a lavorare"; senza modello, un nome semplice come "nei giorni feriali verso le 9 apri Spotify"), e abbassa la confidenza di quelle che non si vedono più. I riassunti di giorno, settimana e mese li scrive già il diario (fase 10). Le abitudini attive entrano in `<situation>`, così Lumi le conosce.
 
-### Riflessione notturna (`reflection.ts`)
+### Trigger (`triggers.ts`)
 
-Gira quando il PC è inattivo (di notte, o dopo 30 minuti di inattività con l'alimentazione collegata), perché un LLM locale in background consuma risorse. Lumi:
+Quando il contesto corrisponde a un'abitudine (la sua mezz'ora nei giorni giusti e l'app non ancora aperta, oppure "subito dopo A"), Lumi **propone**: lo dice a voce e mostra un fumetto con Sì/No. Puoi rispondere col clic o a voce ("sì", "va bene", "no grazie"): la risposta resta fuori dalla conversazione col cervello.
 
-1. scrive il riassunto della giornata (e quelli settimanali o mensili quando tocca);
-2. rilegge le statistiche dei pattern e dà un nome alle abitudini ("sessione di lavoro mattutina su RPG");
-3. le salva come fatti di tipo `abitudine`, con un livello di confidenza;
-4. aggiorna o archivia le abitudini che non trovano più riscontro.
+- Se accetti, apre l'app (con il percorso registrato) e la confidenza sale di 0,1. Se rifiuti, scende di 0,15, e sotto 0,3 l'abitudine viene archiviata.
+- **Limiti**: una proposta ogni 20 minuti (regolabile), un'abitudine al massimo una volta al giorno, nessuna proposta in "Non disturbare", durante le chiamate, mentre scrivi, mentre Lumi parla o ti ascolta, quando sei via o lo schermo è bloccato.
+- **Fa da sola solo se glielo permetti**: in Impostazioni → Memoria → Abitudini, per ogni abitudine, «Fai da sola». Allora apre l'app senza chiedere e te lo dice ("Ti apro Spotify, come al solito"). L'unica azione è aprire l'app di sempre; le altre azioni sul PC arriveranno con la fase 16 e la stessa regola.
 
-È questa combinazione di statistiche e riflessione periodica a dare l'effetto di un assistente che "ragiona per conto suo" e ti anticipa.
-
-### Trigger
-
-Quando il contesto attuale corrisponde a un'abitudine, Lumi **propone** l'azione ma non la esegue.
-
-- Se accetti, la confidenza sale. Se rifiuti, scende, e sotto una soglia (per esempio 0,3) l'abitudine viene archiviata.
-- **C'è un limite**: al massimo una proposta ogni 20 minuti (configurabile) e nessuna proposta in "Non disturbare", durante le chiamate o mentre scrivi intensamente.
-- **Niente azioni irreversibili senza conferma.** Proporre va sempre bene, mentre agire da solo è permesso solo per cose innocue e attivate esplicitamente nelle impostazioni (per esempio "apri sempre X alle 9").
+Per provarla subito: `LUMI_DEBUG_REFLECT=1` fa una riflessione 20 secondi dopo l'avvio.
 
 ---
 
@@ -610,46 +603,46 @@ Rispetto al piano non ci sono: la fuga quando provi a cliccarla (renderebbe impo
 
 ## Lumi sul telefono
 
-> Previsto (fase 15).
-
-Un'app per il telefono con un tasto **"Chiama Lumi"**: premendolo, Lumi lascia lo schermo del PC e **si trasferisce nell'app**: i suoi due occhi a capsula compaiono sullo schermo del telefono, vivi come sul PC (battiti di ciglia, sguardo, espressioni, pulsazione mentre parla), e puoi parlarle da lì (in un'altra stanza, sul divano). Lumi c'è in un posto solo alla volta: o sul PC o sul telefono.
+Un'app per il telefono con un tasto **"Chiama"**: premendolo, Lumi lascia lo schermo del PC e **si trasferisce nell'app**: i suoi due occhi a capsula compaiono sullo schermo del telefono, vivi come sul PC (battiti di ciglia, sguardo, espressioni, pulsazione mentre parla), e puoi parlarle da lì (in un'altra stanza, sul divano). Lumi c'è in un posto solo alla volta: o sul PC o sul telefono.
 
 Il telefono è **microfono, altoparlante e corpo di Lumi**, ma non il suo cervello: STT, LLM, TTS, memoria e percezione restano sul PC, con il suo hardware.
 
 ### Architettura
 
 ```
-telefono (app)                                PC (Electron)
- ├─ volto (stesso face.ts)  ◄── stato e gesti ──┐
+telefono (app, phone/)                         PC (Electron)
+ ├─ volto (stesso face.ts)  ◄── canale dati ────┐ stato, gesti, sottotitoli, passaggio
  ├─ microfono (AEC del telefono) ── WebRTC ──►  phoneBridge (renderer nascosto)
  └─ altoparlante           ◄── WebRTC ───────   ├─ VAD Silero sulla traccia remota → TurnManager
                                                 └─ voce di Lumi (AudioOut) → traccia in uscita
-                           ◄─ WSS: abbinamento e segnalazione ─► phone/server.ts (main)
+                           ◄─ WS firmato: abbinamento e segnalazione ─► main/phone/server.ts
 ```
 
-- **App**: [Capacitor](https://capacitorjs.com) (Android per primo). È una WebView, quindi riusa così com'è il disegno del volto (`renderer/face/`), il player e la logica dei fumetti; servita da `https://localhost` dentro l'app, ha il contesto sicuro che `getUserMedia` richiede. iOS dopo: serve un Mac e l'account sviluppatore a pagamento (con l'account gratuito l'app scade ogni 7 giorni), e il progetto deve restare gratis.
-- **Il volto nell'app** gira sul telefono, non arriva come video: il PC manda solo lo **stato** (espressione e intensità, ascolto, pensiero, parla, sonnolenza, gesti; l'abbagliamento no, perché dipende dallo schermo del PC) sul canale dati, e il `Face` del telefono anima tutto in locale a 60 fps, quindi resta fluido anche con una rete che singhiozza. La pulsazione mentre parla segue il livello (RMS) dell'audio che il telefono sta suonando, misurato lì con un analizzatore sulla traccia ricevuta, così è sincronizzata con quello che senti e non con quello che il PC ha mandato.
-  - **Aspetto**: sfondo scuro a tutto schermo, occhi grandi al centro (scala circa 3× rispetto al PC, adattata al lato corto dello schermo), stesso colore delle impostazioni. Sotto, i tasti **Riaggancia**, **Silenzia** e **Tieni premuto per parlare**; i sottotitoli (fumetto) sono facoltativi.
-  - **Sguardo**: sul telefono non c'è uno schermo da osservare, quindi Lumi guarda **te** (verso il centro, come in videochiamata), con le saccadi e i micro-movimenti di sempre. Quando parla di qualcosa sul PC alza lo sguardo e lo sposta di lato, come chi ricorda; mentre pensa usa l'espressione di pensiero.
-  - **Tocco**: se tocchi gli occhi reagiscono (un battito, un piccolo sobbalzo, `gesture("bounce")`), se trascini il dito lo seguono con lo sguardo; un tocco lungo apre il menu (impostazioni dell'app, riaggancia).
-  - **Fuori dalla chiamata** l'app mostra il tasto **Chiama** e lo stato del PC ("Lumi è sul PC", "PC non raggiungibile"), senza occhi: Lumi non c'è finché non la chiami.
-- **Audio con WebRTC**, non PCM su WebSocket: Opus, jitter buffer, cifratura DTLS-SRTP e soprattutto la **cancellazione dell'eco del telefono**, che ha come riferimento proprio l'audio di Lumi riprodotto dalla connessione. Latenza aggiunta in LAN: circa 100–200 ms.
-- **Lato PC, un renderer nascosto** (`phoneBridge`): Chromium ha già WebRTC completo, mentre in Node servirebbe un modulo nativo (`node-datachannel`) o una libreria lenta. Il bridge riceve la traccia del microfono, ci fa girare lo stesso `Listener` (VAD Silero) con `getStream` che restituisce la traccia remota e manda i frame al `TurnManager` come oggi fa la finestra del volto. La voce di Lumi arriva dal tee `AudioOut` (lo stesso usato per Discord) e va in un `MediaStreamAudioDestinationNode`, cioè nella traccia verso il telefono.
-- **Canale dati WebRTC** per tutto il resto: `FaceState`, gesti, fumetti e testo, push-to-talk, riaggancio e i segnali del passaggio (vedi sotto).
-- **Segnalazione e abbinamento** in `main/phone/server.ts`: un server HTTPS/WSS in ascolto sulla rete locale (porta fissa configurabile, 47821 di default). È l'unico pezzo di Lumi aperto alla rete: il sidecar resta su `127.0.0.1`. Al primo avvio Windows chiede il permesso nel firewall.
+- **App** (`phone/`): [Capacitor](https://capacitorjs.com) 8 per Android. È una WebView, quindi riusa così com'è il disegno del volto (`app/src/renderer/face/`) e il protocollo (`app/src/shared/phone.ts`): `phone/build.mjs` li impacchetta con esbuild in `phone/www/`. La pagina è servita da `http://localhost` dentro l'app (`androidScheme: "http"`): è un contesto sicuro, quindi `getUserMedia` e WebCrypto funzionano, e può aprire un WebSocket in chiaro verso il PC. iOS dopo: serve un Mac e l'account sviluppatore a pagamento.
+- **Il volto nell'app** gira sul telefono, non arriva come video: il PC manda solo lo **stato** (`FaceState`: espressione e intensità, ascolto, pensiero, parla, sonnolenza; i gesti; il colore degli occhi delle impostazioni) sul canale dati, e il `Face` del telefono anima tutto in locale. La pulsazione mentre parla segue il livello (RMS) dell'audio che il telefono sta suonando, misurato lì con un analizzatore sulla traccia ricevuta.
+  - **Aspetto**: sfondo scuro a tutto schermo, occhi grandi al centro (scala adattata allo schermo, fino a circa 3× il PC). Sotto, i tasti **Silenzia**, **Tieni premuto per parlare** e **Riaggancia**, e i sottotitoli di quello che dice (il testo del fumetto del PC).
+  - **Sguardo**: sul telefono non c'è uno schermo da osservare, quindi Lumi guarda **te**, con le saccadi e i micro-movimenti di sempre.
+  - **Tocco**: un tocco la fa sobbalzare (`gesture("bounce")`), se trascini il dito gli occhi lo seguono.
+  - **Fuori dalla chiamata** l'app mostra il tasto **Chiama**, il nome del PC e, sotto "Altro", l'indirizzo del PC (modificabile, per esempio quello di Tailscale) e "Dimentica questo PC". Niente occhi: Lumi non c'è finché non la chiami.
+- **Funzioni leggere** (solo sul telefono): un punto verde/rosso mostra se il PC risponde; durante la chiamata c'è il tempo trascorso; in home resta scritta l'ultima chiamata (data, durata); piccole vibrazioni al tocco degli occhi, a inizio chiamata, al silenzio e al riaggancio; l'icona è quella di Lumi (due capsule su fondo scuro) e lo sfondo scuro c'è già all'avvio, senza flash bianco.
+- **Audio con WebRTC**, non PCM su WebSocket: Opus, jitter buffer, cifratura DTLS-SRTP e soprattutto la **cancellazione dell'eco del telefono**, che ha come riferimento l'audio di Lumi riprodotto da un elemento `<audio>`. Solo candidati ICE locali (nessun server STUN/TURN): stessa rete o VPN. L'offerta parte completa (niente trickle ICE), quindi bastano due messaggi di segnalazione.
+- **Lato PC, un renderer nascosto** (`renderer/phone/bridge.ts`): Chromium ha già WebRTC completo, mentre in Node servirebbe un modulo nativo. Il bridge riceve la traccia del microfono, ci fa girare lo stesso `Listener` (VAD Silero) con la traccia remota come sorgente e manda i frame al `TurnManager` come fa la finestra del volto. La voce di Lumi arriva dal tee `AudioOut` (lo stesso usato per Discord) a un `Player` che suona in un `MediaStreamAudioDestinationNode`, cioè nella traccia verso il telefono. Il bridge non apre mai un microfono, quindi Chromium nasconderebbe il suo indirizzo dietro un nome mDNS: l'app disattiva `WebRtcHideLocalIpsWithMdns`.
+- **Canale dati WebRTC** (`lumi`) per tutto il resto: stato, gesti, sottotitoli, push-to-talk, silenzia, riaggancio e i segnali del passaggio.
+- **Segnalazione e abbinamento** in `main/phone/server.ts` (`ws`): un server HTTP/WebSocket sulla rete locale (porta configurabile, 47821 di default), acceso solo con l'opzione **Telefono** attiva. È l'unico pezzo di Lumi aperto alla rete: il sidecar resta su `127.0.0.1`. Al primo avvio Windows chiede il permesso nel firewall. Serve anche l'app web in `/app/` (per provarla da un browser sul PC).
 
 ### Abbinamento e sicurezza
 
-- Impostazioni → **Telefono** mostra un QR con `lumi://pair?host=<IP>&port=<porta>&fp=<impronta del certificato>&code=<codice monouso, 5 minuti>`.
-- Il PC genera al primo avvio un certificato autofirmato; l'app lo accetta **solo** se l'impronta coincide con quella del QR (pinning, con un piccolo plugin nativo per il WebSocket). Il codice monouso diventa un token del dispositivo, salvato cifrato con DPAPI sul PC (`phones.bin`) e nel keystore del telefono. I dispositivi si revocano dalle impostazioni.
-- L'indirizzo del PC si ritrova da solo se cambia (mDNS, `_lumi._tcp`).
-- **Fuori casa**: niente server di inoltro nostro (costerebbe e farebbe passare l'audio da terzi). Si usa una VPN mesh gratuita come [Tailscale](https://tailscale.com): l'app accetta l'indirizzo del PC nella rete Tailscale.
+- Impostazioni → **Telefono** → «Mostra il codice per abbinare» mostra un QR (e il link) `lumi://pair?h=<indirizzi del PC>&p=<porta>&i=<id dell'abbinamento>&k=<chiave casuale di 256 bit>&n=<nome del PC>`, valido **5 minuti e una volta sola**. L'app lo legge con la fotocamera (jsQR) o incollato.
+- La chiave non viaggia mai in rete: il login è una **sfida-risposta HMAC-SHA256** con un nonce del PC e uno del telefono, e anche il PC dimostra di conoscere la chiave (nessuno sulla rete può fingersi il tuo PC). Ogni messaggio di segnalazione è **firmato** con una chiave di sessione derivata dalla chiave e dai due nonce, con un numero di sequenza contro le ripetizioni: l'offerta e la risposta WebRTC, che contengono le impronte DTLS, non si possono alterare, quindi audio e dati viaggiano cifrati da un capo all'altro anche se il WebSocket è in chiaro. È il motivo per cui non serve un certificato autofirmato da "pinnare" con un plugin nativo, come previsto all'inizio.
+- Sul PC le chiavi dei telefoni sono cifrate con DPAPI (`phones.bin`); si vedono e si revocano dalle impostazioni. Sul telefono la chiave sta nello storage della WebView, leggibile solo dall'app (non nel keystore di Android: un passo possibile in futuro con un plugin).
+- L'indirizzo del PC: il QR contiene i suoi indirizzi (prima quelli della LAN), l'app li prova in ordine e mette in testa quello che risponde. Niente mDNS per ora: se l'indirizzo cambia si corregge a mano sotto "Altro" o si abbina di nuovo.
+- **Fuori casa**: niente server di inoltro nostro (costerebbe e farebbe passare l'audio da terzi). Si usa una VPN mesh gratuita come [Tailscale](https://tailscale.com): basta scrivere nell'app l'indirizzo del PC nella rete Tailscale.
 
 ### Il passaggio: spaghettificazione e despaghettificazione
 
 Quando Lumi cambia dispositivo, sul lato da cui parte viene **risucchiata** come un oggetto che finisce in un buco nero (spaghettificazione), e sul lato di arrivo fa l'animazione **opposta**: esce allungata da un punto e si ricompone nella sua forma (despaghettificazione). Vale nei due sensi: PC → telefono quando premi **Chiama**, telefono → PC quando riagganci, quando la richiami dalla tray ("Richiama Lumi") o quando la connessione cade.
 
-**Dove**: il punto di risucchio è sul **bordo dello schermo più vicino a Lumi** (sul PC il bordo dell'area di lavoro del suo monitor più vicino al volto; sul telefono il bordo superiore). Il punto di uscita, sul dispositivo di arrivo, è quello corrispondente: sul telefono Lumi esce dal bordo superiore e si ricompone al centro; sul PC esce dal bordo più vicino al suo posto (`home`) e si ricompone lì.
+**Dove**: sul telefono il punto è il bordo superiore; sul PC il bordo della finestra del volto dalla parte del **bordo dello schermo più vicino** (`transitPoint` in `layout.ts`). Lumi riappare sul PC dove l'avevi lasciata.
 
 **Spaghettificazione** (lato di partenza, circa 1,1 s):
 
@@ -665,17 +658,17 @@ Quando Lumi cambia dispositivo, sul lato da cui parte viene **risucchiata** come
 | Fase | Durata | Cosa succede |
 | --- | --- | --- |
 | bagliore | 150 ms | un punto luminoso sul bordo |
-| emersione | 500 ms | due filamenti sottili escono dal punto e scorrono verso la posizione finale |
-| ricomposizione | 400 ms | i filamenti si accorciano e si allargano tornando capsule, con un piccolo rimbalzo elastico (easing con overshoot) |
+| emersione | 450 ms | due filamenti sottili escono dal punto e scorrono verso la posizione finale |
+| ricomposizione | 450 ms | i filamenti si accorciano e si allargano tornando capsule, con un piccolo rimbalzo elastico (easing con overshoot) |
 | assestamento | 150 ms | un battito di ciglia e lo sguardo verso di te |
 
 **Come si disegna**:
 
-- `face/transit.ts` (puro, testato) calcola per ogni fotogramma la forma di ogni occhio durante il passaggio: una **linea centrale curva** (dalla posizione dell'occhio al punto di risucchio, curva quadratica con una leggera torsione) con una larghezza che si assottiglia lungo il tratto. `progress` 0→1 per la spaghettificazione; la despaghettificazione usa la stessa funzione al contrario, con un easing diverso.
+- `face/transit.ts` (puro, testato) calcola per ogni fotogramma la forma di ogni occhio durante il passaggio: una **linea centrale curva** (dalla posizione dell'occhio al punto di risucchio, curva quadratica con una leggera torsione) con una larghezza che si assottiglia lungo il tratto. La despaghettificazione usa la stessa funzione al contrario, con un easing con rimbalzo.
 - `face.ts` disegna l'occhio deformato come un **tubo** (una serie di cerchi lungo la linea, uniti in un unico tracciato) invece che con `roundRect`, sullo stesso livello offscreen: bagliore, ombra e bordo seguono la forma come per i tagli delle palpebre. È uno strato sopra espressione, battito e sguardo, come l'abbagliamento; battiti spontanei e gesti sono in pausa durante il passaggio.
-- **Sul PC il punto è spesso fuori dalla finestra** del volto: all'inizio del passaggio la finestra si allarga **una volta sola** (`setBounds`, trasparente e click-through) fino a includere il punto sul bordo, e torna normale alla fine. Nessuna animazione della finestra stessa, quindi nessun carico sul thread dell'hook del mouse.
-- **Suono** facoltativo: un breve "fruscio" che scende di tono durante il risucchio e sale durante l'emersione, generato con WebAudio (rumore filtrato), non con il TTS.
-- **Sincronizzazione**: il lato di partenza manda `transit: "gone"` sul canale dati alla fine del risucchio, e il lato di arrivo parte in quel momento. Se il segnale non arriva entro 2 s (rete lenta), il lato di arrivo parte comunque, e se la connessione cade a metà Lumi si ricompone sul PC.
+- **Sul PC** il punto sta sul bordo della finestra del volto, così la finestra non cambia mai dimensione né posizione: nessun carico sul thread dell'hook del mouse.
+- **Sincronizzazione**: il lato di partenza manda `transit: "gone"` sul canale dati alla fine del risucchio, e il lato di arrivo parte in quel momento. Quando riattacca il PC, il telefono gioca il risucchio e risponde "gone"; senza risposta entro 2,5 s Lumi torna comunque sul PC, e se la connessione cade per più di 10 s si ricompone sul PC.
+- Non fatto: il "fruscio" facoltativo in WebAudio.
 
 ### La "chiamata"
 
@@ -687,7 +680,19 @@ Quando Lumi cambia dispositivo, sul lato da cui parte viene **risucchiata** come
    - nel prompt `<situation>` dice "the user is talking to you from their phone": non sta guardando lo schermo del PC, ma `look_at_screen` resta possibile ("cosa sta scaricando il PC?");
    - non conta come utente assente: niente sonnolenza, ma i momenti autonomi seguono la socievolezza come sempre.
 3. **Riaggancia** (o "Richiama Lumi" dalla tray, o perdita di connessione per più di 10 s): passaggio inverso, spaghettificazione nell'app e despaghettificazione sul PC, al suo posto. Se la connessione è già caduta, sul PC c'è solo la despaghettificazione.
-4. Lo schermo del telefono resta acceso durante la chiamata; per parlare a schermo spento serve un servizio in primo piano Android (passo successivo, insieme all'integrazione con il sistema delle chiamate di Android).
+4. Lo schermo del telefono resta acceso durante la chiamata (Wake Lock); per parlare a schermo spento serve un servizio in primo piano Android (passo successivo, insieme all'integrazione con il sistema delle chiamate di Android).
+
+### Compilare l'app
+
+```bash
+cd phone
+npm install
+npm run build        # www/ con esbuild (volto e protocollo presi da app/src)
+npx cap sync android # copia www/ nel progetto Android
+npm run apk          # build + sync + APK di debug in android/app/build/outputs/apk/debug/
+```
+
+Serve l'SDK Android (quello di Android Studio) e un JDK 21 (per esempio `JAVA_HOME` = la cartella `jbr` di Android Studio). L'APK di debug si installa con `adb install` o copiandolo sul telefono. Per provare senza telefono: avvia Lumi con `LUMI_DEBUG_PAIR=<file>` (scrive il link di abbinamento) e apri `http://127.0.0.1:47821/app/?pair=<link>` in un browser del PC.
 
 ---
 
@@ -841,9 +846,10 @@ lumi/
 │  │  │  ├─ apps.ts            indice di app, app dello Store e giochi Steam
 │  │  │  ├─ actions.ts         esecuzione e verifica delle azioni, registro
 │  │  │  └─ policy.ts          libero / con conferma / mai (puro, testato)
-│  │  ├─ phone/                (previsto, fase 15)
-│  │  │  ├─ server.ts          HTTPS/WSS in LAN: abbinamento, segnalazione WebRTC
-│  │  │  └─ devices.ts         telefoni abbinati, token cifrati con DPAPI
+│  │  ├─ phone/
+│  │  │  ├─ server.ts          HTTP/WS in LAN: abbinamento, login, segnalazione firmata
+│  │  │  ├─ link.ts            la chiamata: stati, bridge, passaggio, instradamento di voce e microfono
+│  │  │  └─ devices.ts         telefoni abbinati, chiavi cifrate con DPAPI
 │  │  ├─ perception/
 │  │  │  ├─ desktop.ts         koffi: finestre, foreground, cursore, caret
 │  │  │  ├─ capture.ts         frame dal sidecar + diff a blocchi
@@ -864,24 +870,26 @@ lumi/
 │  │  │  │  ├─ search.ts       termini, query FTS, date, RRF, punteggio, soglie (puro, testato)
 │  │  │  │  ├─ periods.ts      settimane, mesi, nomi dei backup (puro, testato)
 │  │  │  │  └─ backup.ts       backup giornalieri con rotazione
-│  │  │  ├─ habits/            (previsto, fase 11)
-│  │  │  │  ├─ events.ts       log degli eventi
+│  │  │  ├─ habits/
 │  │  │  │  ├─ patterns.ts     ricorrenze e sequenze (puro, testato)
-│  │  │  │  ├─ reflection.ts   job notturno con l'LLM
-│  │  │  │  └─ triggers.ts     proposte, limite, confidenza
+│  │  │  │  ├─ triggers.ts     quando proporre, risposte, confidenza (puro, testato)
+│  │  │  │  └─ habits.ts       log degli eventi, riflessione, proposte
 │  │  │  └─ providers/         compat.ts  openai.ts  ollama.ts  (da Pixel Pet)
 │  │  └─ voice/
 │  │     ├─ turns.ts           macchina a stati: idle/listening/thinking/speaking
 │  │     ├─ chunker.ts         divide lo stream LLM in frasi (puro, testato)
 │  │     └─ endpoint.ts        fine turno: VAD + euristiche/Smart Turn
 │  ├─ src/renderer/
-│  │  ├─ face/                 face.ts  blink.ts  gaze.ts  expressions.ts
+│  │  ├─ face/                 face.ts  blink.ts  gaze.ts  expressions.ts  transit.ts
+│  │  ├─ phone/                bridge.ts: WebRTC verso il telefono (renderer nascosto)
 │  │  ├─ audio/                vad.ts (microfono + VAD)  player.ts  rms.ts
 │  │  └─ settings/
-│  ├─ src/shared/              ipc.ts  emotions.ts  types.ts
+│  ├─ src/shared/              ipc.ts  emotions.ts  types.ts  phone.ts (protocollo del telefono)
 │  ├─ test/
 │  ├─ build.mjs  run.mjs  package.json  tsconfig.json
-├─ phone/                      (previsto, fase 15) app Capacitor: volto, chiamata WebRTC
+├─ phone/                      app Capacitor (Android): abbinamento, chiamata WebRTC, volto
+│  ├─ src/                     main.ts  index.html  style.css
+│  └─ android/                 progetto Android generato da Capacitor (permessi nel manifest)
 ├─ sidecar/                    Python 3.11+
 │  ├─ server.py                FastAPI + WebSocket su 127.0.0.1:<porta casuale>
 │  ├─ stt/                     base.py  faster_whisper.py  parakeet.py
@@ -947,20 +955,15 @@ Il sidecar ascolta solo su `127.0.0.1`, con una porta casuale e un token generat
     "factExtraction": { "provider": "ollama", "model": "qwen3" },
     "backupDays": 7
   },
-  "habits": {
-    "enabled": true, "minOccurrences": 5, "minFrequency": 0.7,
-    "proposalCooldownMinutes": 20, "archiveBelowConfidence": 0.3,
-    "reflection": { "provider": "ollama", "model": "qwen3", "when": "idle-night" },
-    "autoActions": []
-  },
+  "habits": { "enabled": true, "proposalCooldownMinutes": 20, "minOccurrences": 5, "minFrequency": 0.7 },
   "movement": { "enabled": true, "initiative": true, "pranks": true, "dodge": true },
   "pc": { "enabled": false, "allowedApps": ["Spotify", "Esplora file"], "confirm": "always" },
-  "phone": { "enabled": false, "port": 47821, "devices": ["Pixel 8"] },
+  "phone": { "enabled": false, "port": 47821 },
   "sociability": "normale"
 }
 ```
 
-Le sezioni `habits`, `phone` e `pc` sono previste e arrivano con le rispettive fasi della roadmap. `brain.vision` resta come modello online per le immagini, usato solo senza visione locale e se `sendScreenshots` lo consente.
+I telefoni abbinati non stanno nelle impostazioni ma in `phones.bin`, cifrato con DPAPI. La sezione `pc` è prevista (fase 16). `brain.vision` resta come modello online per le immagini, usato solo senza visione locale e se `sendScreenshots` lo consente.
 
 ---
 
@@ -980,7 +983,7 @@ Le sezioni `habits`, `phone` e `pc` sono previste e arrivano con le rispettive f
 - **Impronte vocali**: sono dati biometrici, restano in `voices.json` sul PC e si cancellano una per una (o con "Dimentica tutto") dalla scheda Memoria.
 - **Archivio della conversazione** (`memory.db` e i backup in `backups\`): resta sul PC. Puoi far dimenticare singole cose (Impostazioni → Memoria → Dimentica qualcosa) o tutto ("Dimentica tutto"); in entrambi i casi spariscono anche indici, vettori, riassunti e fatti derivati, il file viene compattato e i backup rifatti.
 - **Usare il PC** (previsto, spento di default): le azioni sono eseguite in locale; al servizio di IA arrivano solo i nomi di app, finestre e file che servono alla richiesta. Il registro `actions.jsonl` resta sul PC e non contiene il testo digitato.
-- **Telefono** (previsto): durante una chiamata l'audio va solo dal PC al telefono abbinato, cifrato (WebRTC, DTLS-SRTP) e sulla rete locale (o sulla tua VPN Tailscale); nessun server di terzi. Il server per il telefono è spento finché non abbini un dispositivo, accetta solo telefoni abbinati e i token si revocano dalle impostazioni. Il sidecar resta raggiungibile solo da `127.0.0.1`.
+- **Telefono**: durante una chiamata l'audio va solo dal PC al telefono abbinato, cifrato (WebRTC, DTLS-SRTP) e sulla rete locale (o sulla tua VPN Tailscale); nessun server di terzi. Il server per il telefono è spento finché non attivi l'opzione, accetta solo telefoni abbinati (sfida-risposta, segnalazione firmata) e i telefoni si revocano dalle impostazioni. Il sidecar resta raggiungibile solo da `127.0.0.1`.
 - I log di debug non salvano né l'audio né il testo OCR, a meno che non si attivi `LUMI_DEBUG_PERCEPTION=1`.
 
 ---
@@ -1011,16 +1014,16 @@ Ogni fase si chiude con `npm run check` e `pytest` verdi e una prova manuale.
     4. ~~Riassunti gerarchici (giorno → settimana → mese) e backup giornalieri~~ (fatto).
     5. ~~Oblio a cascata con conferma~~ (fatto).
     6. Embedding nel sidecar su CPU per chi non ha Ollama.
-11. **Abitudini** ([dettagli](#abitudini-e-proattività)): log degli eventi, `patterns.ts` con i test, riflessione notturna, trigger con limite e confidenza.
+11. ~~**Abitudini** ([dettagli](#abitudini-e-proattività)): log degli eventi, `patterns.ts` con i test, riflessione, trigger con limite e confidenza~~ (fatto).
 12. ~~**Audiolibri**: `POST /tts/batch`, import di `.txt`/`.epub`, capitoli, voci diverse per i dialoghi, esportazione `.m4b`~~ (fatto).
 13. **Distribuzione**: installer Electron + sidecar impacchettato (embedded Python / `uv`) e download dei modelli al primo avvio.
 14. ~~**Movimento sullo schermo** ([dettagli](#movimento-sullo-schermo)): luoghi, traiettorie, volo a 60 Hz, passaggio tra monitor, tool `move_to`, iniziative con limiti, schivata del cursore~~ (fatto).
 15. **Lumi sul telefono** ([dettagli](#lumi-sul-telefono)):
-    1. `phoneBridge` e `phone/server.ts` provati con una pagina web di prova in LAN (Chrome sul telefono, con l'origine del PC segnata come sicura nei flag di sviluppo): audio nei due sensi, VAD sulla traccia remota, barge-in.
-    2. App Capacitor per Android con il volto, abbinamento con QR e pinning del certificato, gestione dei dispositivi nelle impostazioni.
-    3. Il volto nell'app (stato dal PC, animazione e pulsazione in locale, sguardo e tocco) e la chiamata: stato nel prompt, ritorno sul PC alla perdita di connessione.
-    4. Il passaggio: `transit.ts` con i test, disegno a tubo in `face.ts`, finestra allargata sul PC, sincronizzazione `gone` tra i due lati, fruscio facoltativo.
-    5. Fuori casa con Tailscale (guida e prova), servizio in primo piano Android per parlare a schermo spento; l'APK entra nella distribuzione.
+    1. ~~`phoneBridge` e `phone/server.ts`: audio nei due sensi, VAD sulla traccia remota, barge-in~~ (fatto).
+    2. ~~App Capacitor per Android con il volto, abbinamento con QR (sfida-risposta e segnalazione firmata al posto del pinning del certificato), dispositivi nelle impostazioni~~ (fatto).
+    3. ~~Il volto nell'app (stato dal PC, animazione e pulsazione in locale, sguardo e tocco, sottotitoli) e la chiamata: stato nel prompt, ritorno sul PC alla perdita di connessione~~ (fatto).
+    4. ~~Il passaggio: `transit.ts` con i test, disegno a tubo in `face.ts`, sincronizzazione `gone` tra i due lati~~ (fatto; il fruscio no).
+    5. Fuori casa con Tailscale (guida e prova), servizio in primo piano Android per parlare a schermo spento, chiave nel keystore, ritrovare il PC con mDNS; l'APK entra nella distribuzione.
 16. **Usare il PC** ([dettagli](#usare-il-pc)):
     1. `policy.ts` con i test e il ciclo del cervello che continua dopo le azioni (budget di passi, conferme con fumetto o a voce, stop con il mouse o `Esc`), registro delle azioni.
     2. Indice delle app (menu Start, Store, Steam) e tool `open`, `window`, `media`.
@@ -1069,6 +1072,8 @@ Variabili di debug (stesso stile di Pixel Pet):
 - `LUMI_DEBUG_CAPTURE=<prefisso>`: salva in PNG i fotogrammi del volto.
 - `LUMI_DEBUG_BAR=1` (o un testo, `\n` per andare a capo): apre la barra dei comandi all'avvio, con quel testo nel campo.
 - `LUMI_DEBUG_FACE=<espressioni>` (separate da virgole): le mostra una dopo l'altra su sfondo scuro, senza saluto; con `LUMI_DEBUG_CAPTURE` ne salva tre fotogrammi ciascuna.
+- `LUMI_DEBUG_PAIR=<file>`: con l'opzione Telefono attiva, scrive in quel file un link di abbinamento (contiene la chiave: solo per le prove).
+- `LUMI_DEBUG_TRANSIT=1`: Lumi parte come per una chiamata e torna (con `LUMI_DEBUG_CAPTURE`, i fotogrammi).
 - `LUMI_DEBUG_MOVE=<luoghi>` (separati da virgole, per esempio `top_left,other_screen,home`): vola in quei punti uno dopo l'altro, come se glielo chiedessi; con `LUMI_DEBUG_LAG=1` si misura l'effetto sul thread del mouse.
 - `LUMI_DATA_DIR=<cartella>`: usa un'altra cartella per impostazioni, memoria e log (per provare l'app senza toccare quella vera). Con `LUMI_SIDECAR_URL` puntato a un indirizzo irraggiungibile l'app parte in modalità testo senza caricare modelli.
 - `LUMI_WAKE_MODEL=<nome>`: il modello della parola di attivazione (predefinito `lumi`; `hey_jarvis`, `alexa` o `hey_mycroft` sono modelli generici di openWakeWord, per provare il flusso).

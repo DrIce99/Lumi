@@ -17,6 +17,8 @@ Work one roadmap phase at a time; finish each with checks green.
   `npm start` / `npm run debug` (DevTools).
 - Always launch through `run.mjs`: shells spawned by VS Code export
   `ELECTRON_RUN_AS_NODE=1`, which makes `electron.exe` behave as plain Node.
+- `phone/` (Capacitor app): `npm run typecheck`, `npm run build` (www/),
+  `npm run apk` (needs JAVA_HOME = Android Studio's `jbr`, Android SDK).
 - `sidecar/`: `uv sync`, `uv run python server.py --port 8765 --dev`,
   `uv run pytest`. Set `LUMI_SIDECAR_URL` to make the app use a sidecar
   started by hand instead of spawning its own.
@@ -385,6 +387,60 @@ Work one roadmap phase at a time; finish each with checks green.
   stay 2 px higher). Geometry is pure in `face/glyphs.ts`. Checked by eye
   with `LUMI_DEBUG_FACE` + `LUMI_DEBUG_CAPTURE` (+ `LUMI_DATA_DIR` and an
   unreachable `LUMI_SIDECAR_URL` to keep the real data and models out).
+- Habits (phase 11, `main/brain/habits/`): schema v5 `events(ts, kind,
+  app, detail)` + `habits` in memory.db. `Habits.pollForeground` (2 s)
+  logs an app once it stays 4 s in the foreground: process name + exe
+  path (`ForegroundWindow.path`), never titles, never while perception is
+  paused (pause apps, private windows, away). Commands log only the
+  channel. `patterns.ts` (pure): time patterns per app x half-hour slot
+  (neighbor slots count, the exact slot wins), the broadest day group
+  that holds on each of its weekdays (>= 75% of the threshold), and
+  sequences A->B within 10 min; >= 5 and >= 70%. Reflection when the PC
+  rests (1-6 am + 10 min idle, or 30 min idle on AC), max every 20 h:
+  last 8 weeks, new habits named by the idle model (JSON array) else
+  `defaultName`, faded ones lose 0.1, archived < 0.3; events > 12 weeks
+  pruned. `triggers.ts` (pure): time habits within one slot of theirs,
+  sequences within 60 s of A; once a day per habit, cooldown 20 min,
+  blocked by DND/call/typing/conversation/away. Proposal = voice +
+  bubble Sì/No; a spoken "sì"/"no" (readAnswer) right after it is caught
+  in `heard()` and never reaches the brain. Accept opens `detail.path`
+  (shell.openPath, .exe only), +0.1; reject -0.15. `auto` habits (user
+  choice in settings) open without asking. `LUMI_DEBUG_REFLECT=1`.
+- Phone (phase 15): `shared/phone.ts` is the protocol, WebCrypto only
+  (runs in Node and in the phone's WebView). The QR is
+  `lumi://pair?h=hosts&p=port&i=pairing id&k=256-bit key&n=PC name`,
+  one-time, 5 min. Login = HMAC challenge-response (`proofText` with
+  both nonces), the PC proves the key back (`lumi-server|sn|cn`); after
+  it every signaling message is a `SignedChannel` message (session key
+  from key + nonces, sender + sequence in the MAC). Signed offer/answer
+  carry the DTLS fingerprints, so the WebSocket stays plain (`ws`, no
+  self-signed cert to pin); the server (`main/phone/server.ts`) is the
+  only LAN listener, on only with `phone.enabled`, and also serves
+  `phone/www` at `/app/`. Keys: `phones.bin` (DPAPI, `devices.ts`);
+  the phone keeps its key in localStorage. `link.ts` (states idle /
+  connecting / leaving / active / returning) runs the call through a
+  hidden renderer (`renderer/phone/bridge.ts`: RTCPeerConnection with no
+  ICE servers, non-trickle; VAD `Listener` on the remote track; a
+  `Player` into a MediaStreamDestination fed by the `AudioOut` tee).
+  `WebRtcHideLocalIpsWithMdns` is disabled in main: the bridge never
+  opens a mic, so Chromium would offer mDNS names. Data channel `lumi`:
+  state (+ face color), gestures, subtitles (`FaceWindow.onSubtitle`),
+  `transit: gone`, ptt, mute, hangup. During a call: continuous
+  listening, PC face hidden, mic control routed to the bridge, not away.
+  Transit (`face/transit.ts`, pure): out 1100 ms (alarm, stretch, suck,
+  empty), in 1200 ms; tubes drawn on the eye layer; the PC's point is
+  the face window's edge toward the nearest screen edge
+  (`layout.transitPoint`: the window never resizes). Hang-up from the
+  phone: phone plays "out", sends hangup, PC plays "in". From the PC:
+  hangup -> phone plays "out" and answers "gone" (2.5 s timeout). Lost
+  > 10 s ends the call. App (`phone/`): Capacitor 8 Android,
+  `androidScheme: "http"` (localhost is a secure context and can open
+  ws:// to the LAN), cleartext + mic/camera permissions in the manifest;
+  `build.mjs` bundles `app/src/renderer/face` and `shared/phone.ts`
+  with esbuild. Not built: mDNS discovery, keystore, foreground service,
+  the whoosh. `LUMI_DEBUG_PAIR=<file>` writes a pairing link (an Electron
+  page with `--use-fake-device-for-media-stream` on
+  `http://127.0.0.1:<port>/app/?pair=<link>` makes a test phone).
 - Moving (phase 14, `main/motion/`): the model calls `move_to({ where,
   text?, style?, stay? })`; `where` is a named place (`places.ts`, pure:
   nine grid spots 24 px inside the work area, other_screen at the same
@@ -465,7 +521,7 @@ Work one roadmap phase at a time; finish each with checks green.
   Lumi and `appAudio.apps` don't count). `LUMI_WAKE_MODEL` picks another
   model (e.g. `hey_jarvis`) to try the flow.
 
-## Planned features (not built yet; roadmap phases 10, 11, 15, 16)
+## Planned features (not built yet; roadmap phases 10, 16)
 
 Decisions already taken for the next phases. Nothing here exists in the
 code yet; when a piece lands, move its notes to the sections above.
@@ -501,71 +557,6 @@ the notes above. Still planned: sidecar CPU embeddings without Ollama.
   confirmed in the settings window); see the notes above.
 - Fact extraction and nightly reflection default to a local model, so the
   full history never leaves the machine.
-
-### Habits (`main/brain/habits/`, phase 11)
-
-- `events.ts` logs foreground app changes, commands to Lumi, accepted or
-  rejected proposals, session start/end (table `events` in `memory.db`,
-  same forget policy).
-- `patterns.ts` is deterministic, no LLM: time recurrences (30-min slot x
-  weekday) and consecutive-event pairs (simple Markov chain). A pattern
-  becomes a hypothesis at >= 5 occurrences and >= 70% frequency. Pure and
-  unit-tested.
-- `reflection.ts` runs when the PC is idle (night, or 30 min idle on AC):
-  daily/weekly/monthly summaries, names habits, stores them as facts of kind
-  `abitudine` with a confidence.
-- `triggers.ts` proposes, never executes: accept raises confidence, reject
-  lowers it, archive below 0.3, at most one proposal per 20 min, none in
-  "Non disturbare", calls or heavy typing. Auto-actions only for harmless
-  actions the user enabled explicitly in settings.
-
-### Lumi on the phone (`main/phone/`, `phone/`, phase 15)
-
-- The phone is mic, speaker and Lumi's body: the two capsule eyes live in
-  the app during a call (Lumi is in one place at a time); STT, brain, TTS,
-  memory and perception stay on the PC.
-- The face in the app runs locally (same `Face`, ~3x scale, dark full
-  screen): the PC sends only state over the data channel (expression,
-  intensity, listening/thinking/speaking/drowsy, gestures); the talk pulse
-  follows the RMS of the audio the phone plays (analyser on the received
-  track). Gaze looks at the user (center), glances up/aside when talking
-  about the PC; touch: tap = bounce, drag = the eyes follow the finger.
-  No eyes outside a call, only "Chiama" and the PC status.
-- Handoff = spaghettification on the leaving side (sucked into the screen
-  edge nearest to Lumi; on the phone the top edge): alarm 150 ms, stretch
-  600 ms (each capsule up to 5-6x longer, 1/4 as wide, near end faster
-  like a tidal pull, slight spiral, eyes converge), suck-in 200 ms with a
-  glint, 150 ms of nothing. The arriving side plays the reverse
-  (despaghettification: glint, strands emerge from the edge, recompose
-  with an elastic overshoot, a blink and a look at the user), started by
-  the `transit: "gone"` data-channel message (or after 2 s anyway). Both
-  directions: call, hang-up, tray "Richiama Lumi", connection lost (PC
-  side only). `face/transit.ts` (pure, tested) gives each eye a curved
-  centerline and tapering width per progress; `face.ts` draws it as a
-  tube on the offscreen layer (glow, shadow, border follow), a layer over
-  expression/blink/gaze like glare, spontaneous blinks paused. On the PC
-  the window is enlarged once (setBounds) to include the edge point, then
-  restored: no window animation on the mouse-hook thread. Optional whoosh
-  from WebAudio filtered noise.
-- App: Capacitor (Android first; iOS needs a paid account), reusing
-  `renderer/face/` in the WebView (served from https://localhost, so
-  getUserMedia works).
-- Audio over WebRTC (Opus, DTLS-SRTP, the phone's AEC uses Lumi's remote
-  audio as reference), not PCM over WebSocket. The PC peer is a hidden
-  renderer (`phoneBridge`, Chromium's WebRTC; no native Node module): the
-  remote mic track goes through the same VAD `Listener` into `TurnManager`,
-  Lumi's voice comes from the `AudioOut` tee into a
-  `MediaStreamAudioDestinationNode`. A data channel carries face state,
-  gaze, gestures, bubbles, push-to-talk and hang-up.
-- `phone/server.ts` is the only LAN listener (HTTPS/WSS, port 47821): QR
-  pairing with a one-time code and the self-signed cert's fingerprint
-  (pinned by the app), device tokens DPAPI-encrypted in `phones.bin`,
-  revocable; mDNS `_lumi._tcp`. Off by default until a phone is paired.
-  The sidecar stays on 127.0.0.1. Outside the LAN: Tailscale, no relay.
-- During a call: PC mic closed, face hidden on the PC, continuous
-  listening with barge-in (no wake word), phone output wins over Discord,
-  `<situation>` says the user talks from the phone, not counted as away.
-  Hang-up or > 10 s without connection: back to the PC.
 
 ### Using the PC (`main/pc/`, `sidecar/uia/act.py`, phase 16)
 
@@ -609,10 +600,13 @@ spoken with push-to-talk: tests STT → brain → TTS without a microphone),
 time and changes), `LUMI_DEBUG_VISIBLE=1` (no content protection: real screenshots show the
 face, to check it on screen),
 `LUMI_WAKE_MODEL=<name>` (wake word model, default `lumi`),
+`LUMI_DEBUG_PAIR=<file>` (writes a phone pairing link), `LUMI_DEBUG_TRANSIT=1`
+(leave and come back as for a call),
 `LUMI_DEBUG_SETTINGS=<tab>` (opens the settings on a tab; captured with
 LUMI_DEBUG_CAPTURE), `LUMI_DEBUG_FACE=<expr,...>` (cycles expressions on a
 dark background, no greeting; with LUMI_DEBUG_CAPTURE saves each at 250,
 650, 1500 ms), `LUMI_DEBUG_MOVE=<places>` (flies there one after the other),
+`LUMI_DEBUG_REFLECT=1` (habits reflection 20 s after start),
 `LUMI_DATA_DIR=<dir>` (another userData: settings, memory,
 logs), `LUMI_DEBUG_BAR=1|<text>` (opens the command bar at
 startup, with that text typed; with LUMI_DEBUG_VISIBLE=1 a real screenshot

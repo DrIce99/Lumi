@@ -49,6 +49,9 @@ export const IPC = {
   settingsRestartSidecar: "settings:restart-sidecar",
   settingsFindForget: "settings:find-forget",
   settingsForgetItems: "settings:forget-items",
+  settingsHabit: "settings:habit",
+  settingsPhonePair: "settings:phone-pair",
+  settingsPhoneRevoke: "settings:phone-revoke",
   // command bar
   barOpen: "bar:open",
   barClose: "bar:close",
@@ -59,5 +62,15 @@ export const IPC = {
   // main -> settings window
   settingsStatus: "settings:status",
   travel: "face:travel",
+  transit: "face:transit",
+  // main <-> phone bridge (hidden window)
+  bridgeOffer: "bridge:offer",
+  bridgeAnswer: "bridge:answer",
+  bridgeSend: "bridge:send",
+  bridgeMessage: "bridge:message",
+  bridgeConnection: "bridge:connection",
+  bridgeHangup: "bridge:hangup",
+  bridgeLog: "bridge:log",
   settingsForgetQuery: "settings:forget-query",
+  settingsRefresh: "settings:refresh",
 } as const;

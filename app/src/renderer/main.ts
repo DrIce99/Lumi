@@ -227,6 +227,7 @@ api.onGesture((gesture) => face.gesture(gesture));
 api.onContrast((contrast) => face.setContrast(contrast));
 api.onGlare(({ lightDx }) => face.glare(lightDx));
 api.onTravel(({ vx, vy, landed }) => face.travel(vx, vy, landed));
+api.onTransit(({ kind, x, y }) => (kind === "reset" ? face.resetTransit() : face.transit(kind, { x, y })));
 api.onBubbleStart((msg) => bubble.start(msg));
 api.onBubbleChunk((msg) => bubble.chunk(msg));
 api.onBubbleEnd((msg) => bubble.end(msg));

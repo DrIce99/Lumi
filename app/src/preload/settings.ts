@@ -20,6 +20,12 @@ const bridge: SettingsBridge = {
   restartSidecar: () => ipcRenderer.invoke(IPC.settingsRestartSidecar),
   findForget: (query) => ipcRenderer.invoke(IPC.settingsFindForget, query),
   forgetItems: (selection) => ipcRenderer.invoke(IPC.settingsForgetItems, selection),
+  habit: (id, action) => ipcRenderer.invoke(IPC.settingsHabit, id, action),
+  phonePair: () => ipcRenderer.invoke(IPC.settingsPhonePair),
+  phoneRevoke: (id) => ipcRenderer.invoke(IPC.settingsPhoneRevoke, id),
+  onRefresh: (cb) => {
+    ipcRenderer.on(IPC.settingsRefresh, () => cb());
+  },
   onForgetQuery: (cb) => {
     ipcRenderer.on(IPC.settingsForgetQuery, (_event, query: string) => cb(query));
   },

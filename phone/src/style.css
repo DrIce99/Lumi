@@ -1,0 +1,604 @@
+/* Lumi on the phone: dark, quiet, the eyes are the only thing that glows. */
+:root {
+  --bg: #0e0e14;
+  --bg-2: #15151e;
+  --surface: rgba(255, 255, 255, 0.05);
+  --surface-2: rgba(255, 255, 255, 0.09);
+  --line: rgba(255, 255, 255, 0.08);
+  --text: #f4f2ee;
+  --muted: #9a98a6;
+  --soft: #6e6c7a;
+  --accent: #f5f3ee;
+  --ok: #5fd39a;
+  --warn: #e8b64c;
+  --danger: #ff6b6b;
+  --radius: 18px;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: radial-gradient(120% 80% at 50% -10%, var(--bg-2), var(--bg) 60%);
+  background-color: var(--bg);
+  color: var(--text);
+  font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  overscroll-behavior: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+textarea,
+input {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.screen {
+  min-height: 100%;
+  padding: max(20px, env(safe-area-inset-top)) 20px max(20px, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  animation: enter 420ms var(--ease);
+}
+
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* ---------- brand ---------- */
+
+.brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6vh;
+}
+
+.brand.small {
+  flex-direction: row;
+  gap: 8px;
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.mark {
+  width: 44px;
+  height: 44px;
+  fill: var(--accent);
+  filter: drop-shadow(0 0 12px rgba(245, 243, 238, 0.35));
+}
+
+.brand.small .mark {
+  width: 22px;
+  height: 22px;
+  filter: none;
+}
+
+h1 {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.intro {
+  text-align: center;
+  margin-top: 8px;
+}
+
+.lead {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.hint {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.hint b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.status {
+  min-height: 1.4em;
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  text-align: center;
+}
+
+/* ---------- buttons ---------- */
+
+.btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 550;
+  cursor: pointer;
+  transition: transform 160ms var(--ease), background 200ms, opacity 200ms;
+}
+
+.btn svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.btn:active {
+  transform: scale(0.98);
+}
+
+.btn.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: #0e0e14;
+  font-weight: 650;
+}
+
+.btn.ghost {
+  background: transparent;
+}
+
+.btn.danger {
+  border-color: rgba(255, 107, 107, 0.35);
+  color: var(--danger);
+  background: rgba(255, 107, 107, 0.08);
+}
+
+button:disabled {
+  opacity: 0.45;
+}
+
+/* ---------- cards and fields ---------- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  color: var(--muted);
+}
+
+summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+summary::-webkit-details-marker {
+  display: none;
+}
+
+summary::after {
+  content: "›";
+  font-size: 20px;
+  line-height: 1;
+  transition: transform 200ms var(--ease);
+}
+
+details[open] > summary::after {
+  transform: rotate(90deg);
+}
+
+details[open] > :not(summary) {
+  margin-top: 12px;
+}
+
+details > :not(summary) + :not(summary) {
+  margin-top: 10px;
+}
+
+textarea,
+input {
+  width: 100%;
+  font: inherit;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 11px 12px;
+  outline: none;
+}
+
+textarea:focus,
+input:focus {
+  border-color: rgba(245, 243, 238, 0.35);
+}
+
+.field span {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 6px;
+  color: var(--soft);
+}
+
+/* ---------- pill (status) ---------- */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--soft);
+}
+
+.pill.ok .dot {
+  background: var(--ok);
+  box-shadow: 0 0 8px var(--ok);
+}
+
+.pill.off .dot {
+  background: var(--danger);
+}
+
+.pill.checking .dot {
+  background: var(--warn);
+  animation: blink 1.2s ease-in-out infinite;
+}
+
+.pill.live .dot {
+  background: var(--ok);
+  box-shadow: 0 0 8px var(--ok);
+  animation: blink 2s ease-in-out infinite;
+}
+
+.pill.live {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* ---------- pairing ---------- */
+
+#setup .btn.primary {
+  margin-top: 12px;
+}
+
+.scanner {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.scanner video {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  border-radius: var(--radius);
+  background: #000;
+}
+
+.scanner .frame {
+  position: absolute;
+  top: 18%;
+  left: 14%;
+  right: 14%;
+  bottom: 30%;
+  border: 2px solid rgba(255, 255, 255, 0.7);
+  border-radius: 20px;
+  box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+#setup details {
+  margin-top: 4px;
+}
+
+#setup details button {
+  margin-top: 12px;
+}
+
+/* ---------- home ---------- */
+
+.top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.center {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  text-align: center;
+}
+
+.paired {
+  margin: 0;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.orb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 210px;
+  height: 210px;
+  margin: 8px 0;
+}
+
+.orb .ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(95, 211, 154, 0.35);
+  animation: breathe 3.2s var(--ease) infinite;
+  pointer-events: none;
+}
+
+@keyframes breathe {
+  0% {
+    transform: scale(0.82);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1.12);
+    opacity: 0;
+  }
+}
+
+.call {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 168px;
+  height: 168px;
+  border: none;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 25%, #7ef0b8, var(--ok) 55%, #3fae7c);
+  color: #04160e;
+  font: inherit;
+  font-size: 17px;
+  font-weight: 650;
+  cursor: pointer;
+  box-shadow: 0 18px 50px -12px rgba(95, 211, 154, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  transition: transform 200ms var(--ease), filter 200ms;
+}
+
+.call svg {
+  width: 36px;
+  height: 36px;
+  fill: currentColor;
+}
+
+.call:active {
+  transform: scale(0.95);
+}
+
+.call:disabled {
+  filter: grayscale(0.6);
+  opacity: 0.6;
+}
+
+.last {
+  margin: 4px 0 0;
+  color: var(--soft);
+  font-size: 13px;
+  min-height: 1.3em;
+}
+
+.more {
+  margin-top: auto;
+}
+
+/* ---------- the call ---------- */
+
+.call-screen {
+  position: fixed;
+  inset: 0;
+  padding: max(14px, env(safe-area-inset-top)) 0 max(16px, env(safe-area-inset-bottom));
+  gap: 0;
+  background: #08080c;
+  background-color: #08080c;
+}
+
+.call-top {
+  display: flex;
+  justify-content: center;
+  padding: 4px 20px 0;
+}
+
+#stage {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  touch-action: none;
+  min-height: 0;
+}
+
+#face {
+  position: absolute;
+  inset: 0;
+}
+
+.subtitle {
+  min-height: 3.2em;
+  margin: 0 28px;
+  color: var(--muted);
+  font-size: 17px;
+  line-height: 1.4;
+  text-align: center;
+  transition: opacity 300ms;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 12px 16px 0;
+}
+
+.round {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 60px;
+  height: 60px;
+  flex: none;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  transition: transform 160ms var(--ease), background 200ms;
+}
+
+.round svg,
+.talk svg {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.round:active {
+  transform: scale(0.92);
+}
+
+.round .icon-off,
+#mute.on .icon-on {
+  display: none;
+}
+
+#mute.on .icon-off {
+  display: block;
+}
+
+#mute.on {
+  background: var(--text);
+  color: #0e0e14;
+}
+
+.round.hangup {
+  width: 68px;
+  height: 68px;
+  border: none;
+  background: var(--danger);
+  color: #fff;
+  box-shadow: 0 10px 30px -8px rgba(255, 107, 107, 0.6);
+}
+
+.round.hangup svg {
+  fill: currentColor;
+  stroke: none;
+}
+
+.talk {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 60px;
+  max-width: 220px;
+  border-radius: 30px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 550;
+  cursor: pointer;
+  touch-action: none;
+  transition: transform 160ms var(--ease), background 200ms, color 200ms;
+}
+
+.talk:active,
+.talk.down {
+  transform: scale(0.97);
+  background: var(--accent);
+  color: #0e0e14;
+}
+
+.controls .talk span {
+  line-height: 1.2;
+  text-align: left;
+}
+
+/* ---------- small screens ---------- */
+
+@media (max-height: 640px) {
+  .orb {
+    width: 170px;
+    height: 170px;
+  }
+  .call {
+    width: 136px;
+    height: 136px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .screen,
+  .orb .ring,
+  .pill.checking .dot,
+  .pill.live .dot {
+    animation: none;
+  }
+}

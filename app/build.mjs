@@ -39,7 +39,7 @@ const jobs = [
   }),
   build({
     ...common,
-    entryPoints: ["src/preload/face.ts", "src/preload/settings.ts", "src/preload/commandbar.ts", "src/preload/debug.ts"],
+    entryPoints: ["src/preload/face.ts", "src/preload/settings.ts", "src/preload/commandbar.ts", "src/preload/debug.ts", "src/preload/phoneBridge.ts"],
     outdir: "dist/preload",
     platform: "node",
     format: "cjs",
@@ -48,7 +48,7 @@ const jobs = [
   }),
   build({
     ...common,
-    entryPoints: ["src/renderer/main.ts", "src/renderer/settings/settings.ts", "src/renderer/commandbar/commandbar.ts", "src/renderer/debug/gaze.ts"],
+    entryPoints: ["src/renderer/main.ts", "src/renderer/settings/settings.ts", "src/renderer/commandbar/commandbar.ts", "src/renderer/debug/gaze.ts", "src/renderer/phone/bridge.ts"],
     outbase: "src/renderer",
     outdir: "dist/renderer",
     platform: "browser",
@@ -74,7 +74,7 @@ if (withTests) {
 
 await Promise.all(jobs);
 
-for (const file of ["face.html", "face.css", "settings/settings.html", "settings/settings.css", "commandbar/commandbar.html", "commandbar/commandbar.css", "debug/gaze.html"]) {
+for (const file of ["face.html", "face.css", "settings/settings.html", "settings/settings.css", "commandbar/commandbar.html", "commandbar/commandbar.css", "debug/gaze.html", "phone/bridge.html"]) {
   await cp(`src/renderer/${file}`, `dist/renderer/${file}`);
 }
 

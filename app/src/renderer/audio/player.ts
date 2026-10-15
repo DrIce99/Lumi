@@ -49,7 +49,16 @@ export class Player {
   private nextFree = 0;
   private readonly samples = new Float32Array(1024);
 
-  constructor(private readonly hooks: PlayerHooks) {}
+  /** `destination`: where the voice goes instead of the speakers (the phone bridge's outgoing track). */
+  constructor(
+    private readonly hooks: PlayerHooks,
+    private readonly destination: ((ctx: AudioContext) => AudioNode) | null = null,
+  ) {}
+
+  /** Creates the audio graph now (the phone bridge needs its outgoing track before any sound). */
+  start(): void {
+    this.ensure();
+  }
 
   /** Something is playing or about to. */
   get active(): boolean {
@@ -139,7 +148,7 @@ export class Player {
     output.gain.value = this.local ? 1 : 0;
     master.connect(analyser);
     analyser.connect(output);
-    output.connect(ctx.destination);
+    output.connect(this.destination ? this.destination(ctx) : ctx.destination);
     this.ctx = ctx;
     this.master = master;
     this.analyser = analyser;

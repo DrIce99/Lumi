@@ -28,6 +28,7 @@ import {
   type Motion,
   type Segment,
 } from "./glyphs";
+import { IN_MS, OUT_MS, transitFrame, type TransitKind, type TransitPlay } from "./transit";
 import { clamp, easeOutBack, Tween } from "./tween";
 
 /** Eye size and spacing at scale 1 (px). */
@@ -88,6 +89,8 @@ export class Face {
   private gestures: { kind: FaceGesture; start: number; seed: number }[] = [];
   private bounceAt = Number.NEGATIVE_INFINITY;
   private glarePlay: GlarePlay | null = null;
+  /** Leaving for the phone or coming back (transit.ts); an "out" that is over keeps the face hidden. */
+  private transitPlay: TransitPlay | null = null;
   /** Flying: the eyes stretch along the motion and trail a little behind it. */
   private readonly travelX = new Tween(0);
   private readonly travelY = new Tween(0);
@@ -206,6 +209,31 @@ export class Face {
     this.wake();
   }
 
+  /**
+   * Leaves (sucked into `target`, window DIP) or comes back (out of it).
+   * Returns how long it takes. After "out" the face stays hidden until "in".
+   */
+  transit(kind: TransitKind, target: { x: number; y: number }, alreadyMs = 0): number {
+    const now = performance.now();
+    // `alreadyMs`: start that far in (an "out" already over = a face that isn't here yet)
+    this.transitPlay = { kind, start: now - alreadyMs, target };
+    this.blinker.pause(now + (kind === "out" ? OUT_MS : IN_MS));
+    this.wake();
+    return kind === "out" ? OUT_MS : IN_MS;
+  }
+
+  /** Back at once, without the animation (a call that never started). */
+  resetTransit(): void {
+    this.transitPlay = null;
+    this.blinker.resume(performance.now());
+    this.wake();
+  }
+
+  /** The face is away (on the phone, or on the PC seen from the phone). */
+  isGone(): boolean {
+    return this.transitPlay?.kind === "out" && performance.now() - this.transitPlay.start >= OUT_MS;
+  }
+
   /** A sentence starts playing: a small lift of the eyes. */
   sentenceStart(): void {
     this.bounceAt = performance.now();
@@ -237,6 +265,7 @@ export class Face {
 
   /** Whether a point (window DIP) is on one of the eyes, with a few px of tolerance. */
   hitTest(x: number, y: number, margin = 4): boolean {
+    if (this.transitPlay) return false;
     const s = this.layout.scale;
     for (const eye of this.eyes(performance.now())) {
       const cos = Math.cos(-eye.angle);
@@ -390,6 +419,7 @@ export class Face {
       this.gestures.length > 0 ||
       now - this.bounceAt < 240 ||
       this.glarePlay !== null ||
+      (this.transitPlay !== null && !this.isGone()) ||
       now - this.glyph.since < GLYPH_FADE_MS ||
       this.travelX.active(now) ||
       this.travelY.active(now) ||
@@ -483,6 +513,9 @@ export class Face {
     layer.lineCap = "round";
     layer.lineJoin = "round";
     const eyes = this.eyes(now);
+    if (this.transitPlay && this.drawTransit(layer, eyes, now)) {
+      // The tubes (or nothing) are on the layer: border, glow and shadow below follow them
+    } else {
     // A change of shape crossfades: the old one fades out as the new one comes in
     const fade = clamp((now - this.glyph.since) / GLYPH_FADE_MS, 0, 1);
     const glyphs: [Glyph, number][] = fade < 1 && this.glyph.previous !== this.glyph.current ? [[this.glyph.previous, 1 - fade], [this.glyph.current, fade]] : [[this.glyph.current, 1]];
@@ -494,6 +527,7 @@ export class Face {
     });
     layer.globalAlpha = 1;
     this.drawProps(layer, eyes, now, scale);
+    }
 
     // 2. The border: the eye shapes grown by one line width, in black
     const border = this.border.value(now);
@@ -531,6 +565,51 @@ export class Face {
     ctx.shadowColor = "transparent";
     ctx.shadowBlur = 0;
     ctx.shadowOffsetY = 0;
+  }
+
+  /**
+   * The transit's frame on the eye layer: true when it replaced the eyes
+   * (tubes, or nothing at all), false when the normal eyes are drawn.
+   */
+  private drawTransit(layer: CanvasRenderingContext2D, eyes: [EyeGeometry, EyeGeometry], now: number): boolean {
+    const play = this.transitPlay!;
+    const frame = transitFrame(play, now, eyes);
+    if (frame.done && play.kind === "in") {
+      this.transitPlay = null;
+      this.blinker.resume(now);
+      this.blinker.trigger(now);
+      return false;
+    }
+    if (frame.glint > 0.01) {
+      const r = 10 * this.layout.scale;
+      const g = layer.createRadialGradient(play.target.x, play.target.y, 0, play.target.x, play.target.y, r);
+      g.addColorStop(0, withAlpha(this.layout.color, frame.glint));
+      g.addColorStop(1, withAlpha(this.layout.color, 0));
+      layer.fillStyle = g;
+      layer.beginPath();
+      layer.arc(play.target.x, play.target.y, r, 0, Math.PI * 2);
+      layer.fill();
+      layer.fillStyle = this.layout.color;
+    }
+    if (frame.hidden) return true;
+    if (frame.tubes) {
+      for (const tube of frame.tubes) {
+        layer.beginPath();
+        for (const p of tube) {
+          if (p.r < 0.2) continue;
+          layer.moveTo(p.x + p.r, p.y);
+          layer.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        }
+        layer.fill();
+      }
+      return true;
+    }
+    // The alarm: the normal eyes, wide open and leaning away from the point
+    layer.save();
+    layer.translate(frame.lean.x, frame.lean.y);
+    for (const [i, eye] of eyes.entries()) this.drawEye(layer, { ...eye, height: eye.height * frame.wide }, i === 0 ? -1 : 1, this.glyph.current, this.layout.scale);
+    layer.restore();
+    return true;
   }
 
   /** One eye in one shape, eye-local after the tilt. */
