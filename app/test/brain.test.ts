@@ -544,3 +544,49 @@ test("the prompt asks for spoken style and carries the screen and interruptions"
   assert.match(context, /speech recognition/);
   assert.match(context, /the user is asked first/);
 });
+
+test("a short line and a web search in one reply: the results come back and the answer follows", async () => {
+  const provider = new CompatProvider("groq", new OpenAITransport("https://api.example/v1", "gsk-test", "Groq"));
+  const t = host(provider, "llama-test");
+  const searched: string[] = [];
+  t.h.webSearch = async (query) => {
+    searched.push(query);
+    return 'Web results for "meteo Torino domani" (DuckDuckGo).\n1. Meteo Torino - ilmeteo.it\n   Domani sole, massima 23 gradi.';
+  };
+  await withFetch(
+    (_request, n) =>
+      n === 1
+        ? sse([
+            toolDelta(0, { id: "call_a", function: { name: "say", arguments: '{"emotion": "neutra", "text": "Un attimo, controllo."}' } }),
+            toolDelta(1, { id: "call_b", function: { name: "web_search", arguments: '{"query": "meteo Torino domani"}' } }),
+            { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+          ])
+        : sse([
+            toolDelta(0, { id: "call_c", function: { name: "say", arguments: '{"emotion": "gioia", "text": "Domani a Torino c\'è il sole, fino a 23 gradi."}' } }),
+            { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+          ]),
+    async (requests) => {
+      await new Brain(t.h).handle({ kind: "message", text: "che tempo fa domani?", via: "voice" });
+      assert.equal(requests.length, 2, "a second round after the search, although something was already said");
+      const results = requests[1].body.messages.find((m) => m.role === "tool" && m.tool_call_id === "call_b");
+      assert.match(String(results?.content), /massima 23 gradi/);
+    },
+  );
+  assert.deepEqual(searched, ["meteo Torino domani"]);
+  assert.deepEqual(
+    t.finals.at(-1)?.map((s) => s.text),
+    ["Un attimo, controllo.", "Domani a Torino c'è il sole, fino a 23 gradi."],
+  );
+});
+
+test("models without tools can search memory and the web through the JSON reply", () => {
+  assert.deepEqual(
+    parseJsonReply('{"emotion": "neutra", "say": "Controllo.", "web_search": "orari farmacia", "search_memory": "dentista", "read_page": "https://example.com/a"}').map((c) => [c.name, c.input]),
+    [
+      ["say", { text: "Controllo.", emotion: "neutra" }],
+      ["search_memory", { query: "dentista" }],
+      ["web_search", { query: "orari farmacia" }],
+      ["read_page", { url: "https://example.com/a" }],
+    ],
+  );
+});

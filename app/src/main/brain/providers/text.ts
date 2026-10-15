@@ -83,8 +83,11 @@ In this conversation you cannot call tools. Reply ONLY with one JSON object, wit
  "forget": ["f12"],
  "reminder": {"when": "+20", "text": "what to remind"},
  "look_at_screen": "what you are looking for",
+ "search_memory": "words to look for in your memory",
+ "web_search": "words to search on the web",
+ "read_page": "https://...",
  "quiet_minutes": 30}
-"look_at_screen" asks for a screenshot: you will receive a description and reply again.
+"look_at_screen", "search_memory", "web_search" and "read_page" bring something back: you will receive it and reply again.
 Example: {"emotion": "gioia", "say": "Ciao! Come va oggi?"}`;
 
 /** Finds the JSON object in a reply, tolerating code fences and stray text. */
@@ -131,6 +134,9 @@ export function parseJsonReply(raw: string): ToolCallOut[] {
   if (Array.isArray(o.forget)) for (const id of o.forget) add("forget", { id });
   if (o.reminder && typeof o.reminder === "object") add("set_reminder", o.reminder);
   if (o.look_at_screen) add("look_at_screen", typeof o.look_at_screen === "string" ? { focus: o.look_at_screen } : {});
+  if (typeof o.search_memory === "string" && o.search_memory.trim()) add("search_memory", { query: o.search_memory });
+  if (typeof o.web_search === "string" && o.web_search.trim()) add("web_search", { query: o.web_search });
+  if (typeof o.read_page === "string" && o.read_page.trim()) add("read_page", { url: o.read_page });
   if (typeof o.quiet_minutes === "number") add("stay_quiet", { minutes: o.quiet_minutes });
   return calls;
 }

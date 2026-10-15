@@ -192,9 +192,9 @@ Work one roadmap phase at a time; finish each with checks green.
   of the reply. `main/ollama.ts` starts the local Ollama server when a
   brain choice uses it.
 
-- Memory: `memory.json` keeps facts, notes, reminders, the recent window,
-  episodes and diary; every line, episode and diary day also goes to
-  `memory.db` (phase 10, step 1 done). Lines that leave the 16-line window
+- Memory: `memory.json` keeps notes, reminders, the recent window,
+  episodes, diary and a copy of the facts; every line, episode, diary day
+  and fact also goes to `memory.db` (phase 10, steps 1-3 done). Lines that leave the 16-line window
   are summarized into episodes by the "idle" model between moments
   (`Brain.writeEpisode`, JSON with summary + facts; requests to Lumi are
   not facts).
@@ -230,11 +230,29 @@ Work one roadmap phase at a time; finish each with checks green.
   RRF) + recency 0.995^hours (age of the memory, not last access) +
   importance (0 until facts) with `memory.weights`. Vector hits need the
   model's floor (bge-m3 0.50, nomic 0.60, else 0.55: measured, see
-  README) and to be within 0.06 of the best. Query embedding: 250 ms for
-  `<recalled>`, 1.5 s for the tool, else words only; `store.warm()` (on
+  README) and to be within 0.06 of the best. Query embedding: 400 ms for
+  `<recalled>` (Ollama: 15-80 ms, rare spikes > 1 s), 1.5 s for the tool, else words only; `store.warm()` (on
   listening, chat, bar) loads the model ahead, at most once a minute.
   bge-m3 warm: ~15-100 ms per query, whole search ~20-30 ms.
-- `<recalled>` comes from `Memory.recall` (500 ms timeout, recent window
+- Facts (step 10.3): schema v3 `facts` (id = the app's own number:
+  "f12"/"n13" keep their ids, the counter is memory.json's `nextId`;
+  importance 1-10, source_ids from the conversation span, expires for
+  notes, superseded_by) + `facts_fts`; durable active facts get vectors
+  (owner_kind `fact`, ts = created) and take part in hybrid search, with
+  importance/10 in the score. `Memory` keeps the active facts in memory
+  (sync reads; memory.json holds the copy), writes go to the worker;
+  `loadFacts()` imports memory.json's facts once (`meta.facts_import`,
+  default importance per kind: user 7, work 6, event 6, preference 5,
+  lumi 4, note 3), then the database's list wins. Corrections:
+  `remember({ ..., importance, replaces })` and the episode writer's
+  `replaces` (it gets the important and similar facts with their ids,
+  `Memory.factsFor`) supersede the old fact. The prompt's `<memory>` is
+  `selectFacts` (pure): notes, importance >= 8, facts related to the
+  message (the same recall search: fact hits go to `<memory>`, the rest
+  to `<recalled>`), the last 3 days, within 3000 chars, plus a line with
+  how many are left out. bge-m3 can't link "che lavoro faccio?" to a fact
+  about RPG (0.37): words or the model's own search_memory must do it.
+- `<recalled>` comes from `Memory.recall` (650 ms timeout, recent window
   excluded) for every message; the model calls `search_memory({ query?,
   from?, to?, kind? })` with local dates ("2026-03", "2026-03-12 18:00",
   a month or day alone means all of it). The old `recall` tool name is
@@ -256,6 +274,16 @@ Work one roadmap phase at a time; finish each with checks green.
   the capturing process, so tests must play from a process outside the
   sidecar's tree (PowerShell SoundPlayer), not a Python child.
 
+- Web: `main/web.ts`, tools `web_search` / `read_page` (follow-up tools,
+  like `look_at_screen` and `search_memory`: the brain loop goes on after
+  them even when a `say` came in the same reply). `web.provider` auto =
+  Ollama's web search/fetch with the Ollama Cloud key (not tried live:
+  no key here), else DuckDuckGo's HTML page (`html.duckduckgo.com/html/`,
+  real link in `uddg=`, ads via `y.js` skipped); SearXNG `format=json`.
+  `read_page` only reads public pages: `readableUrl` + DNS check of every
+  hop (`redirect: "manual"`), 2 MB max, page charset honored, text of
+  `<main>`/`<article>` else `<body>`, 6000 chars. Results and pages are
+  labeled as data, not instructions. Search words go to `log.perception`.
 - Discord: `src/discord/bot.ts` (discord.js + @discordjs/voice 0.19, DAVE
   through @snazzah/davey, Opus through opusscript: no native module to
   rebuild for Electron; aes-256-gcm comes from Electron's crypto) runs in
@@ -354,10 +382,10 @@ code yet; when a piece lands, move its notes to the sections above.
 
 ### Memory (`main/brain/memory/`, phase 10)
 
-Steps 1 (raw log, FTS, `search_memory`, import) and 2 (embeddings,
-hybrid search) are built: see the notes above. Still planned: facts (still
-in `memory.json`, to import) with importance in the score, week/month
-summaries, backups, forget, sidecar CPU embeddings without Ollama.
+Steps 1 (raw log, FTS, `search_memory`, import), 2 (embeddings, hybrid
+search) and 3 (facts) are built: see the notes above. Still planned:
+week/month summaries, backups, forget, sidecar CPU embeddings without
+Ollama.
 
 - Goal: remember everything for years, prioritize what matters, forget
   only on explicit request. Memories never go into model weights.

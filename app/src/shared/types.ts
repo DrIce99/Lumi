@@ -84,6 +84,8 @@ export interface Settings {
     fillers: boolean;
     micDevice: string;
   };
+  /** Searching the web (web_search, read_page): which free service, or none. */
+  web: { provider: WebProvider; searxngUrl: string };
   /** Long-term memory (memory.db): where the embeddings come from, and how results are ordered. */
   memory: {
     /** Ollama (local) or none (search by words only). */
@@ -157,6 +159,7 @@ export const DEFAULT_SETTINGS: Settings = {
   vision: { provider: "ollama", model: "qwen3-vl:8b", keepAlive: "2m", maxSide: 1344 },
   stt: { engine: "faster-whisper", model: "large-v3-turbo", device: "auto", vocabulary: [] },
   tts: { engine: "qwen3", model: "1.7B-CustomVoice", voice: "ryan", speed: 1, volume: 1, seed: 7, pronunciations: [] },
+  web: { provider: "auto", searxngUrl: "" },
   memory: { embeddings: { provider: "ollama", model: "bge-m3" }, weights: { relevance: 1, recency: 0.5, importance: 0.5 } },
   listen: {
     mode: "push-to-talk",
@@ -204,6 +207,8 @@ export interface Fact {
   createdAt: string;
   /** Notes expire; durable facts don't. */
   expiresAt?: string;
+  /** 1-10: how much it matters; 8 and more always reach the prompt. Missing in older files (the kind's default). */
+  importance?: number;
 }
 
 export interface Reminder {
@@ -465,6 +470,10 @@ export interface MemoryIndexStatus {
   total: number;
   detail?: string;
 }
+
+/** auto: Ollama's web search with the Ollama Cloud key, else DuckDuckGo. */
+export const WEB_PROVIDERS = ["auto", "ollama", "duckduckgo", "searxng", "none"] as const;
+export type WebProvider = (typeof WEB_PROVIDERS)[number];
 
 export const EMBEDDING_PROVIDERS = ["ollama", "none"] as const;
 export type EmbeddingProvider = (typeof EMBEDDING_PROVIDERS)[number];

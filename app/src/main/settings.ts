@@ -7,6 +7,7 @@ import {
   DEFAULT_SETTINGS,
   DEVICES,
   EMBEDDING_PROVIDERS,
+  WEB_PROVIDERS,
   LISTEN_MODES,
   OCR_ENGINES,
   PROFILES,
@@ -112,6 +113,7 @@ export function sanitizeSettings(input: unknown): Settings {
   const discord = obj(raw.discord);
   const perception = obj(raw.perception);
   const vision = obj(raw.vision);
+  const web = obj(raw.web);
   const memory = obj(raw.memory);
   const embeddings = obj(memory.embeddings);
   const weights = obj(memory.weights);
@@ -158,6 +160,10 @@ export function sanitizeSettings(input: unknown): Settings {
       backchannel: bool(listen.backchannel, d.listen.backchannel),
       fillers: bool(listen.fillers, d.listen.fillers),
       micDevice: str(listen.micDevice, d.listen.micDevice, 200),
+    },
+    web: {
+      provider: oneOf(web.provider, WEB_PROVIDERS, d.web.provider),
+      searxngUrl: /^https?:\/\//i.test(str(web.searxngUrl, "", 300).trim()) ? str(web.searxngUrl, "", 300).trim() : "",
     },
     memory: {
       embeddings: {

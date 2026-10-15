@@ -71,11 +71,18 @@ export const TOOLS: ToolSpec[] = [
   {
     name: "remember",
     description:
-      "Save something to your long-term memory: facts about the user (name, job, projects, preferences, people, events) or a short note for today (kind 'note', forgotten after 12 hours). One short sentence in Italian. Don't save what is already in memory.",
+      "Save something to your long-term memory: facts about the user (name, job, projects, preferences, people, events) or a short note for today (kind 'note', forgotten after 12 hours). One short sentence in Italian. Don't save what is already in memory; if it corrects or updates a fact you know (they moved, changed job), pass that fact's id in replaces.",
     parameters: {
       type: "object",
       properties: {
         fact: { type: "string", description: "The fact, as one short sentence." },
+        importance: {
+          type: "integer",
+          minimum: 1,
+          maximum: 10,
+          description: "9-10: who they are and the people closest to them; 6-8: projects, lasting preferences, important events; 3-5: small tastes and details.",
+        },
+        replaces: { type: "string", description: "Optional: the id of the fact this one corrects or updates, e.g. 'f12'." },
         kind: {
           type: "string",
           enum: [...FACT_KINDS],
@@ -116,6 +123,27 @@ export const TOOLS: ToolSpec[] = [
           description: "conversation: the lines said; summary: episode and diary summaries (best for a whole period); all (default).",
         },
       },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "web_search",
+    description:
+      "Search the web for current or factual information you don't know for sure or that may have changed: news, weather, prices, opening hours, results, recent releases and events. In the same reply say a very short line first (e.g. 'Un attimo, controllo.'). The results come back to you.",
+    parameters: {
+      type: "object",
+      properties: { query: { type: "string", description: "A few keywords that will find it, e.g. 'meteo Torino domani' or 'orari farmacia Lingotto'." } },
+      required: ["query"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "read_page",
+    description: "Read the text of a web page (a web_search result, or a link the user gave you) when the excerpts are not enough. The text comes back to you.",
+    parameters: {
+      type: "object",
+      properties: { url: { type: "string", description: "The page's address (http or https)." } },
+      required: ["url"],
       additionalProperties: false,
     },
   },
@@ -166,10 +194,12 @@ export type ToolCall =
   | { name: "say"; text: string; emotion: Emotion; intensity: number; look?: string }
   | { name: "look_at"; text?: string; region?: LookRegion }
   | { name: "look_at_screen"; focus?: string }
-  | { name: "remember"; fact: string; kind: FactKind }
+  | { name: "remember"; fact: string; kind: FactKind; importance?: number; replaces?: string }
   | { name: "forget"; id: string }
   | { name: "search_memory"; query?: string; from?: string; to?: string; kind?: MemoryKind }
   | { name: "set_reminder"; due: Date; text: string }
+  | { name: "web_search"; query: string }
+  | { name: "read_page"; url: string }
   | { name: "name_voice"; voice: string; person: string }
   | { name: "stay_quiet"; minutes?: number };
 
@@ -236,7 +266,9 @@ export function parseToolCall(name: string, input: unknown, now = new Date()): T
     case "remember": {
       const fact = text(o.fact ?? o.text, 400);
       const kind = typeof o.kind === "string" && (FACT_KINDS as string[]).includes(o.kind) ? (o.kind as FactKind) : "user";
-      return fact ? { name, fact, kind } : null;
+      const importance = typeof o.importance === "number" && Number.isFinite(o.importance) ? Math.round(Math.min(10, Math.max(1, o.importance))) : undefined;
+      const replaces = typeof o.replaces === "string" && /^[fn]\d+$/.test(o.replaces.trim()) ? o.replaces.trim() : undefined;
+      return fact ? { name, fact, kind, ...(importance !== undefined ? { importance } : {}), ...(replaces ? { replaces } : {}) } : null;
     }
     case "forget": {
       const id = text(o.id, 20);
@@ -256,6 +288,14 @@ export function parseToolCall(name: string, input: unknown, now = new Date()): T
       const voice = text(o.voice, 60);
       const who = text(o.name, 40);
       return voice && who ? { name, voice, person: who } : null;
+    }
+    case "web_search": {
+      const query = text(o.query ?? o.text, 300);
+      return query ? { name, query } : null;
+    }
+    case "read_page": {
+      const url = text(o.url, 2000);
+      return url && /^https?:\/\//i.test(url) ? { name, url } : null;
     }
     case "set_reminder": {
       const due = parseWhen(o.when ?? o.minutes, now);

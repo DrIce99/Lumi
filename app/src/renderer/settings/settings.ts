@@ -441,6 +441,8 @@ function fill(next: SettingsSnapshot): void {
   $("volume").value = String(s.tts.volume);
   $("seed").value = String(s.tts.seed);
   $<HTMLTextAreaElement>("pronunciations").value = s.tts.pronunciations.join("\n");
+  $<HTMLSelectElement>("webProvider").value = s.web.provider;
+  $("searxngUrl").value = s.web.searxngUrl;
   $<HTMLSelectElement>("embeddingProvider").value = s.memory.embeddings.provider;
   $("embeddingModel").value = s.memory.embeddings.model;
   $<HTMLElement>("memoryIndex").textContent = memoryIndexText(next.memoryIndex, s.memory.embeddings.model);
@@ -459,7 +461,9 @@ function fill(next: SettingsSnapshot): void {
 
   listItems(
     "facts",
-    next.facts.map((f) => ({ tag: KIND_LABEL[f.kind] ?? f.kind, text: f.text, action: () => void api.forgetMemory(f.id).then(fill) })),
+    [...next.facts]
+      .sort((a, b) => (b.importance ?? 0) - (a.importance ?? 0) || b.createdAt.localeCompare(a.createdAt))
+      .map((f) => ({ tag: `${KIND_LABEL[f.kind] ?? f.kind}${f.importance ? ` · ${f.importance}` : ""}`, text: f.text, action: () => void api.forgetMemory(f.id).then(fill) })),
     "Non ricorda ancora niente di te.",
   );
   listItems(
@@ -508,6 +512,7 @@ function collect(): Settings {
     launchAtLogin: $("launchAtLogin").checked,
     face: { scale: num("scale", s.face.scale), color: $("color").value, subtitles: $("subtitles").checked, adaptiveShadow: $("adaptiveShadow").checked, glare: $("glare").checked },
     voices: { enabled: $("voicesEnabled").checked, onlyMe: $("onlyMe").checked },
+    web: { provider: $<HTMLSelectElement>("webProvider").value as Settings["web"]["provider"], searxngUrl: $("searxngUrl").value.trim() },
     memory: {
       ...s.memory,
       embeddings: { provider: $<HTMLSelectElement>("embeddingProvider").value as Settings["memory"]["embeddings"]["provider"], model: $("embeddingModel").value.trim() },

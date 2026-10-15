@@ -122,6 +122,24 @@
           <small id="visionHint" class="hint"></small>
           <small class="hint">Usato solo se manca la visione locale (scheda Schermo) e la regola sugli screenshot lo consente.</small>
         </div>
+        <h2>Ricerca sul web</h2>
+        <div class="grid2">
+          <label class="field">
+            <span>Servizio</span>
+            <select id="webProvider">
+              <option value="auto">Automatico (Ollama con la chiave di Ollama Cloud, altrimenti DuckDuckGo)</option>
+              <option value="ollama">Ollama web search (serve la chiave di Ollama Cloud)</option>
+              <option value="duckduckgo">DuckDuckGo (senza chiave)</option>
+              <option value="searxng">SearXNG (il tuo server)</option>
+              <option value="none">Spenta</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Indirizzo di SearXNG</span>
+            <input id="searxngUrl" type="text" placeholder="http://localhost:8888" />
+          </label>
+        </div>
+        <small class="hint">Quando non sa una cosa aggiornata (meteo, notizie, orari, prezzi) Lumi la cerca. Escono dal PC solo le parole cercate e l'indirizzo delle pagine che legge.</small>
         <div class="row">
           <button id="test" type="button">Prova la connessione</button>
         </div>

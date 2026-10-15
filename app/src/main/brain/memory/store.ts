@@ -4,11 +4,30 @@
 // everything sent before it is on disk. Tests use an in-process database.
 import { Worker } from "node:worker_threads";
 import { log } from "../../log";
-import type { LegacyImport, LineInput, MemoryDb, SearchRequest, SearchResult, StoredLine, SummaryInput } from "./db";
+import type { FactInput, FactRow, LegacyImport, LineInput, MemoryDb, SearchRequest, SearchResult, StoredLine, SummaryInput } from "./db";
 import type { IndexStatus } from "./indexer";
 import type { ScoreWeights } from "./search";
 
-export const STORE_METHODS = ["append", "addSummary", "between", "count", "search", "importLegacy", "clear", "close", "configure", "setBusy", "indexStatus", "warm", "ping"] as const;
+export const STORE_METHODS = [
+  "append",
+  "addSummary",
+  "between",
+  "count",
+  "search",
+  "importLegacy",
+  "clear",
+  "close",
+  "putFact",
+  "supersedeFact",
+  "deleteFact",
+  "listFacts",
+  "importFacts",
+  "configure",
+  "setBusy",
+  "indexStatus",
+  "warm",
+  "ping",
+] as const;
 export type StoreMethod = (typeof STORE_METHODS)[number];
 
 /** Where the memory's embeddings come from, and how search results are ordered. */
@@ -114,6 +133,33 @@ export class MemoryStore {
 
   addSummary(summary: SummaryInput): void {
     this.write("addSummary", [summary]);
+  }
+
+  putFact(fact: FactInput): void {
+    this.write("putFact", [fact]);
+  }
+
+  supersedeFact(older: number, newer: number): void {
+    this.write("supersedeFact", [older, newer]);
+  }
+
+  deleteFact(id: number): void {
+    this.write("deleteFact", [id]);
+  }
+
+  /** The active facts; null when memory.db is unavailable. */
+  async listFacts(): Promise<FactRow[] | null> {
+    try {
+      return (await this.call("listFacts", [])) as FactRow[];
+    } catch (err) {
+      this.report("Reading the facts from memory.db failed", err);
+      return null;
+    }
+  }
+
+  /** Imports the facts of memory.json once; rejects when the database can't take them. */
+  importFacts(facts: FactInput[]): Promise<number> {
+    return this.call("importFacts", [facts]) as Promise<number>;
   }
 
   /** Searches memory; a slow or failed search is no result (`null` after `timeoutMs`). */

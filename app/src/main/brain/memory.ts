@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 import type { DiaryEntry, Fact, FactKind, Reminder } from "../../shared/types";
 import { DebouncedWriter, readJson } from "../jsonStore";
 import { log } from "../log";
-import type { LineInput, MemoryHit, SearchRequest, SearchResult, Speaker } from "./memory/db";
+import type { FactRow, LineInput, MemoryHit, SearchRequest, SearchResult, Speaker } from "./memory/db";
 import type { MemoryStore } from "./memory/store";
 import { localStamp } from "./memory/search";
 
@@ -55,8 +55,15 @@ interface MemoryData {
 }
 
 const NOTE_TTL_MS = 12 * 3600_000;
-const MAX_FACTS = 150;
 const MAX_NOTES = 40;
+/** A fact's importance when nobody said otherwise. */
+export const DEFAULT_IMPORTANCE: Record<FactKind, number> = { user: 7, work: 6, preference: 5, event: 6, lumi: 4, note: 3 };
+/** Facts this important always reach the prompt. */
+export const ALWAYS_IMPORTANCE = 8;
+/** Facts in the prompt, at most (~750 tokens): notes, the important ones, the related ones, the recent ones. */
+export const FACT_PROMPT_CHARS = 3000;
+/** Facts learned in the last days are kept in view. */
+const RECENT_FACT_MS = 3 * 24 * 3600_000;
 const MAX_CONVERSATION = 120;
 const MAX_DIARY = 60;
 const MAX_EPISODES = 300;
@@ -64,9 +71,13 @@ const MAX_EPISODES = 300;
 export const RECENT_LINES = 16;
 /** Unsummarized older lines that make an episode worth writing. */
 const EPISODE_LINES = 20;
-/** Automatic recall must not slow the answer down: the query's embedding gets 250 ms, then words only. */
-const RECALL_TIMEOUT_MS = 500;
-const RECALL_EMBED_MS = 250;
+/**
+ * Automatic recall must not slow the answer down: the query's embedding
+ * gets 400 ms, then words only. Measured: Ollama answers bge-m3 queries in
+ * 15-80 ms, with rare spikes over 1 s (the GPU waking up).
+ */
+const RECALL_TIMEOUT_MS = 650;
+const RECALL_EMBED_MS = 400;
 /** search_memory (the model asked): meaning is worth a short wait. */
 const SEARCH_EMBED_MS = 1500;
 
@@ -82,9 +93,62 @@ export function speakerLabel(e: ConversationEntry, user: string): string {
   return e.name || "Qualcun altro";
 }
 
+/** The importance of a fact (older facts have none: their kind's default). */
+export function importanceOf(f: Pick<Fact, "kind" | "importance">): number {
+  return f.importance ?? DEFAULT_IMPORTANCE[f.kind] ?? 5;
+}
+
+/** A stored fact as the app knows it: "f12" for a durable fact, "n13" for a note. */
+export function factFromRow(row: FactRow): Fact {
+  const kind = row.kind as FactKind;
+  return { id: `${kind === "note" ? "n" : "f"}${row.id}`, text: row.text, kind, createdAt: row.created, importance: row.importance, ...(row.expires ? { expiresAt: row.expires } : {}) };
+}
+
+/** The number in a fact id ("f12" -> 12), or null for other ids (reminders, episodes). */
+export function factNumber(id: string): number | null {
+  const m = /^[fn](\d+)$/.exec(id.trim());
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * The facts for the prompt, in priority order within a character budget:
+ * today's notes, the important ones (>= 8), the ones related to now (from
+ * a search), the recent ones. Everything else stays reachable through
+ * search_memory. Pure.
+ */
+export function selectFacts(all: Fact[], related: string[], now: number, budget = FACT_PROMPT_CHARS): Fact[] {
+  const byId = new Map(all.map((f) => [f.id, f]));
+  const durable = all.filter((f) => f.kind !== "note");
+  const newestFirst = (a: Fact, b: Fact) => b.createdAt.localeCompare(a.createdAt);
+  const groups: Fact[][] = [
+    all.filter((f) => f.kind === "note").sort(newestFirst),
+    durable.filter((f) => importanceOf(f) >= ALWAYS_IMPORTANCE).sort((a, b) => importanceOf(b) - importanceOf(a) || newestFirst(a, b)),
+    related.map((id) => byId.get(id)).filter((f): f is Fact => !!f),
+    durable.filter((f) => now - Date.parse(f.createdAt) < RECENT_FACT_MS).sort(newestFirst),
+  ];
+  const out: Fact[] = [];
+  const seen = new Set<string>();
+  let used = 0;
+  for (const group of groups) {
+    for (const f of group) {
+      if (seen.has(f.id)) continue;
+      const cost = f.text.length + 24;
+      if (used + cost > budget) continue;
+      seen.add(f.id);
+      used += cost;
+      out.push(f);
+    }
+  }
+  return out;
+}
+
 /** A memory found by a search, as the model reads it: "[2026-03-12 18:40] Diego: ..." or "[diario 2026-03-12] ...". */
 export function describeHit(hit: MemoryHit, user: string, maxChars = 700): string {
   const clip = (t: string) => (t.length > maxChars ? `${t.slice(0, maxChars - 1)}…` : t);
+  if (hit.kind === "fact") {
+    const f = factFromRow(hit.fact);
+    return `[${f.id}, ${localStamp(hit.at).slice(0, 10)}, ${f.kind}, importanza ${importanceOf(f)}] ${clip(f.text)}`;
+  }
   if (hit.kind === "conversation") {
     const lines = hit.lines.map((l) => `${speakerLabel(l, user)}${l.via ? ` (${l.via})` : ""}: ${l.text}${l.interrupted ? " [interrotto]" : ""}`);
     return `[${localStamp(hit.at)}] ${clip(lines.join("\n"))}`;
@@ -144,6 +208,33 @@ export class Memory {
     }
   }
 
+  /**
+   * Facts live in memory.db (layer 3); the app keeps the active ones here
+   * too, so reading them never waits: memory.json holds that copy, and the
+   * first start with memory.db imports it. Then the database's list wins.
+   */
+  async loadFacts(): Promise<void> {
+    if (!this.store) return;
+    try {
+      const imported = await this.store.importFacts(
+        this.data.facts.map((f) => ({ id: factNumber(f.id) ?? this.data.nextId++, kind: f.kind, text: f.text, importance: importanceOf(f), created: f.createdAt, ...(f.expiresAt ? { expires: f.expiresAt } : {}) })),
+      );
+      if (imported) log.info(`Memory: imported ${imported} facts into memory.db`);
+    } catch (err) {
+      log.error("Importing the facts into memory.db failed (memory.json keeps them)", err);
+      return;
+    }
+    const asked = this.now().toISOString();
+    const rows = await this.store.listFacts();
+    if (!rows) return;
+    // Facts saved while the list was on its way stay
+    const listed = new Set(rows.map((r) => factFromRow(r).id));
+    const meanwhile = this.data.facts.filter((f) => !listed.has(f.id) && f.createdAt >= asked);
+    this.data.facts = [...rows.map(factFromRow), ...meanwhile];
+    for (const f of this.data.facts) this.data.nextId = Math.max(this.data.nextId, (factNumber(f.id) ?? 0) + 1);
+    this.save();
+  }
+
   // ---- facts and notes ----
 
   /** Durable facts plus unexpired notes. */
@@ -152,19 +243,34 @@ export class Memory {
     return this.data.facts.filter((f) => !f.expiresAt || Date.parse(f.expiresAt) > now);
   }
 
-  remember(text: string, kind: FactKind): Fact {
+  /**
+   * Saves a fact. `importance` 1-10 (else the kind's default); `replaces`:
+   * the id of a fact this one corrects or updates, which then stops
+   * counting (memory.db keeps it as history); `source`: the stretch of
+   * conversation it comes from.
+   */
+  remember(text: string, kind: FactKind, options: { importance?: number; replaces?: string; source?: { from: string; to: string } } = {}): Fact {
     const clean = text.trim().replace(/\s+/g, " ").slice(0, 300);
     const existing = this.facts().find((f) => f.text.toLowerCase() === clean.toLowerCase());
     if (existing) return existing;
     const isNote = kind === "note";
+    const number = this.data.nextId++;
+    const importance = Math.round(Math.min(10, Math.max(1, options.importance ?? DEFAULT_IMPORTANCE[kind])));
     const fact: Fact = {
-      id: `${isNote ? "n" : "f"}${this.data.nextId++}`,
+      id: `${isNote ? "n" : "f"}${number}`,
       text: clean,
       kind,
       createdAt: this.now().toISOString(),
+      importance,
       ...(isNote ? { expiresAt: new Date(this.now().getTime() + NOTE_TTL_MS).toISOString() } : {}),
     };
     this.data.facts.push(fact);
+    this.store?.putFact({ id: number, kind, text: clean, importance, created: fact.createdAt, ...(fact.expiresAt ? { expires: fact.expiresAt } : {}), ...(options.source ? { source: options.source } : {}) });
+    const older = options.replaces ? this.facts().find((f) => f.id === options.replaces!.trim() && f.id !== fact.id) : undefined;
+    if (older) {
+      this.data.facts = this.data.facts.filter((f) => f.id !== older.id);
+      this.store?.supersedeFact(factNumber(older.id)!, number);
+    }
     this.pruneFacts();
     this.save();
     return fact;
@@ -173,11 +279,28 @@ export class Memory {
   /** Deletes a fact, a note or a pending reminder by id. */
   forget(id: string): boolean {
     const before = this.data.facts.length + this.data.reminders.length;
+    const fact = this.data.facts.find((f) => f.id === id);
     this.data.facts = this.data.facts.filter((f) => f.id !== id);
     this.data.reminders = this.data.reminders.filter((r) => r.id !== id);
     const removed = this.data.facts.length + this.data.reminders.length !== before;
+    if (fact && factNumber(fact.id) !== null) this.store?.deleteFact(factNumber(fact.id)!);
     if (removed) this.save();
     return removed;
+  }
+
+  /** The facts for this moment's prompt: notes, important, related to `related` (fact ids from recall), recent. */
+  promptFacts(related: string[] = []): Fact[] {
+    return selectFacts(this.facts(), related, this.now().getTime());
+  }
+
+  /**
+   * What the episode writer must know to avoid duplicates and to mark
+   * corrections: the important facts and those related to the transcript.
+   */
+  async factsFor(text: string, limit = 30): Promise<Fact[]> {
+    const related = this.store ? ((await this.store.search({ query: text.slice(-1500), kind: "fact", limit: 20, embedTimeoutMs: 3000 }))?.hits ?? []) : [];
+    const ids = related.flatMap((h) => (h.kind === "fact" ? [factFromRow(h.fact).id] : []));
+    return selectFacts(this.facts().filter((f) => f.kind !== "note"), ids, this.now().getTime(), 6000).slice(0, limit);
   }
 
   /** Wipes everything Lumi knows, keeping only its birthday. */
@@ -303,7 +426,7 @@ export class Memory {
     return recent.length ? recent[Math.max(0, recent.length - RECENT_LINES)].at : undefined;
   }
 
-  /** Past conversation, episodes and diary days related to the user's words (automatic recall: quick, or nothing). */
+  /** Past conversation, episodes, diary days and facts related to the user's words (automatic recall: quick, or nothing). */
   async recall(query: string, limit = 3): Promise<MemoryHit[]> {
     if (!this.store) return [];
     const result = await this.store.search({ query, limit, before: this.recentFrom(), embedTimeoutMs: RECALL_EMBED_MS }, RECALL_TIMEOUT_MS);
@@ -365,12 +488,13 @@ export class Memory {
     return this.store?.settled() ?? Promise.resolve();
   }
 
+  /** Expired notes go; durable facts are never dropped here (memory.db keeps them all, the prompt picks). */
   private pruneFacts(): void {
     const now = this.now().getTime();
     this.data.facts = this.data.facts.filter((f) => !f.expiresAt || Date.parse(f.expiresAt) > now);
     const notes = this.data.facts.filter((f) => f.kind === "note");
     const durable = this.data.facts.filter((f) => f.kind !== "note");
-    this.data.facts = [...durable.slice(-MAX_FACTS), ...notes.slice(-MAX_NOTES)];
+    this.data.facts = [...durable, ...notes.slice(-MAX_NOTES)];
   }
 
   private empty(): MemoryData {

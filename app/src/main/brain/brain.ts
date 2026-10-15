@@ -10,7 +10,7 @@ import { guessEmotion, type Emotion } from "../../shared/emotions";
 import { PROVIDERS } from "../../shared/providers";
 import { FACT_KINDS, type FactKind, type Settings } from "../../shared/types";
 import { log } from "../log";
-import { describeHit, RECENT_LINES, speakerLabel, type ConversationEntry, type Memory } from "./memory";
+import { describeHit, factFromRow, importanceOf, RECENT_LINES, speakerLabel, type ConversationEntry, type Memory } from "./memory";
 import { buildContext, buildSystemPrompt, messageForHistory, type Situation, type Trigger } from "./prompt";
 import { ProviderError, type ChatProvider, type LiveSay, type MomentSession, type ToolCallOut, type ToolResultIn } from "./providers/types";
 import { parseToolCall, type LookRegion, type ToolCall } from "./tools";
@@ -61,9 +61,13 @@ export interface BrainHost {
   backOff(minutes: number): void;
   /** Names a recognized voice; returns what happened, for the model. */
   nameVoice?(voice: string, name: string): string;
+  /** Web search and page reading; return what the model reads. */
+  webSearch?(query: string): Promise<string>;
+  readPage?(url: string): Promise<string>;
 }
 
 const MAX_ROUNDS = 4;
+const FOLLOW_UP = new Set<ToolCall["name"]>(["look_at_screen", "search_memory", "web_search", "read_page"]);
 /** search_memory results per call, and characters per result. */
 const MEMORY_RESULTS = 6;
 const MEMORY_HIT_CHARS = 700;
@@ -72,22 +76,36 @@ const MAX_EPISODE_FACTS = 4;
 
 const EPISODE_SYSTEM = `You keep the long-term memory of Lumi, a voice assistant that lives on the user's screen.
 You get a stretch of conversation. Reply with only a JSON object:
-{"summary": "...", "facts": [{"fact": "...", "kind": "user|work|preference|event"}]}
+{"summary": "...", "facts": [{"fact": "...", "kind": "user|work|preference|event", "importance": 1-10, "replaces": "f12"}]}
 - summary: Italian, two to four short sentences in first person as Lumi, calling the user by name: what was talked about, decided, asked or promised, with names, places and dates. Enough to pick the thread up again later.
 - facts: durable things about the user's life worth remembering for weeks: who they are, people around them, their work and projects, tastes and habits, upcoming events with their date. Third person, one short Italian sentence each, like "Ha una sorella, Giulia, che vive a Milano.".
-  Not facts: requests to you, what they asked you to do or change, opinions about you, small talk, anything sensitive (passwords, health, money). Never repeat or contradict what is already known: if the user corrected something, write the correction only when they said it clearly. Usually zero or one fact.`;
+  Not facts: requests to you, what they asked you to do or change, opinions about you, small talk, anything sensitive (passwords, health, money). Never repeat what is already known. Usually zero or one fact.
+- importance: 9-10 who they are and the people closest to them (name, family, partner, where they live, their job); 6-8 projects, strong and lasting preferences, important upcoming events; 3-5 small tastes and details.
+- replaces: only when the new fact corrects or updates a known one (they moved, changed job, a date changed): the known fact's id, e.g. "f12". Write the correction only when the user said it clearly.`;
 
 /** Reads the episode summarizer's reply; a plain-text reply is taken as the summary. */
-export function parseEpisodeReply(text: string): { summary: string; facts: { fact: string; kind: FactKind }[] } {
+export interface ExtractedFact {
+  fact: string;
+  kind: FactKind;
+  importance?: number;
+  replaces?: string;
+}
+
+export function parseEpisodeReply(text: string): { summary: string; facts: ExtractedFact[] } {
   const json = /\{[\s\S]*\}/.exec(text)?.[0];
   if (json) {
     try {
       const o = JSON.parse(json) as { summary?: unknown; facts?: unknown };
       const summary = typeof o.summary === "string" ? o.summary.trim() : "";
       const facts = (Array.isArray(o.facts) ? o.facts : [])
-        .map((f) => (typeof f === "string" ? { fact: f } : (f as { fact?: unknown; kind?: unknown })))
-        .filter((f): f is { fact: string; kind?: unknown } => typeof f?.fact === "string" && f.fact.trim().length > 3)
-        .map((f) => ({ fact: f.fact.trim(), kind: (FACT_KINDS as string[]).includes(String(f.kind)) && f.kind !== "note" ? (f.kind as FactKind) : "user" }))
+        .map((f) => (typeof f === "string" ? { fact: f } : (f as { fact?: unknown; kind?: unknown; importance?: unknown; replaces?: unknown })))
+        .filter((f): f is { fact: string; kind?: unknown; importance?: unknown; replaces?: unknown } => typeof f?.fact === "string" && f.fact.trim().length > 3)
+        .map((f): ExtractedFact => ({
+          fact: f.fact.trim(),
+          kind: (FACT_KINDS as string[]).includes(String(f.kind)) && f.kind !== "note" ? (f.kind as FactKind) : "user",
+          ...(typeof f.importance === "number" && Number.isFinite(f.importance) ? { importance: Math.round(Math.min(10, Math.max(1, f.importance))) } : {}),
+          ...(typeof f.replaces === "string" && /^f\d+$/.test(f.replaces.trim()) ? { replaces: f.replaces.trim() } : {}),
+        }))
         .slice(0, MAX_EPISODE_FACTS);
       if (summary) return { summary, facts };
     } catch {
@@ -179,9 +197,10 @@ export class Brain {
       const user = this.host.settings().userName || "Utente";
       const chosen = this.authFailed ? null : this.host.provider("idle");
       let summary = "";
-      let facts: { fact: string; kind: FactKind }[] = [];
+      let facts: ExtractedFact[] = [];
       if (chosen) {
-        const known = memory.facts().map((f) => `- ${f.text}`).join("\n") || "(nothing yet)";
+        // With their ids: a correction names the fact it replaces
+        const known = (await memory.factsFor(transcript(entries, user))).map((f) => `[${f.id}] (${f.kind}, ${importanceOf(f)}) ${f.text}`).join("\n") || "(nothing yet)";
         try {
           const result = await chosen.provider.complete({
             model: chosen.model,
@@ -202,7 +221,8 @@ export class Brain {
           .slice(0, 600);
       }
       const episode = memory.addEpisode(entries, summary);
-      for (const f of facts) memory.remember(f.fact, f.kind);
+      const source = { from: entries[0].at, to: entries[entries.length - 1].at };
+      for (const f of facts) memory.remember(f.fact, f.kind, { importance: f.importance, replaces: f.replaces, source });
       if (episode) log.info(`Episode ${episode.id}: ${entries.length} lines summarized, ${facts.length} new facts`);
     } finally {
       this.compacting = false;
@@ -244,14 +264,19 @@ export class Brain {
     const host = this.host;
     const settings = host.settings();
     const isMessage = trigger.kind === "message";
+    // One search for the user's words: related facts go into <memory>, the rest into <recalled>
+    const found = isMessage ? await host.memory.recall(trigger.text, 8) : [];
+    const relatedFacts = found.flatMap((h) => (h.kind === "fact" ? [factFromRow(h.fact).id] : []));
+    const facts = host.memory.promptFacts(relatedFacts);
     const context = buildContext({
       situation: host.situation(),
       settings,
-      facts: host.memory.facts(),
+      facts,
+      factsTotal: host.memory.facts().length,
       reminders: host.memory.reminders(),
       diary: host.memory.diary(),
       episodes: host.memory.recentEpisodes(),
-      recalled: isMessage ? await host.memory.recall(trigger.text, 3) : [],
+      recalled: found.filter((h) => h.kind !== "fact").slice(0, 3),
       conversation: host.memory.recentConversation(RECENT_LINES),
       trigger,
     });
@@ -343,7 +368,8 @@ export class Brain {
         results.push({ id: call.id, name: call.name, text: JSON.stringify({ INVALID_INPUT: JSON.stringify(call.input) }), images: [], isError: true });
         continue;
       }
-      if (parsed.name === "look_at_screen") followUp = true;
+      // Tools that bring something back: the model needs another round to use it
+      if (FOLLOW_UP.has(parsed.name)) followUp = true;
       if (parsed.name === "say") said = true;
       try {
         const out = await this.execute(parsed, says, requestedByUser);
@@ -369,8 +395,12 @@ export class Brain {
         const look = await this.host.lookAtScreen(call.focus, requestedByUser);
         return { text: look.notes.join("\n") || (look.images.length ? "" : "Nothing to show."), images: look.images };
       }
-      case "remember":
-        return done(`Saved as [${memory.remember(call.fact, call.kind).id}].`);
+      case "remember": {
+        const recent = memory.recentConversation(4);
+        const source = recent.length ? { from: recent[0].at, to: new Date().toISOString() } : undefined;
+        const fact = memory.remember(call.fact, call.kind, { importance: call.importance, replaces: call.replaces, source });
+        return done(`Saved as [${fact.id}]${call.replaces && !memory.facts().some((f) => f.id === call.replaces) ? `, replacing [${call.replaces}]` : ""}.`);
+      }
       case "forget":
         return done(memory.forget(call.id) ? `Forgot [${call.id}].` : `There is no memory or reminder with id ${call.id}.`);
       case "search_memory": {
@@ -386,6 +416,10 @@ export class Brain {
         const reminder = memory.addReminder(call.text, call.due);
         return done(`Reminder [${reminder.id}] set for ${call.due.toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.`);
       }
+      case "web_search":
+        return done(this.host.webSearch ? await this.host.webSearch(call.query) : "You can't search the web now.");
+      case "read_page":
+        return done(this.host.readPage ? await this.host.readPage(call.url) : "You can't read web pages now.");
       case "name_voice":
         return done(this.host.nameVoice ? this.host.nameVoice(call.voice, call.person) : "You can't recognize voices now.");
       case "stay_quiet":

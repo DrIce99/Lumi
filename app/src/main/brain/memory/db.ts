@@ -1,8 +1,10 @@
 // Lumi's long-term memory on disk: one SQLite file (%APPDATA%\Lumi\memory.db)
 // through node:sqlite (bundled with Electron's Node: no native module to
 // rebuild). Layer 1 is the raw log of every line said (append-only, the
-// source of truth); FTS5 indexes it and the summaries (episodes and diary
-// days); sqlite-vec holds their embeddings, one vec0 table per model (the
+// source of truth); layer 3 the facts extracted from it, with importance,
+// sources and supersession; layer 4 the summaries (episodes and diary
+// days). FTS5 indexes the text of all three; sqlite-vec holds their
+// embeddings, one vec0 table per model (the
 // vectors are a rebuildable index: text stays the truth). Search is hybrid:
 // FTS and vector candidates fused with RRF, then ordered by relevance,
 // recency and importance. Synchronous: it runs in a worker thread
@@ -40,9 +42,27 @@ export interface SummaryInput {
   text: string;
 }
 
+/** A fact as stored: `id` is the number in "f12" (durable) or "n13" (a note for today). */
+export interface FactRow {
+  id: number;
+  kind: string;
+  text: string;
+  /** 1-10: how much it matters (8 and more always reach the prompt). */
+  importance: number;
+  created: string;
+  /** Notes expire. */
+  expires?: string;
+}
+
+export interface FactInput extends FactRow {
+  /** The conversation it comes from (ISO span): its lines become `source_ids`. */
+  source?: { from: string; to: string };
+}
+
 export type MemoryHit =
   | { kind: "conversation"; at: string; lines: StoredLine[]; score: number }
-  | { kind: SummaryKind; at: string; end: string; text: string; score: number };
+  | { kind: SummaryKind; at: string; end: string; text: string; score: number }
+  | { kind: "fact"; at: string; fact: FactRow; score: number };
 
 export interface SearchRequest {
   /** Words to look for; without them the range is listed in order. */
@@ -50,7 +70,7 @@ export interface SearchRequest {
   /** Local dates or months, as the model writes them ("2026-03", "2026-03-12"). */
   from?: string;
   to?: string;
-  kind?: "conversation" | "summary" | "all";
+  kind?: "conversation" | "summary" | "fact" | "all";
   /** Lines from this moment on are already in the prompt: skip them (ISO). */
   before?: string;
   limit?: number;
@@ -75,7 +95,7 @@ export interface LegacyImport {
 
 /** An item to embed: a line (with the one before it, for context) or a summary. */
 export interface EmbedItem {
-  kind: "message" | "summary";
+  kind: "message" | "summary" | "fact";
   id: number;
   text: string;
 }
@@ -97,7 +117,7 @@ const CONTEXT_LINES = 1;
 /** Lines shorter than this ("ok", "sì") get no vector: words find them. */
 export const MIN_EMBED_CHARS = 12;
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const MIGRATIONS: string[] = [
   `CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -139,7 +159,41 @@ const MIGRATIONS: string[] = [
      UNIQUE (owner_kind, owner_id, model)
    );
    CREATE TABLE vec_tables (model TEXT PRIMARY KEY, dim INTEGER NOT NULL, name TEXT NOT NULL);`,
+  // v3: facts. A newer fact that contradicts an older one sets its superseded_by: the history stays, the latest counts
+  `CREATE TABLE facts (
+     id INTEGER PRIMARY KEY,
+     kind TEXT NOT NULL,
+     text TEXT NOT NULL,
+     importance INTEGER NOT NULL DEFAULT 5,
+     confidence REAL NOT NULL DEFAULT 1,
+     created TEXT NOT NULL,
+     updated TEXT NOT NULL,
+     expires TEXT,
+     superseded_by INTEGER,
+     source_ids TEXT
+   );
+   CREATE VIRTUAL TABLE facts_fts USING fts5(text, content='facts', content_rowid='id', tokenize='unicode61 remove_diacritics 2');
+   CREATE TRIGGER facts_ai AFTER INSERT ON facts BEGIN INSERT INTO facts_fts(rowid, text) VALUES (new.id, new.text); END;
+   CREATE TRIGGER facts_ad AFTER DELETE ON facts BEGIN INSERT INTO facts_fts(facts_fts, rowid, text) VALUES ('delete', old.id, old.text); END;
+   CREATE TRIGGER facts_au AFTER UPDATE OF text ON facts BEGIN
+     INSERT INTO facts_fts(facts_fts, rowid, text) VALUES ('delete', old.id, old.text);
+     INSERT INTO facts_fts(rowid, text) VALUES (new.id, new.text);
+   END;`,
 ];
+
+/** Active facts: not superseded, not an expired note. */
+const ACTIVE_FACT = "superseded_by IS NULL AND (expires IS NULL OR expires > ?)";
+
+interface FactDbRow {
+  id: number;
+  kind: string;
+  text: string;
+  importance: number;
+  created: string;
+  expires: string | null;
+}
+
+const toFact = (r: FactDbRow): FactRow => ({ id: r.id, kind: r.kind, text: r.text, importance: r.importance, created: r.created, ...(r.expires ? { expires: r.expires } : {}) });
 
 interface MessageRow {
   id: number;
@@ -252,6 +306,62 @@ export class MemoryDb {
     return { messages: n("SELECT COUNT(*) AS n FROM messages"), summaries: n("SELECT COUNT(*) AS n FROM summaries") };
   }
 
+  // ---------------- facts ----------------
+
+  /** Stores a fact with its own id (the app numbers facts, notes and reminders together). */
+  putFact(fact: FactInput): void {
+    const sources = fact.source
+      ? (this.db.prepare("SELECT id FROM messages WHERE ts >= ? AND ts <= ? ORDER BY id DESC LIMIT 200").all(fact.source.from, fact.source.to) as { id: number }[]).map((r) => r.id).reverse()
+      : [];
+    this.db
+      .prepare("INSERT OR IGNORE INTO facts (id, kind, text, importance, created, updated, expires, source_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(fact.id, fact.kind, fact.text, Math.round(fact.importance), fact.created, fact.created, fact.expires ?? null, sources.length ? JSON.stringify(sources) : null);
+  }
+
+  /** `newer` replaces `older` (a correction, a change): the old one stays as history. */
+  supersedeFact(older: number, newer: number): void {
+    this.db.prepare("UPDATE facts SET superseded_by = ?, updated = ? WHERE id = ? AND superseded_by IS NULL").run(newer, new Date().toISOString(), older);
+  }
+
+  /** Deletes a fact with its vectors and index entry; true when it existed. */
+  deleteFact(id: number): boolean {
+    this.dropVectors("fact", [id]);
+    return this.db.prepare("DELETE FROM facts WHERE id = ?").run(id).changes > 0;
+  }
+
+  /** The active facts (not superseded, notes not expired), oldest first. */
+  listFacts(now = new Date().toISOString()): FactRow[] {
+    return (this.db.prepare(`SELECT * FROM facts WHERE ${ACTIVE_FACT} ORDER BY id`).all(now) as unknown as FactDbRow[]).map(toFact);
+  }
+
+  /** Imports the facts kept in memory.json before memory.db had them, once; returns how many. */
+  importFacts(facts: FactInput[]): number {
+    if (this.db.prepare("SELECT value FROM meta WHERE key = 'facts_import'").get()) return 0;
+    this.db.exec("BEGIN");
+    try {
+      for (const f of facts) this.putFact(f);
+      this.db.prepare("INSERT INTO meta (key, value) VALUES ('facts_import', ?)").run(new Date().toISOString());
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+    return facts.length;
+  }
+
+  /** Removes the vectors of some owners, in every model's table. */
+  private dropVectors(kind: EmbedItem["kind"], ids: number[]): void {
+    if (!ids.length) return;
+    const marks = ids.map(() => "?").join(",");
+    const rows = this.db.prepare(`SELECT id FROM embeddings WHERE owner_kind = ? AND owner_id IN (${marks})`).all(kind, ...ids) as { id: number }[];
+    if (!rows.length) return;
+    if (this.vectors) {
+      const tables = this.db.prepare("SELECT name FROM vec_tables").all() as { name: string }[];
+      for (const t of tables) for (const r of rows) this.db.prepare(`DELETE FROM ${t.name} WHERE rowid = ?`).run(BigInt(r.id));
+    }
+    this.db.prepare(`DELETE FROM embeddings WHERE id IN (${rows.map(() => "?").join(",")})`).run(...rows.map((r) => r.id));
+  }
+
   // ---------------- embeddings ----------------
 
   /** The vec0 table of a model, created on first use (the dimension comes with the first vectors). */
@@ -289,6 +399,15 @@ export class MemoryDb {
       return { kind: "message", id: r.id, text: `${before}${label(r.speaker, r.name)}: ${r.text}` };
     });
     if (items.length < limit) {
+      const facts = this.db
+        .prepare(
+          `SELECT f.id, f.text FROM facts f LEFT JOIN embeddings e ON e.owner_kind = 'fact' AND e.owner_id = f.id AND e.model = ?
+           WHERE e.id IS NULL AND f.superseded_by IS NULL AND f.expires IS NULL ORDER BY f.id DESC LIMIT ?`,
+        )
+        .all(model, limit - items.length) as { id: number; text: string }[];
+      for (const f of facts) items.push({ kind: "fact", id: f.id, text: f.text });
+    }
+    if (items.length < limit) {
       const summaries = this.db
         .prepare(
           `SELECT s.id, s.text FROM summaries s LEFT JOIN embeddings e ON e.owner_kind = 'summary' AND e.owner_id = s.id AND e.model = ?
@@ -308,6 +427,7 @@ export class MemoryDb {
     const owner = {
       message: this.db.prepare("SELECT ts AS ts, ts AS te FROM messages WHERE id = ?"),
       summary: this.db.prepare("SELECT start AS ts, end AS te FROM summaries WHERE id = ?"),
+      fact: this.db.prepare("SELECT created AS ts, created AS te FROM facts WHERE id = ?"),
     };
     const insertRow = this.db.prepare("INSERT OR IGNORE INTO embeddings (owner_kind, owner_id, model, dim, created) VALUES (?, ?, ?, ?, ?)");
     const insertVec = this.db.prepare(`INSERT INTO ${table} (rowid, embedding, kind, ts, te) VALUES (?, ?, ?, ?, ?)`);
@@ -332,8 +452,15 @@ export class MemoryDb {
   /** How much of the memory has vectors of `model`. */
   embeddingCoverage(model: string): { done: number; total: number } {
     const n = (sql: string, ...params: SQLInputValue[]) => (this.db.prepare(sql).get(...params) as { n: number }).n;
-    const total = n("SELECT COUNT(*) AS n FROM messages WHERE length(text) >= ?", MIN_EMBED_CHARS) + n("SELECT COUNT(*) AS n FROM summaries");
-    return { done: n("SELECT COUNT(*) AS n FROM embeddings WHERE model = ?", model), total };
+    const total =
+      n("SELECT COUNT(*) AS n FROM messages WHERE length(text) >= ?", MIN_EMBED_CHARS) +
+      n("SELECT COUNT(*) AS n FROM summaries") +
+      n("SELECT COUNT(*) AS n FROM facts WHERE superseded_by IS NULL AND expires IS NULL");
+    const done = n(
+      `SELECT COUNT(*) AS n FROM embeddings e WHERE e.model = ? AND (e.owner_kind <> 'fact' OR EXISTS (SELECT 1 FROM facts f WHERE f.id = e.owner_id AND f.superseded_by IS NULL AND f.expires IS NULL))`,
+      model,
+    );
+    return { done, total };
   }
 
   /** Once a new model covers everything, the old models' vectors go (they can't be searched with its queries). */
@@ -363,13 +490,20 @@ export class MemoryDb {
 
     const lists: string[][] = [];
     const words = queryTerms(request.query);
-    if (fts && kind !== "summary") {
+    if (fts && (kind === "all" || kind === "conversation")) {
       const rows = this.db
         .prepare("SELECT m.id, m.text FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid WHERE messages_fts MATCH ? AND m.ts >= ? AND m.ts < ? ORDER BY bm25(messages_fts) LIMIT ?")
         .all(fts, range.from, until, FTS_ROWS) as { id: number; text: string }[];
       lists.push(rows.filter((r) => enoughMatched(r.text, words)).slice(0, CANDIDATES).map((r) => `message:${r.id}`));
     }
-    if (fts && kind !== "conversation") {
+    const nowIso = new Date(options.now ?? Date.now()).toISOString();
+    if (fts && (kind === "all" || kind === "fact")) {
+      const rows = this.db
+        .prepare(`SELECT f.id, f.text FROM facts_fts JOIN facts f ON f.id = facts_fts.rowid WHERE facts_fts MATCH ? AND f.created >= ? AND f.created < ? AND f.${ACTIVE_FACT} ORDER BY bm25(facts_fts) LIMIT ?`)
+        .all(fts, range.from, until, nowIso, FTS_ROWS) as { id: number; text: string }[];
+      lists.push(rows.filter((r) => enoughMatched(r.text, words)).slice(0, CANDIDATES).map((r) => `fact:${r.id}`));
+    }
+    if (fts && (kind === "all" || kind === "summary")) {
       const rows = this.db
         .prepare("SELECT s.id, s.text FROM summaries_fts JOIN summaries s ON s.id = summaries_fts.rowid WHERE summaries_fts MATCH ? AND s.end >= ? AND s.start < ? ORDER BY bm25(summaries_fts) LIMIT ?")
         .all(fts, range.from, until, FTS_ROWS) as { id: number; text: string }[];
@@ -378,14 +512,19 @@ export class MemoryDb {
     let semantic = false;
     if (query && table) {
       semantic = true;
-      const filter = kind === "conversation" ? " AND v.kind = 'message'" : kind === "summary" ? " AND v.kind = 'summary'" : "";
+      const filter = kind === "conversation" ? " AND v.kind = 'message'" : kind === "summary" ? " AND v.kind = 'summary'" : kind === "fact" ? " AND v.kind = 'fact'" : "";
       const rows = this.db
         .prepare(
           `SELECT e.owner_kind AS kind, e.owner_id AS id, v.distance FROM ${table} v JOIN embeddings e ON e.id = v.rowid
            WHERE v.embedding MATCH ? AND k = ? AND v.te >= ? AND v.ts < ?${filter} ORDER BY v.distance`,
         )
         .all(vectorBytes(query.vector), CANDIDATES, range.from, until) as { kind: string; id: number; distance: number }[];
-      const similar = keepSimilar(rows.map((r) => ({ ...r, similarity: 1 - r.distance })), query.model);
+      // Superseded facts keep their vectors until re-indexing: they never come back as hits
+      const active = new Set((this.db.prepare(`SELECT id FROM facts WHERE ${ACTIVE_FACT}`).all(nowIso) as { id: number }[]).map((r) => r.id));
+      const similar = keepSimilar(
+        rows.filter((r) => r.kind !== "fact" || active.has(r.id)).map((r) => ({ ...r, similarity: 1 - r.distance })),
+        query.model,
+      );
       lists.push(similar.map((r) => `${r.kind}:${r.id}`));
     }
 
@@ -396,12 +535,16 @@ export class MemoryDb {
     const weights = options.weights ?? DEFAULT_WEIGHTS;
     const message = this.db.prepare("SELECT * FROM messages WHERE id = ?");
     const summary = this.db.prepare("SELECT * FROM summaries WHERE id = ?");
+    const fact = this.db.prepare("SELECT * FROM facts WHERE id = ?");
     const hits: MemoryHit[] = [];
     for (const [key, value] of fused) {
       const [ownerKind, idText] = key.split(":");
       const id = Number(idText);
-      const score = (at: string) => memoryScore({ relevance: value / best, hoursAgo: (now - Date.parse(at)) / 3_600_000 }, weights);
-      if (ownerKind === "message") {
+      const score = (at: string, importance = 0) => memoryScore({ relevance: value / best, hoursAgo: (now - Date.parse(at)) / 3_600_000, importance }, weights);
+      if (ownerKind === "fact") {
+        const row = fact.get(id) as FactDbRow | undefined;
+        if (row) hits.push({ kind: "fact", at: row.created, fact: toFact(row), score: score(row.created, row.importance / 10) });
+      } else if (ownerKind === "message") {
         const row = message.get(id) as MessageRow | undefined;
         if (row) hits.push({ kind: "conversation", at: row.ts, lines: this.around(row), score: score(row.ts) });
       } else {
@@ -417,12 +560,17 @@ export class MemoryDb {
   private list(from: string, until: string, kind: SearchRequest["kind"], limit: number): SearchResult {
     const hits: MemoryHit[] = [];
     let total = 0;
-    if (kind !== "conversation") {
+    if (kind === "fact") {
+      const rows = this.db.prepare(`SELECT * FROM facts WHERE created >= ? AND created < ? AND ${ACTIVE_FACT} ORDER BY importance DESC, id DESC`).all(from, until, new Date().toISOString()) as unknown as FactDbRow[];
+      const kept = rows.slice(0, limit).map((r): MemoryHit => ({ kind: "fact", at: r.created, fact: toFact(r), score: 1 }));
+      return { hits: kept, more: Math.max(0, rows.length - kept.length) };
+    }
+    if (kind === "all" || kind === "summary") {
       const rows = this.db.prepare("SELECT * FROM summaries WHERE end >= ? AND start < ? ORDER BY start").all(from, until) as unknown as SummaryRow[];
       total += rows.length;
       for (const r of rows) hits.push({ kind: r.period as SummaryKind, at: r.start, end: r.end, text: r.text, score: 1 });
     }
-    if (kind !== "summary") {
+    if (kind === "all" || kind === "conversation") {
       const n = (this.db.prepare("SELECT COUNT(*) AS n FROM messages WHERE ts >= ? AND ts < ?").get(from, until) as { n: number }).n;
       total += Math.ceil(n / 3);
       const rows = this.db.prepare("SELECT * FROM messages WHERE ts >= ? AND ts < ? ORDER BY id LIMIT ?").all(from, until, limit * 6) as unknown as MessageRow[];
@@ -466,8 +614,10 @@ export class MemoryDb {
   clear(): void {
     const tables = this.db.prepare("SELECT name FROM vec_tables").all() as { name: string }[];
     for (const t of tables) this.db.exec(`DROP TABLE IF EXISTS ${t.name}`);
-    this.db.exec("DELETE FROM vec_tables; DELETE FROM embeddings; DELETE FROM messages; DELETE FROM summaries;");
-    this.db.exec("INSERT INTO messages_fts(messages_fts) VALUES ('rebuild'); INSERT INTO summaries_fts(summaries_fts) VALUES ('rebuild');");
+    this.db.exec("DELETE FROM vec_tables; DELETE FROM embeddings; DELETE FROM messages; DELETE FROM summaries; DELETE FROM facts;");
+    this.db.exec(
+      "INSERT INTO messages_fts(messages_fts) VALUES ('rebuild'); INSERT INTO summaries_fts(summaries_fts) VALUES ('rebuild'); INSERT INTO facts_fts(facts_fts) VALUES ('rebuild');",
+    );
     this.last = null;
     this.db.exec("VACUUM");
     this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
