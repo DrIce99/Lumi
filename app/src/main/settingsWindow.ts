@@ -3,7 +3,7 @@ import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from "electron";
 import { join } from "node:path";
 import { IPC } from "../shared/ipc";
 import { isProvider, type ProviderId } from "../shared/providers";
-import { PROFILES, VISION_PROVIDERS, type ConnectionReport, type Profile, type SettingsSnapshot, type SidecarStatus, type VisionProvider } from "../shared/types";
+import { PROFILES, VISION_PROVIDERS, type ConnectionReport, type ForgetCandidate, type Profile, type SettingsSnapshot, type SidecarStatus, type VisionProvider } from "../shared/types";
 import { log } from "./log";
 
 export interface SettingsBackend {
@@ -21,6 +21,13 @@ export interface SettingsBackend {
   setDiscordToken(token: string): SettingsSnapshot;
   openDataFolder(): void;
   restartSidecar(): Promise<SettingsSnapshot>;
+  findForget(query: string): Promise<ForgetCandidate[]>;
+  forgetItems(selection: { messages: number[]; summaries: number[]; facts: number[] }): Promise<{ ok: boolean; message: string; snapshot: SettingsSnapshot }>;
+}
+
+/** Only lists of positive integers get through to the forget cascade. */
+function idList(value: unknown): number[] {
+  return Array.isArray(value) ? value.filter((n): n is number => Number.isInteger(n) && n > 0).slice(0, 5000) : [];
 }
 
 export class SettingsWindow {
@@ -65,6 +72,11 @@ export class SettingsWindow {
     handle(IPC.settingsDiscordToken, (token) => backend.setDiscordToken(String(token ?? "")));
     handle(IPC.settingsOpenData, () => backend.openDataFolder());
     handle(IPC.settingsRestartSidecar, () => backend.restartSidecar());
+    handle(IPC.settingsFindForget, (query) => backend.findForget(typeof query === "string" ? query.slice(0, 300) : ""));
+    handle(IPC.settingsForgetItems, (selection) => {
+      const s = (selection ?? {}) as Record<string, unknown>;
+      return backend.forgetItems({ messages: idList(s.messages), summaries: idList(s.summaries), facts: idList(s.facts) });
+    });
   }
 
   isOpen(): boolean {
@@ -107,6 +119,21 @@ export class SettingsWindow {
       this.win = null;
     });
     void this.win.loadURL(tab ? `${this.url}#${tab}` : this.url);
+  }
+
+  /**
+   * Opens the Memory tab on the forget list for `query` (Lumi was asked to
+   * forget something): the user chooses and confirms there.
+   */
+  openForget(query: string): void {
+    const send = () => this.win?.webContents.send(IPC.settingsForgetQuery, query);
+    if (this.win) {
+      this.open();
+      send();
+      return;
+    }
+    this.open("memory");
+    this.win!.webContents.once("did-finish-load", () => setTimeout(send, 300));
   }
 
   /** The window, for capturing it in debug mode. */

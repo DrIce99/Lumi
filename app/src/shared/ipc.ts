@@ -47,6 +47,8 @@ export const IPC = {
   settingsDiscordToken: "settings:discord-token",
   settingsOpenData: "settings:open-data",
   settingsRestartSidecar: "settings:restart-sidecar",
+  settingsFindForget: "settings:find-forget",
+  settingsForgetItems: "settings:forget-items",
   // command bar
   barOpen: "bar:open",
   barClose: "bar:close",
@@ -56,4 +58,5 @@ export const IPC = {
   barTyping: "bar:typing",
   // main -> settings window
   settingsStatus: "settings:status",
+  settingsForgetQuery: "settings:forget-query",
 } as const;

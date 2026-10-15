@@ -360,7 +360,7 @@ Tool esposti al modello:
 - `look_at({ text | region })`
 - `look_at_screen({ focus? })` (passa dal modello di [visione locale](#visione-locale))
 - `remember({ fact, kind })`
-- `forget({ id })`: cancella un fatto o annulla un promemoria (previsto: `forget({ query })`, che avvia il flusso di oblio con conferma)
+- `forget({ id })`: cancella un fatto o annulla un promemoria; `forget({ query })`: apre l'elenco dell'oblio (vedi [Oblio](#oblio-solo-su-richiesta)), dove decidi e confermi tu
 - `search_memory({ query?, from?, to?, kind? })`: cerca nel passato per parole e/o date (vedi [Memoria a lungo termine](#memoria-a-lungo-termine))
 - `set_reminder({ when, text })`
 - `name_voice({ voice, name })`
@@ -412,7 +412,7 @@ look_at_screen({ question })
 
 ## Memoria a lungo termine
 
-> In costruzione (fase 10). **Fatto**: `memory.db` con il log grezzo di ogni frase, gli episodi e i giorni del diario, l'indice full-text (FTS5) e `search_memory` con i filtri per data e tipo; al primo avvio importa `archive.jsonl` (poi rinominato `archive.jsonl.imported`), episodi e diario. Embedding con Ollama (`bge-m3`) in una coda in background, vettori in sqlite-vec e ricerca ibrida (parole + significato, RRF, punteggio con recenza). I fatti con importanza, fonti e sostituzioni (`superseded_by`) nel database, importati da `memory.json`; nel prompt solo quelli importanti e quelli pertinenti. **Ancora da fare**: riassunti settimanali e mensili, oblio a cascata, backup, embedding nel sidecar per chi non ha Ollama.
+> In costruzione (fase 10). **Fatto**: `memory.db` con il log grezzo di ogni frase, gli episodi e i giorni del diario, l'indice full-text (FTS5) e `search_memory` con i filtri per data e tipo; al primo avvio importa `archive.jsonl` (poi rinominato `archive.jsonl.imported`), episodi e diario. Embedding con Ollama (`bge-m3`) in una coda in background, vettori in sqlite-vec e ricerca ibrida (parole + significato, RRF, punteggio con recenza). I fatti con importanza, fonti e sostituzioni (`superseded_by`) nel database, importati da `memory.json`; nel prompt solo quelli importanti e quelli pertinenti. Riassunti settimanali e mensili, backup giornalieri e oblio a cascata con conferma. **Ancora da fare**: embedding nel sidecar per chi non ha Ollama.
 >
 > Il database usa `node:sqlite`, incluso nel Node di Electron (nessun modulo nativo da ricompilare), e gira in un worker thread: le query SQLite sono sincrone e non devono mai fermare il thread principale, dove vive l'hook del mouse.
 
@@ -456,7 +456,7 @@ summaries(id, period, start, end, text, source_ids)               -- livello 4
 2. **I fatti** (fatto, passo 10.3): quando le righe più vecchie diventano un episodio, il modello dei momenti autonomi estrae i fatti stabili con la loro **importanza** da 1 a 10 (9–10 chi sei e le persone più vicine, 6–8 progetti e preferenze durature, 3–5 piccoli dettagli); lo stesso fa Lumi con il tool `remember`. Ogni fatto salva in `source_ids` le righe del log da cui viene. Se un fatto nuovo **contraddice** uno esistente ("mi sono trasferito a…"), il modello indica l'id di quello vecchio (`replaces`) e il vecchio viene marcato `superseded_by` invece di aggiungerne un secondo in contrasto: la storia resta nel database, ma vale l'ultimo e quello vecchio non torna più nelle ricerche. Per accorgersene, chi scrive l'episodio vede i fatti importanti e quelli simili alla conversazione, con i loro id. I fatti hanno un vettore come le frasi e partecipano alla ricerca ibrida, con l'importanza nel punteggio.
    - **Nel prompt** (`<memory>`, circa 3.000 caratteri): le note di oggi, i fatti con importanza ≥ 8, quelli collegati al messaggio (dalla stessa ricerca che riempie `<recalled>`) e quelli degli ultimi 3 giorni; il prompt dice quanti ne restano fuori, e `search_memory` con `kind: "fact"` li trova.
    - **Import**: al primo avvio i fatti di `memory.json` passano nel database con i loro id (`f12` resta `f12`) e l'importanza predefinita del loro tipo; da lì in poi vale il database, e `memory.json` ne tiene una copia.
-3. **Riflessione notturna** (vedi [Abitudini](#abitudini-e-proattività)): riassunto del giorno, poi della settimana la domenica e del mese il primo del mese.
+3. **Settimane e mesi** (fatto, passo 10.4): quando una settimana (da lunedì a domenica) o un mese è finito, il modello dei momenti autonomi ne scrive il riassunto a partire dai giorni del diario (per un mese ogni giorno è accorciato, così ci sta anche nei modelli piccoli). Succede insieme al diario, al massimo quattro periodi alla volta, così una storia lunga si recupera un po' per volta. Senza un modello disponibile si riprova più tardi. I riassunti hanno un vettore e si trovano come gli altri; `search_memory` su un periodo ("cosa abbiamo fatto a marzo?") li mette per primi. La riflessione notturna delle [abitudini](#abitudini-e-proattività) (fase 11) lavorerà sopra a questi.
 
 ### Ricerca
 
@@ -487,13 +487,18 @@ Come funziona (fatto, passo 10.2):
 
 Quando dici "dimentica X", non basta cancellare la riga originale: X è anche nel suo embedding, nei fatti estratti e nei riassunti che lo citano. Per questo fatti e riassunti salvano `source_ids`.
 
-1. Lumi cerca X in **tutti i livelli** (ricerca ibrida, con soglia larga).
-2. Ti **mostra cosa ha trovato** (in un fumetto o nella barra) e chiede conferma. Puoi escludere singole voci.
-3. Cancella le righe confermate, i loro vettori e le voci FTS, e i fatti che derivano **solo** da quelle righe.
-4. **Rigenera** i riassunti e i fatti che le citavano insieme ad altre fonti.
-5. Esegue `VACUUM` del database, così i dati cancellati non restano nel file.
+Fatto (passo 10.5). Si avvia in due modi: dicendo a Lumi "dimentica quello che ti ho detto su Marco" (il tool `forget({ query })` apre le impostazioni sulla scheda Memoria con la ricerca già fatta) oppure da Impostazioni → Memoria → **Dimentica qualcosa**.
 
-Un backup automatico giornaliero (`memory.db` + rotazione su 7 giorni) protegge dalle perdite accidentali. Anche i backup devono rispettare l'oblio: dopo un oblio si rigenerano.
+1. Lumi cerca X in **tutti i livelli** (frasi, riassunti, fatti, anche quelli già sostituiti), per parole e per significato, con una soglia più larga della ricerca normale.
+2. Ti **mostra cosa ha trovato**, con data e tipo. Le voci più pertinenti (metà delle parole, o molto vicine per significato) sono già spuntate; le altre restano da spuntare a mano, così una ricerca larga non cancella niente per sbaglio. Un ultimo "Continuo?" prima di procedere.
+3. Cancella ciò che hai confermato, con i vettori e le voci FTS. Vanno anche i fatti che derivano **solo** da quelle frasi, e i vettori delle frasi successive (ogni frase è indicizzata insieme alla precedente come contesto, quindi il suo vettore "conteneva" anche quella cancellata): la coda li ricalcola senza.
+4. **Riscrive** i riassunti che le citavano (episodio, giorno, poi la settimana e il mese che li contengono) a partire da ciò che resta. Se non resta niente, o non c'è un modello per riscriverli, quei riassunti vengono cancellati: un riassunto che dice ancora la cosa non può restare. Anche `memory.json` (finestra recente, fatti, episodi, diario) viene aggiornato.
+5. Rende la cancellazione definitiva nel file: unisce gli indici FTS, riscrive le tabelle dei vettori (sqlite-vec segna i vettori cancellati come non validi ma ne lascia i byte), poi `VACUUM` e checkpoint del WAL. Un test controlla sui byte del file che né le parole né il vettore restino.
+6. Cancella il vecchio `archive.jsonl.imported` e **rifà i backup** da zero.
+
+Lumi da sola non può cancellare frasi o riassunti: può solo aprire l'elenco. Con `forget({ id })` cancella un singolo fatto quando glielo chiedi (la conversazione da cui veniva resta).
+
+**Backup** (fatto, passo 10.4): una copia di `memory.db` al giorno in `%APPDATA%\Lumi\backups` (`memory-AAAA-MM-GG.db`, presa con `VACUUM INTO`, sicura anche mentre Lumi la usa), tenute le ultime 7 (Impostazioni → Memoria, 0 = nessun backup). Per ripristinarne una: chiudi Lumi e copiala al posto di `memory.db`. Dopo un oblio o "Dimentica tutto" i backup vecchi vengono cancellati e ne resta uno nuovo, perché conterrebbero ancora ciò che è stato dimenticato: in quel momento si perde la possibilità di tornare indietro, ed è voluto.
 
 ---
 
@@ -849,8 +854,8 @@ lumi/
 │  │  │  │  ├─ embed.ts        embedding da Ollama
 │  │  │  │  ├─ indexer.ts      la coda degli embedding, in background
 │  │  │  │  ├─ search.ts       termini, query FTS, date, RRF, punteggio, soglie (puro, testato)
-│  │  │  │  ├─ summaries.ts    (previsto) riassunti giornalieri/settimanali/mensili
-│  │  │  │  └─ forget.ts       (previsto) oblio a cascata con conferma
+│  │  │  │  ├─ periods.ts      settimane, mesi, nomi dei backup (puro, testato)
+│  │  │  │  └─ backup.ts       backup giornalieri con rotazione
 │  │  │  ├─ habits/            (previsto, fase 11)
 │  │  │  │  ├─ events.ts       log degli eventi
 │  │  │  │  ├─ patterns.ts     ricorrenze e sequenze (puro, testato)
@@ -956,7 +961,7 @@ Le sezioni `memory`, `habits`, `movement`, `phone` e `pc` sono previste e arriva
 - **OCR, UIA e catture restano sul PC.** Al servizio di IA arriva solo il riassunto testuale breve del contesto percettivo; lo screenshot di `look_at_screen` esce solo senza visione locale e se `sendScreenshots` lo consente. Con Ollama non esce nulla.
 - **Con la [visione locale](#visione-locale)** anche le immagini restano sul PC: le analizza il modello locale e al servizio remoto arriva solo testo (il riassunto percettivo e le descrizioni prodotte localmente).
 - `sendScreenshots`: `never` (predefinito) | `ask` (Lumi chiede prima, con un fumetto) | `always`. Vale solo per l'invio di immagini a un servizio online quando manca la visione locale.
-- **Memoria ed eventi** (previsti, `memory.db`) restano sul PC. Al cervello arrivano solo i ricordi pertinenti alla domanda (al massimo `promptBudgetTokens`). Estrazione dei fatti e riflessione notturna usano per impostazione predefinita un modello locale, così l'intero storico non viene mai inviato a un servizio remoto. L'oblio cancella anche vettori, fatti, riassunti e backup derivati.
+- **Memoria** (`memory.db`) ed **eventi** (previsti) restano sul PC. Al cervello arrivano solo i ricordi pertinenti alla domanda (al massimo `promptBudgetTokens`). Estrazione dei fatti e riflessione notturna usano per impostazione predefinita un modello locale, così l'intero storico non viene mai inviato a un servizio remoto. L'oblio cancella anche vettori, fatti, riassunti e backup derivati.
 - **Il nome viene riconosciuto in locale** (con openWakeWord e il modello `lumi`): finché non chiami Lumi, l'audio del microfono non viene trascritto, né salvato, né inviato. Senza il modello addestrato il nome si cerca nelle trascrizioni locali, quindi il parlato viene trascritto (sul PC, o con Groq se è il motore scelto).
 - La percezione si **ferma da sola** nelle app indicate in `pauseInApps`, nelle finestre in incognito e con lo schermo bloccato.
 - Sui piani gratuiti alcuni servizi (per esempio Gemini) possono usare i dati inviati per migliorare i propri modelli: verificane le condizioni prima di usarli con dati di lavoro.
@@ -965,7 +970,7 @@ Le sezioni `memory`, `habits`, `movement`, `phone` e `pc` sono previste e arriva
 - **Ricerca sul web**: escono dal PC solo le parole cercate (verso Ollama, DuckDuckGo o il tuo SearXNG) e l'indirizzo delle pagine lette; mai la conversazione, la memoria o lo schermo. Le pagine si leggono solo da internet, mai dal PC stesso o dalla rete locale (indirizzi controllati anche dopo il DNS e a ogni redirect). Si spegne in Impostazioni → Cervello.
 - **Bot Discord**: il token è cifrato con DPAPI in `discord.bin` (oppure `DISCORD_BOT_TOKEN`). Il bot riceve solo la voce di Lumi da mandare nel canale.
 - **Impronte vocali**: sono dati biometrici, restano in `voices.json` sul PC e si cancellano una per una (o con "Dimentica tutto") dalla scheda Memoria.
-- **Archivio della conversazione** (`memory.db`): resta sul PC; "Dimentica tutto" lo svuota (righe, indice e `VACUUM`) e cancella anche il vecchio `archive.jsonl.imported`.
+- **Archivio della conversazione** (`memory.db` e i backup in `backups\`): resta sul PC. Puoi far dimenticare singole cose (Impostazioni → Memoria → Dimentica qualcosa) o tutto ("Dimentica tutto"); in entrambi i casi spariscono anche indici, vettori, riassunti e fatti derivati, il file viene compattato e i backup rifatti.
 - **Usare il PC** (previsto, spento di default): le azioni sono eseguite in locale; al servizio di IA arrivano solo i nomi di app, finestre e file che servono alla richiesta. Il registro `actions.jsonl` resta sul PC e non contiene il testo digitato.
 - **Telefono** (previsto): durante una chiamata l'audio va solo dal PC al telefono abbinato, cifrato (WebRTC, DTLS-SRTP) e sulla rete locale (o sulla tua VPN Tailscale); nessun server di terzi. Il server per il telefono è spento finché non abbini un dispositivo, accetta solo telefoni abbinati e i token si revocano dalle impostazioni. Il sidecar resta raggiungibile solo da `127.0.0.1`.
 - I log di debug non salvano né l'audio né il testo OCR, a meno che non si attivi `LUMI_DEBUG_PERCEPTION=1`.
@@ -995,8 +1000,9 @@ Ogni fase si chiude con `npm run check` e `pytest` verdi e una prova manuale.
     1. ~~`db.ts` + log + FTS + `search_memory` per date; import di `archive.jsonl`, episodi e diario~~ (fatto).
     2. ~~Coda di embedding (Ollama `bge-m3`, sqlite-vec con `loadExtension`) e ricerca ibrida con RRF e punteggio~~ (fatto; gli embedding nel sidecar su CPU, senza Ollama, restano da fare).
     3. ~~Fatti con importanza in `memory.db` (import dei fatti di `memory.json`), `superseded_by`~~ (fatto).
-    4. Riassunti gerarchici (giorno → settimana → mese) e backup giornalieri.
-    5. Oblio a cascata con conferma.
+    4. ~~Riassunti gerarchici (giorno → settimana → mese) e backup giornalieri~~ (fatto).
+    5. ~~Oblio a cascata con conferma~~ (fatto).
+    6. Embedding nel sidecar su CPU per chi non ha Ollama.
 11. **Abitudini** ([dettagli](#abitudini-e-proattività)): log degli eventi, `patterns.ts` con i test, riflessione notturna, trigger con limite e confidenza.
 12. ~~**Audiolibri**: `POST /tts/batch`, import di `.txt`/`.epub`, capitoli, voci diverse per i dialoghi, esportazione `.m4b`~~ (fatto).
 13. **Distribuzione**: installer Electron + sidecar impacchettato (embedded Python / `uv`) e download dei modelli al primo avvio.

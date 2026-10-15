@@ -7,6 +7,7 @@ import {
   PROFILES,
   type BrainChoice,
   type EngineStatus,
+  type ForgetCandidate,
   type Settings,
   type SettingsBridge,
   type SettingsSnapshot,
@@ -444,6 +445,7 @@ function fill(next: SettingsSnapshot): void {
   $<HTMLTextAreaElement>("pronunciations").value = s.tts.pronunciations.join("\n");
   $<HTMLSelectElement>("webProvider").value = s.web.provider;
   $("searxngUrl").value = s.web.searxngUrl;
+  $("backupDays").value = String(s.memory.backupDays);
   $<HTMLSelectElement>("embeddingProvider").value = s.memory.embeddings.provider;
   $("embeddingModel").value = s.memory.embeddings.model;
   $<HTMLElement>("memoryIndex").textContent = memoryIndexText(next.memoryIndex, s.memory.embeddings.model);
@@ -516,6 +518,7 @@ function collect(): Settings {
     web: { provider: $<HTMLSelectElement>("webProvider").value as Settings["web"]["provider"], searxngUrl: $("searxngUrl").value.trim() },
     memory: {
       ...s.memory,
+      backupDays: num("backupDays", s.memory.backupDays),
       embeddings: { provider: $<HTMLSelectElement>("embeddingProvider").value as Settings["memory"]["embeddings"]["provider"], model: $("embeddingModel").value.trim() },
     },
     discord: { enabled: $("discordEnabled").checked, userId: $("discordUserId").value.trim() },
@@ -693,6 +696,89 @@ clearButton.addEventListener("click", async () => {
   armedUntil = 0;
   fill(await api.clearMemory());
   setStatus("Memoria cancellata.");
+});
+
+// ---------------- forgetting ----------------
+
+const FORGET_TYPE: Record<ForgetCandidate["type"], string> = { message: "frase", summary: "riassunto", fact: "fatto" };
+const forgetList = $<HTMLUListElement>("forgetList");
+const forgetConfirm = $<HTMLButtonElement>("forgetConfirm");
+let forgetItems: ForgetCandidate[] = [];
+
+function selectedForget(): { messages: number[]; summaries: number[]; facts: number[] } {
+  const out = { messages: [] as number[], summaries: [] as number[], facts: [] as number[] };
+  forgetList.querySelectorAll<HTMLInputElement>("input[type=checkbox]:checked").forEach((box) => {
+    const item = forgetItems[Number(box.dataset.index)];
+    if (item) out[item.type === "message" ? "messages" : item.type === "summary" ? "summaries" : "facts"].push(item.id);
+  });
+  return out;
+}
+
+function updateForgetButton(): void {
+  const s = selectedForget();
+  const n = s.messages.length + s.summaries.length + s.facts.length;
+  forgetConfirm.disabled = n === 0;
+  forgetConfirm.textContent = n ? `Dimentica i ${n} selezionati` : "Dimentica i selezionati";
+}
+
+async function searchForget(query: string): Promise<void> {
+  $("forgetQuery").value = query;
+  $<HTMLElement>("forgetResult").textContent = "";
+  if (!query.trim()) return;
+  forgetList.hidden = false;
+  forgetList.replaceChildren(Object.assign(document.createElement("li"), { className: "empty", textContent: "Cerco…" }));
+  forgetItems = await api.findForget(query);
+  $<HTMLElement>("forgetActions").hidden = forgetItems.length === 0;
+  if (!forgetItems.length) {
+    forgetList.replaceChildren(Object.assign(document.createElement("li"), { className: "empty", textContent: "Lumi non ricorda niente su questo." }));
+    return;
+  }
+  forgetList.replaceChildren(
+    ...forgetItems.map((item, index) => {
+      const li = document.createElement("li");
+      const label = document.createElement("label");
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = item.strong;
+      box.dataset.index = String(index);
+      box.addEventListener("change", updateForgetButton);
+      const tag = Object.assign(document.createElement("span"), { className: "tag", textContent: `${FORGET_TYPE[item.type]} · ${item.label}` });
+      const when = Object.assign(document.createElement("span"), {
+        className: "when",
+        textContent: new Date(item.at).toLocaleString("it-IT", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }),
+      });
+      const text = Object.assign(document.createElement("span"), { className: "text", textContent: item.text.length > 400 ? `${item.text.slice(0, 399)}…` : item.text });
+      label.append(box, tag, when, text);
+      li.append(label);
+      return li;
+    }),
+  );
+  updateForgetButton();
+}
+
+$<HTMLButtonElement>("forgetSearch").addEventListener("click", () => void searchForget($("forgetQuery").value));
+$("forgetQuery").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") void searchForget($("forgetQuery").value);
+});
+forgetConfirm.addEventListener("click", async () => {
+  const selection = selectedForget();
+  const n = selection.messages.length + selection.summaries.length + selection.facts.length;
+  if (!n || !window.confirm(`Lumi dimenticherà ${n} ricordi e ciò che dipende solo da loro. Non si può annullare. Continuo?`)) return;
+  forgetConfirm.disabled = true;
+  forgetConfirm.textContent = "Sto dimenticando…";
+  const result = await api.forgetItems(selection);
+  fill(result.snapshot);
+  forgetItems = [];
+  forgetList.hidden = true;
+  $<HTMLElement>("forgetActions").hidden = !result.message;
+  forgetConfirm.hidden = true;
+  $<HTMLElement>("forgetResult").textContent = result.message;
+  setStatus(result.ok ? "Fatto: ricordi dimenticati." : "Non sono riuscito a dimenticare.");
+  window.setTimeout(() => (forgetConfirm.hidden = false), 100);
+});
+api.onForgetQuery((query) => {
+  showTab("memory");
+  void searchForget(query);
 });
 
 api.onStatus((status) => {

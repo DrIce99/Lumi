@@ -10,7 +10,7 @@
 // recency and importance. Synchronous: it runs in a worker thread
 // (worker.ts), never on the main thread, where the mouse hook lives.
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
-import { dateRange, DEFAULT_WEIGHTS, enoughMatched, ftsQuery, keepSimilar, memoryScore, queryTerms, rrf, type ScoreWeights } from "./search";
+import { dateRange, DEFAULT_WEIGHTS, enoughMatched, ftsQuery, keepSimilar, memoryScore, queryTerms, rrf, similarityFloor, type ScoreWeights } from "./search";
 
 export type Speaker = "user" | "lumi" | "other";
 
@@ -33,7 +33,45 @@ export interface StoredLine extends LineInput {
   channel?: string;
 }
 
-export type SummaryKind = "episode" | "day";
+/** Episodes and days come from the conversation; weeks and months from the days (10.4). */
+export type SummaryKind = "episode" | "day" | "week" | "month";
+
+export interface SummaryRecord {
+  id: number;
+  kind: SummaryKind;
+  start: string;
+  end: string;
+  text: string;
+}
+
+/** Something the user may choose to forget (forget cascade, 10.5). */
+export interface ForgetItem {
+  type: "message" | "summary" | "fact";
+  id: number;
+  at: string;
+  text: string;
+  /** Who said it, or the kind of summary or fact. */
+  label: string;
+  /** A clear match (half of the words, or close in meaning): selected by default. */
+  strong: boolean;
+}
+
+export interface ForgetSelection {
+  messages: number[];
+  summaries: number[];
+  facts: number[];
+}
+
+export interface ForgetResult {
+  /** The lines deleted, to take them out of memory.json's recent window too. */
+  messages: { ts: string; text: string }[];
+  /** Facts deleted: chosen, or derived only from deleted lines. */
+  facts: number[];
+  /** Summaries deleted (chosen). */
+  summaries: { kind: SummaryKind; start: string }[];
+  /** Summaries that cited deleted things: to rewrite from what is left, or delete. Finer first. */
+  stale: SummaryRecord[];
+}
 
 export interface SummaryInput {
   kind: SummaryKind;
@@ -117,7 +155,7 @@ const CONTEXT_LINES = 1;
 /** Lines shorter than this ("ok", "sì") get no vector: words find them. */
 export const MIN_EMBED_CHARS = 12;
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 const MIGRATIONS: string[] = [
   `CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -179,7 +217,15 @@ const MIGRATIONS: string[] = [
      INSERT INTO facts_fts(facts_fts, rowid, text) VALUES ('delete', old.id, old.text);
      INSERT INTO facts_fts(rowid, text) VALUES (new.id, new.text);
    END;`,
+  // v4: summaries can be rewritten (after a forget), and weeks and months join them
+  `CREATE TRIGGER summaries_au AFTER UPDATE OF text ON summaries BEGIN
+     INSERT INTO summaries_fts(summaries_fts, rowid, text) VALUES ('delete', old.id, old.text);
+     INSERT INTO summaries_fts(rowid, text) VALUES (new.id, new.text);
+   END;
+   CREATE INDEX summaries_period ON summaries(period, start);`,
 ];
+
+const SUMMARY_ORDER: Record<SummaryKind, number> = { episode: 0, day: 1, week: 2, month: 3 };
 
 /** Active facts: not superseded, not an expired note. */
 const ACTIVE_FACT = "superseded_by IS NULL AND (expires IS NULL OR expires > ?)";
@@ -304,6 +350,213 @@ export class MemoryDb {
   count(): { messages: number; summaries: number } {
     const n = (sql: string) => (this.db.prepare(sql).get() as { n: number }).n;
     return { messages: n("SELECT COUNT(*) AS n FROM messages"), summaries: n("SELECT COUNT(*) AS n FROM summaries") };
+  }
+
+  // ---------------- summaries ----------------
+
+  /** Summaries of some kinds starting in [from, to), oldest first. */
+  summariesIn(kinds: SummaryKind[], from: string, to: string): SummaryRecord[] {
+    if (!kinds.length) return [];
+    const rows = this.db
+      .prepare(`SELECT id, period AS kind, start, end, text FROM summaries WHERE period IN (${kinds.map(() => "?").join(",")}) AND start >= ? AND start < ? ORDER BY start, id`)
+      .all(...kinds, from, to) as unknown as SummaryRecord[];
+    return rows;
+  }
+
+  /** What the period writer needs: the days summarized, and the weeks and months already written ("week:<start>"). */
+  periodState(): { dayStarts: string[]; existing: string[] } {
+    const days = this.db.prepare("SELECT DISTINCT start FROM summaries WHERE period = 'day'").all() as { start: string }[];
+    const existing = this.db.prepare("SELECT period, start FROM summaries WHERE period IN ('week', 'month')").all() as { period: string; start: string }[];
+    return { dayStarts: days.map((d) => d.start), existing: existing.map((e) => `${e.period}:${e.start}`) };
+  }
+
+  /** Rewrites a summary (after a forget); its vectors go, the queue embeds it again. */
+  replaceSummary(id: number, text: string): void {
+    this.dropVectors("summary", [id]);
+    this.db.prepare("UPDATE summaries SET text = ? WHERE id = ?").run(text, id);
+  }
+
+  deleteSummary(id: number): void {
+    this.dropVectors("summary", [id]);
+    this.db.prepare("DELETE FROM summaries WHERE id = ?").run(id);
+  }
+
+  // ---------------- forgetting (10.5) ----------------
+
+  /**
+   * Everything that may be about `query`, in every layer, with a wide net
+   * (any word, a lower similarity floor): the user picks what goes.
+   * Superseded facts are included: they are history that still says it.
+   */
+  findForForget(query: string, vector: QueryVector | null, limit = 150): ForgetItem[] {
+    const fts = ftsQuery(query);
+    const words = queryTerms(query);
+    const items = new Map<string, ForgetItem>();
+    const add = (item: ForgetItem) => {
+      const key = `${item.type}:${item.id}`;
+      const old = items.get(key);
+      if (!old || (item.strong && !old.strong)) items.set(key, item);
+    };
+    const speaker = (r: MessageRow) => (r.speaker === "user" ? "tu" : r.speaker === "lumi" ? "Lumi" : r.name || "qualcun altro");
+    const message = (r: MessageRow, strong: boolean): ForgetItem => ({ type: "message", id: r.id, at: r.ts, text: r.text, label: speaker(r), strong });
+    const summary = (r: SummaryRow, strong: boolean): ForgetItem => ({ type: "summary", id: r.id, at: r.start, text: r.text, label: r.period, strong });
+    const fact = (r: FactDbRow & { superseded_by: number | null }, strong: boolean): ForgetItem => ({
+      type: "fact",
+      id: r.id,
+      at: r.created,
+      text: r.text,
+      label: r.superseded_by ? `${r.kind}, superato` : r.kind,
+      strong,
+    });
+    if (fts) {
+      for (const r of this.db.prepare("SELECT m.* FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid WHERE messages_fts MATCH ? ORDER BY bm25(messages_fts) LIMIT 300").all(fts) as unknown as MessageRow[]) {
+        add(message(r, enoughMatched(r.text, words)));
+      }
+      for (const r of this.db.prepare("SELECT s.* FROM summaries_fts JOIN summaries s ON s.id = summaries_fts.rowid WHERE summaries_fts MATCH ? LIMIT 100").all(fts) as unknown as SummaryRow[]) {
+        add(summary(r, enoughMatched(r.text, words)));
+      }
+      for (const r of this.db.prepare("SELECT f.* FROM facts_fts JOIN facts f ON f.id = facts_fts.rowid WHERE facts_fts MATCH ? LIMIT 100").all(fts) as unknown as (FactDbRow & { superseded_by: number | null })[]) {
+        add(fact(r, enoughMatched(r.text, words)));
+      }
+    }
+    const table = vector ? this.vecTable(vector.model) : null;
+    if (vector && table) {
+      const floor = similarityFloor(vector.model);
+      const rows = this.db
+        .prepare(`SELECT e.owner_kind AS kind, e.owner_id AS id, v.distance FROM ${table} v JOIN embeddings e ON e.id = v.rowid WHERE v.embedding MATCH ? AND k = 100 ORDER BY v.distance`)
+        .all(vectorBytes(vector.vector)) as { kind: string; id: number; distance: number }[];
+      for (const r of rows) {
+        const similarity = 1 - r.distance;
+        // A wider net than search: what is a little less close is shown too, not selected
+        if (similarity < floor - 0.05) continue;
+        const strong = similarity >= floor + 0.05;
+        if (r.kind === "message") {
+          const row = this.db.prepare("SELECT * FROM messages WHERE id = ?").get(r.id) as MessageRow | undefined;
+          if (row) add(message(row, strong));
+        } else if (r.kind === "summary") {
+          const row = this.db.prepare("SELECT * FROM summaries WHERE id = ?").get(r.id) as SummaryRow | undefined;
+          if (row) add(summary(row, strong));
+        } else {
+          const row = this.db.prepare("SELECT * FROM facts WHERE id = ?").get(r.id) as (FactDbRow & { superseded_by: number | null }) | undefined;
+          if (row) add(fact(row, strong));
+        }
+      }
+    }
+    return [...items.values()].sort((a, b) => Number(b.strong) - Number(a.strong) || b.at.localeCompare(a.at)).slice(0, limit);
+  }
+
+  /**
+   * Deletes what the user chose, with what depends only on it: the lines
+   * (and their vectors and index entries), the chosen summaries and facts,
+   * and the facts that came only from deleted lines. Summaries that cited
+   * deleted lines or days are returned as stale, to rewrite or delete.
+   * The file still holds the old pages until `compact()`.
+   */
+  forget(selection: ForgetSelection): ForgetResult {
+    const ids = (list: unknown) => (Array.isArray(list) ? [...new Set(list.filter((n): n is number => Number.isInteger(n) && n > 0))] : []);
+    const msgIds = ids(selection.messages);
+    const sumIds = ids(selection.summaries);
+    const factIds = new Set(ids(selection.facts));
+    const result: ForgetResult = { messages: [], facts: [], summaries: [], stale: [] };
+    this.db.exec("BEGIN");
+    try {
+      const deletedLines = new Set<number>();
+      for (const id of msgIds) {
+        const row = this.db.prepare("SELECT ts, text FROM messages WHERE id = ?").get(id) as { ts: string; text: string } | undefined;
+        if (!row) continue;
+        result.messages.push(row);
+        deletedLines.add(id);
+      }
+      // A line's vector was computed with the line before it as context: the next line's goes too, and is embedded again without it
+      const nextLines = [...deletedLines].flatMap((id) => {
+        const row = this.db.prepare("SELECT n.id FROM messages m JOIN messages n ON n.id = m.id + 1 AND n.session_id = m.session_id WHERE m.id = ?").get(id) as { id: number } | undefined;
+        return row && !deletedLines.has(row.id) ? [row.id] : [];
+      });
+      this.dropVectors("message", [...deletedLines, ...nextLines]);
+      for (const id of deletedLines) this.db.prepare("DELETE FROM messages WHERE id = ?").run(id);
+      // Facts: the chosen ones, and those derived only from deleted lines; the others lose those sources
+      const withSources = this.db.prepare("SELECT id, source_ids FROM facts WHERE source_ids IS NOT NULL").all() as { id: number; source_ids: string }[];
+      for (const f of withSources) {
+        let sources: number[] = [];
+        try {
+          sources = JSON.parse(f.source_ids) as number[];
+        } catch {
+          continue;
+        }
+        const left = sources.filter((s) => !deletedLines.has(s));
+        if (left.length === sources.length) continue;
+        if (!left.length) factIds.add(f.id);
+        else this.db.prepare("UPDATE facts SET source_ids = ? WHERE id = ?").run(JSON.stringify(left), f.id);
+      }
+      for (const id of factIds) {
+        this.dropVectors("fact", [id]);
+        if (this.db.prepare("DELETE FROM facts WHERE id = ?").run(id).changes) result.facts.push(id);
+      }
+      // Summaries: the chosen ones go
+      const gone: { kind: SummaryKind; start: string; end: string }[] = [];
+      for (const id of sumIds) {
+        const row = this.db.prepare("SELECT period AS kind, start, end FROM summaries WHERE id = ?").get(id) as { kind: SummaryKind; start: string; end: string } | undefined;
+        if (!row) continue;
+        this.deleteSummary(id);
+        result.summaries.push({ kind: row.kind, start: row.start });
+        gone.push(row);
+      }
+      // Stale: episodes and days that covered a deleted line, then weeks and months over a changed day
+      const stale = new Map<number, SummaryRecord>();
+      const covering = (kinds: SummaryKind[], at: string) =>
+        this.db
+          .prepare(`SELECT id, period AS kind, start, end, text FROM summaries WHERE period IN (${kinds.map(() => "?").join(",")}) AND start <= ? AND end >= ?`)
+          .all(...kinds, at, at) as unknown as SummaryRecord[];
+      for (const m of result.messages) for (const s of covering(["episode", "day"], m.ts)) stale.set(s.id, s);
+      const changedDays = [...gone.filter((g) => g.kind === "day" || g.kind === "episode").map((g) => g.start), ...[...stale.values()].map((s) => s.start)];
+      for (const at of changedDays) for (const s of covering(["week", "month"], at)) if (!sumIds.includes(s.id)) stale.set(s.id, s);
+      result.stale = [...stale.values()].sort((a, b) => SUMMARY_ORDER[a.kind] - SUMMARY_ORDER[b.kind] || a.start.localeCompare(b.start));
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+    // The session bookkeeping may point at a deleted line
+    const row = this.db.prepare("SELECT ts, session_id FROM messages ORDER BY id DESC LIMIT 1").get() as { ts: string; session_id: number } | undefined;
+    this.last = row ? { ts: row.ts, session: row.session_id } : null;
+    return result;
+  }
+
+  /**
+   * Makes deletions final in the file: FTS indexes merged (deleted terms
+   * leave their segments), every vector table copied anew (sqlite-vec only
+   * marks deleted vectors as invalid, their bytes stay in the chunk), then
+   * VACUUM and a WAL checkpoint, so nothing deleted stays on disk.
+   */
+  compact(): void {
+    this.db.exec(
+      "INSERT INTO messages_fts(messages_fts) VALUES ('optimize'); INSERT INTO summaries_fts(summaries_fts) VALUES ('optimize'); INSERT INTO facts_fts(facts_fts) VALUES ('optimize');",
+    );
+    if (this.vectors) {
+      const tables = this.db.prepare("SELECT model, dim, name FROM vec_tables").all() as { model: string; dim: number; name: string }[];
+      for (const t of tables) {
+        let name = `${t.name.replace(/_r\d+$/, "")}_r${Date.now()}`;
+        while (this.db.prepare("SELECT 1 FROM sqlite_master WHERE name = ?").get(name)) name = `${name}x`;
+        this.db.exec("BEGIN");
+        try {
+          this.db.exec(`CREATE VIRTUAL TABLE ${name} USING vec0(embedding float[${Math.round(t.dim)}] distance_metric=cosine, kind text, ts text, te text)`);
+          this.db.exec(`INSERT INTO ${name}(rowid, embedding, kind, ts, te) SELECT rowid, embedding, kind, ts, te FROM ${t.name}`);
+          this.db.exec(`DROP TABLE ${t.name}`);
+          this.db.prepare("UPDATE vec_tables SET name = ? WHERE model = ?").run(name, t.model);
+          this.db.exec("COMMIT");
+        } catch (err) {
+          this.db.exec("ROLLBACK");
+          throw err;
+        }
+      }
+    }
+    this.db.exec("VACUUM");
+    this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  }
+
+  /** A consistent copy of the whole database in `file` (backups); the file must not exist. */
+  backupTo(file: string): void {
+    this.db.prepare("VACUUM INTO ?").run(file);
   }
 
   // ---------------- facts ----------------

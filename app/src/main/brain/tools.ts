@@ -96,11 +96,13 @@ export const TOOLS: ToolSpec[] = [
   {
     name: "forget",
     description:
-      "Delete a memory by id (for example 'f12') when it is wrong or outdated, or when the user asks you to forget it; also cancels a pending reminder (for example 'r7').",
+      "With id: delete one fact (for example 'f12') the user asks you to forget, or cancel a pending reminder (for example 'r7'). With query: the user wants you to forget something said in past conversations (\"dimentica quello che ti ho detto su Marco\"): a list of what you remember about it opens for them, and they choose and confirm there; nothing is deleted until they do.",
     parameters: {
       type: "object",
-      properties: { id: { type: "string", description: "Id of the memory, as shown in <memory>, or of the reminder, as shown in <pending_reminders>." } },
-      required: ["id"],
+      properties: {
+        id: { type: "string", description: "Id of the fact, as shown in <memory>, or of the reminder, as shown in <pending_reminders>." },
+        query: { type: "string", description: "What to forget, in a few words, e.g. 'Marco', 'il trasloco', 'la password del wifi'." },
+      },
       additionalProperties: false,
     },
   },
@@ -195,7 +197,7 @@ export type ToolCall =
   | { name: "look_at"; text?: string; region?: LookRegion }
   | { name: "look_at_screen"; focus?: string }
   | { name: "remember"; fact: string; kind: FactKind; importance?: number; replaces?: string }
-  | { name: "forget"; id: string }
+  | { name: "forget"; id?: string; query?: string }
   | { name: "search_memory"; query?: string; from?: string; to?: string; kind?: MemoryKind }
   | { name: "set_reminder"; due: Date; text: string }
   | { name: "web_search"; query: string }
@@ -272,7 +274,9 @@ export function parseToolCall(name: string, input: unknown, now = new Date()): T
     }
     case "forget": {
       const id = text(o.id, 20);
-      return id ? { name, id } : null;
+      if (id) return { name, id };
+      const query = text(o.query ?? o.text, 300);
+      return query ? { name, query } : null;
     }
     // "recall" was the tool's name before memory.db: models may still call it
     case "recall":

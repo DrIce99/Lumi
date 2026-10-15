@@ -10,7 +10,7 @@ import { guessEmotion, type Emotion } from "../../shared/emotions";
 import { PROVIDERS } from "../../shared/providers";
 import { FACT_KINDS, type FactKind, type Settings } from "../../shared/types";
 import { log } from "../log";
-import { describeHit, factFromRow, importanceOf, RECENT_LINES, speakerLabel, type ConversationEntry, type Memory } from "./memory";
+import { describeHit, factFromRow, importanceOf, RECENT_LINES, speakerLabel, type ConversationEntry, type Memory, type RewriteMaterial, type SummaryRecord } from "./memory";
 import { buildContext, buildSystemPrompt, messageForHistory, type Situation, type Trigger } from "./prompt";
 import { ProviderError, type ChatProvider, type LiveSay, type MomentSession, type ToolCallOut, type ToolResultIn } from "./providers/types";
 import { parseToolCall, type LookRegion, type ToolCall } from "./tools";
@@ -61,6 +61,8 @@ export interface BrainHost {
   backOff(minutes: number): void;
   /** Names a recognized voice; returns what happened, for the model. */
   nameVoice?(voice: string, name: string): string;
+  /** Opens the forget list for `query`: the user chooses and confirms there. Returns what happened, for the model. */
+  openForget?(query: string): string;
   /** Web search and page reading; return what the model reads. */
   webSearch?(query: string): Promise<string>;
   readPage?(url: string): Promise<string>;
@@ -82,6 +84,8 @@ You get a stretch of conversation. Reply with only a JSON object:
   Not facts: requests to you, what they asked you to do or change, opinions about you, small talk, anything sensitive (passwords, health, money). Never repeat what is already known. Usually zero or one fact.
 - importance: 9-10 who they are and the people closest to them (name, family, partner, where they live, their job); 6-8 projects, strong and lasting preferences, important upcoming events; 3-5 small tastes and details.
 - replaces: only when the new fact corrects or updates a known one (they moved, changed job, a date changed): the known fact's id, e.g. "f12". Write the correction only when the user said it clearly.`;
+
+const PERIOD_SYSTEM = `You keep the diary of Lumi, a voice assistant that lives on the user's screen. You get the diary days of a week or a month. Summarize the period in Italian, in three to six short sentences written in first person as Lumi: what the user worked on, what happened, the people and events that mattered, how they were; with dates when useful. Output only the summary.`;
 
 /** Reads the episode summarizer's reply; a plain-text reply is taken as the summary. */
 export interface ExtractedFact {
@@ -258,6 +262,52 @@ export class Brain {
       }
       this.host.memory.addDiary(day.date, summary);
     }
+    await this.writePeriods();
+  }
+
+  /** Weeks and months that are over get their summary, from their days (a few at a time). */
+  async writePeriods(): Promise<void> {
+    const memory = this.host.memory;
+    const chosen = this.authFailed ? null : this.host.provider("idle");
+    if (!chosen) return;
+    for (const span of await memory.duePeriods()) {
+      const days = await memory.daysIn(span.start, span.end);
+      if (!days.length) continue;
+      // A month has up to 31 days: each one is clipped so small models get it all
+      const clip = span.kind === "month" ? 350 : 900;
+      const text = days.map((d) => `${d.start.slice(0, 10)}: ${d.text.length > clip ? `${d.text.slice(0, clip - 1)}…` : d.text}`).join("\n");
+      try {
+        const result = await chosen.provider.complete({ model: chosen.model, system: PERIOD_SYSTEM, prompt: `Diary of ${span.label}:\n${text}` });
+        if (result.text.trim()) {
+          memory.addPeriodSummary(span, result.text);
+          log.info(`Summary of ${span.label} written`);
+        }
+      } catch (err) {
+        log.warn(`Summary of ${span.label} failed`, err);
+        return;
+      }
+    }
+  }
+
+  /**
+   * After a forget, a summary that cited deleted things is written again
+   * from what is left (with the idle model); null when there is no model:
+   * the summary is then deleted.
+   */
+  async rewriteSummary(summary: SummaryRecord, material: RewriteMaterial): Promise<string | null> {
+    const chosen = this.authFailed ? null : this.host.provider("idle");
+    if (!chosen) return null;
+    const user = this.host.settings().userName || "Utente";
+    const source = material.lines.length
+      ? transcript(material.lines.slice(-150), user)
+      : material.days.map((d) => `${d.start.slice(0, 10)}: ${d.text.slice(0, 600)}`).join("\n");
+    const what = { episode: "this stretch of conversation", day: "this day", week: "this week", month: "this month" }[summary.kind];
+    const result = await chosen.provider.complete({
+      model: chosen.model,
+      system: `You keep the diary of Lumi, a voice assistant that lives on the user's screen. Summarize ${what} in Italian, in two to five short sentences written in first person as Lumi, using only the text below. Output only the summary.`,
+      prompt: source,
+    });
+    return result.text.trim() || null;
   }
 
   private async turn(trigger: Trigger): Promise<void> {
@@ -402,7 +452,14 @@ export class Brain {
         return done(`Saved as [${fact.id}]${call.replaces && !memory.facts().some((f) => f.id === call.replaces) ? `, replacing [${call.replaces}]` : ""}.`);
       }
       case "forget":
-        return done(memory.forget(call.id) ? `Forgot [${call.id}].` : `There is no memory or reminder with id ${call.id}.`);
+        if (call.query) {
+          return done(
+            this.host.openForget
+              ? this.host.openForget(call.query)
+              : "You can't open the forget list now: tell the user they can do it in the settings, tab Memoria, section «Dimentica qualcosa».",
+          );
+        }
+        return done(memory.forget(call.id!) ? `Forgot [${call.id}].` : `There is no memory or reminder with id ${call.id}.`);
       case "search_memory": {
         const result = await memory.searchMemory({ query: call.query, from: call.from, to: call.to, kind: call.kind, limit: MEMORY_RESULTS });
         if (!result) return done("Your long-term memory is not available right now.");

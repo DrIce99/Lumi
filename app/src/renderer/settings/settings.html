@@ -378,6 +378,25 @@
           </label>
         </div>
         <small id="memoryIndex" class="hint"></small>
+        <label class="field">
+          <span>Backup giornalieri della memoria (giorni da tenere, 0 = nessuno)</span>
+          <input id="backupDays" type="number" min="0" max="60" step="1" />
+        </label>
+        <h2>Dimentica qualcosa</h2>
+        <p class="hint">
+          Cerca ciò che vuoi far dimenticare a Lumi: frasi dette, riassunti e fatti. Le voci più pertinenti sono già spuntate, le altre
+          puoi aggiungerle tu. Vengono cancellati anche i fatti che venivano solo da quelle frasi; i riassunti che le citavano vengono
+          riscritti senza. Non si può annullare, e i backup vengono rifatti.
+        </p>
+        <div class="row">
+          <input id="forgetQuery" type="text" placeholder="per esempio: Marco, il trasloco, la password del wifi" />
+          <button id="forgetSearch" type="button">Cerca</button>
+        </div>
+        <ul id="forgetList" class="list forget-list" hidden></ul>
+        <div class="row" id="forgetActions" hidden>
+          <button id="forgetConfirm" type="button" class="danger">Dimentica i selezionati</button>
+          <small id="forgetResult" class="hint"></small>
+        </div>
         <h2>Voci riconosciute</h2>
         <p class="hint">La prima voce sentita al microfono è la tua. Per dare un nome a una voce dillo a Lumi: "quello che ha appena parlato è Marco". Se Lumi ha preso un'altra voce per la tua, dimentica la tua: la imparerà di nuovo.</p>
         <ul id="knownVoices" class="list"></ul>

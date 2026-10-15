@@ -5,6 +5,7 @@
 // embedding), and writes go on meanwhile. The embedding queue runs here
 // too (indexer.ts).
 import { parentPort, workerData } from "node:worker_threads";
+import { makeBackup } from "./backup";
 import { MemoryDb, type SearchRequest, type SearchResult } from "./db";
 import { EmbedError, OllamaEmbedder, type Embedder } from "./embed";
 import { Indexer } from "./indexer";
@@ -58,6 +59,18 @@ const special: Record<string, (...args: never[]) => unknown> = {
     }
     return db!.search(request, query, { weights });
   },
+  findForForget: async (query: string) => {
+    let vector = null;
+    if (embedder && db!.vectors) {
+      try {
+        vector = { model: embedder.model, vector: (await embedder.embed([query], "query", 5000))[0] };
+      } catch (err) {
+        if (!(err instanceof EmbedError)) throw err;
+      }
+    }
+    return db!.findForForget(query, vector);
+  },
+  backup: (dir: string, keep: number, reset: boolean) => makeBackup(db!, dir, keep, reset),
   close: () => {
     indexer?.stop();
     db?.close();

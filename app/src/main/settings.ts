@@ -175,6 +175,7 @@ export function sanitizeSettings(input: unknown): Settings {
         recency: num(weights.recency, d.memory.weights.recency, 0, 3),
         importance: num(weights.importance, d.memory.weights.importance, 0, 3),
       },
+      backupDays: Math.round(num(memory.backupDays, d.memory.backupDays, 0, 60)),
     },
     voices: {
       enabled: bool(voices.enabled, d.voices.enabled),

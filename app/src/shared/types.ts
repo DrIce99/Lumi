@@ -92,6 +92,8 @@ export interface Settings {
     embeddings: { provider: EmbeddingProvider; model: string };
     /** Generative Agents score: relevance + recency + importance (to tune). */
     weights: { relevance: number; recency: number; importance: number };
+    /** Daily copies of memory.db kept in %APPDATA%\Lumi\backups (0: none). */
+    backupDays: number;
   };
   /** Recognizing voices (voiceprints stay on this computer). */
   voices: {
@@ -162,7 +164,7 @@ export const DEFAULT_SETTINGS: Settings = {
   stt: { engine: "faster-whisper", model: "large-v3-turbo", device: "auto", vocabulary: [] },
   tts: { engine: "qwen3", model: "1.7B-CustomVoice", voice: "ryan", speed: 1, volume: 1, seed: 7, pronunciations: [] },
   web: { provider: "auto", searxngUrl: "" },
-  memory: { embeddings: { provider: "ollama", model: "bge-m3" }, weights: { relevance: 1, recency: 0.5, importance: 0.5 } },
+  memory: { embeddings: { provider: "ollama", model: "bge-m3" }, weights: { relevance: 1, recency: 0.5, importance: 0.5 }, backupDays: 7 },
   listen: {
     mode: "push-to-talk",
     hotkey: "Control+Alt+Space",
@@ -466,6 +468,17 @@ export interface SettingsSnapshot {
   memoryIndex: MemoryIndexStatus | null;
 }
 
+/** A memory the user may choose to forget (memory/db.ts ForgetItem). */
+export interface ForgetCandidate {
+  type: "message" | "summary" | "fact";
+  id: number;
+  at: string;
+  text: string;
+  label: string;
+  /** A clear match: selected by default. */
+  strong: boolean;
+}
+
 export interface MemoryIndexStatus {
   state: "off" | "unavailable" | "idle" | "indexing" | "waiting" | "missing" | "offline" | "error";
   model: string;
@@ -515,5 +528,11 @@ export interface SettingsBridge {
   setDiscordToken(token: string): Promise<SettingsSnapshot>;
   openDataFolder(): Promise<void>;
   restartSidecar(): Promise<SettingsSnapshot>;
+  /** What Lumi remembers about `query`, to choose what to forget (nothing is deleted). */
+  findForget(query: string): Promise<ForgetCandidate[]>;
+  /** Forgets the chosen items, with everything that depends on them. */
+  forgetItems(selection: { messages: number[]; summaries: number[]; facts: number[] }): Promise<{ ok: boolean; message: string; snapshot: SettingsSnapshot }>;
   onStatus(cb: (status: SidecarStatus) => void): void;
+  /** Lumi asked to forget something: the Memory tab opens on it. */
+  onForgetQuery(cb: (query: string) => void): void;
 }

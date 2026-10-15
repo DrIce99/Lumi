@@ -18,6 +18,11 @@ const bridge: SettingsBridge = {
   setDiscordToken: (token) => ipcRenderer.invoke(IPC.settingsDiscordToken, token),
   openDataFolder: () => ipcRenderer.invoke(IPC.settingsOpenData),
   restartSidecar: () => ipcRenderer.invoke(IPC.settingsRestartSidecar),
+  findForget: (query) => ipcRenderer.invoke(IPC.settingsFindForget, query),
+  forgetItems: (selection) => ipcRenderer.invoke(IPC.settingsForgetItems, selection),
+  onForgetQuery: (cb) => {
+    ipcRenderer.on(IPC.settingsForgetQuery, (_event, query: string) => cb(query));
+  },
   onStatus: (cb) => {
     ipcRenderer.on(IPC.settingsStatus, (_event, status: SidecarStatus) => cb(status));
   },

@@ -197,7 +197,7 @@ Work one roadmap phase at a time; finish each with checks green.
 
 - Memory: `memory.json` keeps notes, reminders, the recent window,
   episodes, diary and a copy of the facts; every line, episode, diary day
-  and fact also goes to `memory.db` (phase 10, steps 1-3 done). Lines that leave the 16-line window
+  and fact also goes to `memory.db` (phase 10, steps 1-5 done). Lines that leave the 16-line window
   are summarized into episodes by the "idle" model between moments
   (`Brain.writeEpisode`, JSON with summary + facts; requests to Lumi are
   not facts).
@@ -255,6 +255,29 @@ Work one roadmap phase at a time; finish each with checks green.
   to `<recalled>`), the last 3 days, within 3000 chars, plus a line with
   how many are left out. bge-m3 can't link "che lavoro faccio?" to a fact
   about RPG (0.37): words or the model's own search_memory must do it.
+- Weeks, months, backups (step 10.4): schema v4 (summaries_au trigger,
+  periods `week`/`month`). `periods.ts` (pure): local Monday weeks,
+  calendar months, `duePeriods` (over, with day summaries, not written,
+  oldest first, max 4 per run); `Brain.writePeriods` runs after
+  `writeDiary` with the idle model (a month's days clipped to 350 chars).
+  `backup.ts`: `VACUUM INTO` a temp file then rename,
+  `%APPDATA%\Lumi\backups\memory-YYYY-MM-DD.db`, keep
+  `memory.backupDays` (7; 0 = none), at startup and every 3 h.
+- Forget cascade (step 10.5): only the user deletes conversation. The
+  model's `forget({ query })` opens Settings -> Memoria with the search
+  done (`SettingsWindow.openForget`); `forget({ id })` still deletes one
+  fact. `db.findForForget`: any word (FTS) + vectors down to floor - 0.05,
+  superseded facts included; `strong` (half the words, or floor + 0.05)
+  = pre-checked, the rest unchecked. `db.forget`: lines (+ vectors of the
+  next line in the session, embedded with it as context), chosen
+  summaries, chosen facts and facts whose source_ids were all deleted;
+  returns stale summaries (episode/day covering a deleted line, then
+  week/month over them), which `Memory.forgetItems` rewrites from what is
+  left with `Brain.rewriteSummary` or deletes (no material or no model),
+  updating memory.json too. Then `compact()`: FTS 'optimize', every vec0
+  table copied to a new one (sqlite-vec deletes only flip a validity bit,
+  the bytes stay), VACUUM, WAL checkpoint; a test greps the file bytes.
+  Then the old archive and all backups go (a fresh one is made).
 - `<recalled>` comes from `Memory.recall` (650 ms timeout, recent window
   excluded) for every message; the model calls `search_memory({ query?,
   from?, to?, kind? })` with local dates ("2026-03", "2026-03-12 18:00",
@@ -403,10 +426,9 @@ code yet; when a piece lands, move its notes to the sections above.
 
 ### Memory (`main/brain/memory/`, phase 10)
 
-Steps 1 (raw log, FTS, `search_memory`, import), 2 (embeddings, hybrid
-search) and 3 (facts) are built: see the notes above. Still planned:
-week/month summaries, backups, forget, sidecar CPU embeddings without
-Ollama.
+Steps 1-5 are built (raw log, FTS, search_memory, import; embeddings
+and hybrid search; facts; weeks, months and backups; forget cascade): see
+the notes above. Still planned: sidecar CPU embeddings without Ollama.
 
 - Goal: remember everything for years, prioritize what matters, forget
   only on explicit request. Memories never go into model weights.
@@ -429,10 +451,8 @@ Ollama.
   `search_memory({ query, from, to, kind })`.
 - Facts and summaries store `source_ids` (message ids). A contradicting new
   fact sets `superseded_by` on the old one instead of duplicating it.
-- Forget is a cascade with user confirmation (`forget({ query })`): search
-  all layers, show matches, delete rows + vectors + FTS entries + facts
-  derived only from them, regenerate summaries/facts that cited them,
-  `VACUUM`, regenerate backups. Never delete memory outside this flow.
+- Never delete conversation memory outside the forget flow (user-picked,
+  confirmed in the settings window); see the notes above.
 - Fact extraction and nightly reflection default to a local model, so the
   full history never leaves the machine.
 

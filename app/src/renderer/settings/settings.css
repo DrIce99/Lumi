@@ -322,6 +322,30 @@ button.danger.armed {
   border-top: none;
 }
 
+.forget-list {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.forget-list label {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  width: 100%;
+  cursor: pointer;
+}
+
+.forget-list input {
+  margin-top: 3px;
+}
+
+.forget-list .when {
+  flex: none;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
 .list li.empty {
   color: var(--muted);
 }

@@ -112,7 +112,13 @@ function start(): void {
   // Every line said, searchable for years: SQLite in a worker thread, with sqlite-vec for search by meaning
   const memoryStore = MemoryStore.open(join(dataDir, "memory.db"), join(__dirname, "memoryWorker.js"), vecExtensionPath());
   const memory = new Memory(join(dataDir, "memory.json"), memoryStore);
-  void memory.importLegacy().then(() => memory.loadFacts());
+  memory.setBackups(join(dataDir, "backups"), () => settings().memory.backupDays);
+  // Daily backup: after the first start's import, then checked every few hours
+  void memory
+    .importLegacy()
+    .then(() => memory.loadFacts())
+    .then(() => memory.backup());
+  setInterval(() => void memory.backup(), 3 * 3_600_000).unref();
   const speakers = new Speakers(join(dataDir, "voices.json"));
 
   /** Who said an utterance at the microphone: the user, or another voice (by name or "Voce N"). */
@@ -690,6 +696,10 @@ function start(): void {
         return `Reading the page failed: ${err instanceof Error ? err.message : String(err)}.`;
       }
     },
+    openForget: (query) => {
+      settingsWindow.openForget(query);
+      return `The forget list for "${query}" is open in the settings (tab Memoria): the user chooses what goes and confirms there. Nothing is forgotten yet: say so briefly.`;
+    },
     nameVoice: (which, name) => {
       if (!settings().voices.enabled) return "Voice recognition is off in the settings.";
       if (which.trim().toLowerCase() === "tu" || which.trim().toLowerCase() === "user") return "That is the user's own voice: it needs no name.";
@@ -1154,6 +1164,20 @@ function start(): void {
         return snapshot();
       },
       openDataFolder: () => void shell.openPath(dataDir),
+      findForget: (query) => memory.findForForget(query),
+      forgetItems: async (selection) => {
+        if (!selection.messages.length && !selection.summaries.length && !selection.facts.length) return { ok: false, message: "Non hai scelto niente da dimenticare.", snapshot: snapshot() };
+        try {
+          const r = await memory.forgetItems(selection, (summary, material) => brain.rewriteSummary(summary, material));
+          const parts = [`${r.lines} frasi`, `${r.facts} fatti`, `${r.summaries} riassunti`];
+          const rewritten = r.rewritten ? ` ${r.rewritten} riassunti sono stati riscritti senza quelle cose.` : "";
+          const removed = r.removed ? ` ${r.removed} riassunti sono stati cancellati perché le citavano.` : "";
+          return { ok: true, message: `Dimenticati ${parts.join(", ")}.${rewritten}${removed} I backup sono stati rifatti.`, snapshot: snapshot() };
+        } catch (err) {
+          log.error("Forget failed", err);
+          return { ok: false, message: "Non sono riuscito a dimenticare: i dettagli sono nel log.", snapshot: snapshot() };
+        }
+      },
       restartSidecar: async () => {
         await sidecar.restart();
         return snapshot();

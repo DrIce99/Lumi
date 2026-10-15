@@ -4,7 +4,23 @@
 // everything sent before it is on disk. Tests use an in-process database.
 import { Worker } from "node:worker_threads";
 import { log } from "../../log";
-import type { FactInput, FactRow, LegacyImport, LineInput, MemoryDb, SearchRequest, SearchResult, StoredLine, SummaryInput } from "./db";
+import { makeBackup } from "./backup";
+import type {
+  FactInput,
+  FactRow,
+  ForgetItem,
+  ForgetResult,
+  ForgetSelection,
+  LegacyImport,
+  LineInput,
+  MemoryDb,
+  SearchRequest,
+  SearchResult,
+  StoredLine,
+  SummaryInput,
+  SummaryKind,
+  SummaryRecord,
+} from "./db";
 import type { IndexStatus } from "./indexer";
 import type { ScoreWeights } from "./search";
 
@@ -27,6 +43,14 @@ export const STORE_METHODS = [
   "indexStatus",
   "warm",
   "ping",
+  "summariesIn",
+  "periodState",
+  "replaceSummary",
+  "deleteSummary",
+  "findForForget",
+  "forget",
+  "compact",
+  "backup",
 ] as const;
 export type StoreMethod = (typeof STORE_METHODS)[number];
 
@@ -98,6 +122,8 @@ export class MemoryStore {
       if (method === "ping" || method === "configure" || method === "setBusy" || method === "warm") return null;
       if (method === "indexStatus") return { state: "off", model: "", done: 0, total: 0 } satisfies IndexStatus;
       if (method === "search") return db.search(args[0] as SearchRequest);
+      if (method === "findForForget") return db.findForForget(args[0] as string, null);
+      if (method === "backup") return makeBackup(db, args[0] as string, args[1] as number, args[2] as boolean);
       return (db[method] as (...a: unknown[]) => unknown).apply(db, args);
     });
   }
@@ -133,6 +159,49 @@ export class MemoryStore {
 
   addSummary(summary: SummaryInput): void {
     this.write("addSummary", [summary]);
+  }
+
+  /** Summaries of some kinds starting in [from, to); empty when the store is unavailable. */
+  async summariesIn(kinds: SummaryKind[], from: string, to: string): Promise<SummaryRecord[]> {
+    try {
+      return (await this.call("summariesIn", [kinds, from, to])) as SummaryRecord[];
+    } catch (err) {
+      this.report("Reading the summaries failed", err);
+      return [];
+    }
+  }
+
+  async periodState(): Promise<{ dayStarts: string[]; existing: string[] } | null> {
+    return (this.call("periodState", []) as Promise<{ dayStarts: string[]; existing: string[] }>).catch(() => null);
+  }
+
+  /** These wait: a forget runs them in order and must know they are done. */
+  replaceSummary(id: number, text: string): Promise<void> {
+    return this.call("replaceSummary", [id, text]) as Promise<void>;
+  }
+
+  deleteSummary(id: number): Promise<void> {
+    return this.call("deleteSummary", [id]) as Promise<void>;
+  }
+
+  /** Everything that may be about `query`, for the user to choose what to forget. */
+  findForForget(query: string): Promise<ForgetItem[]> {
+    return this.call("findForForget", [query]) as Promise<ForgetItem[]>;
+  }
+
+  /** Deletes the chosen items and what depends only on them; rejects when the database can't. */
+  forget(selection: ForgetSelection): Promise<ForgetResult> {
+    return this.call("forget", [selection]) as Promise<ForgetResult>;
+  }
+
+  /** Makes deletions final in the file (FTS merge, vector tables rewritten, VACUUM). */
+  compact(): Promise<void> {
+    return this.call("compact", []) as Promise<void>;
+  }
+
+  /** Today's backup in `dir` (newest `keep` kept); `reset` deletes the old ones first. The new file, or null. */
+  backup(dir: string, keep: number, reset = false): Promise<string | null> {
+    return this.call("backup", [dir, keep, reset]) as Promise<string | null>;
   }
 
   putFact(fact: FactInput): void {

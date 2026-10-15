@@ -10,8 +10,29 @@ import { dirname, join } from "node:path";
 import type { DiaryEntry, Fact, FactKind, Reminder } from "../../shared/types";
 import { DebouncedWriter, readJson } from "../jsonStore";
 import { log } from "../log";
-import type { FactRow, LineInput, MemoryHit, SearchRequest, SearchResult, Speaker } from "./memory/db";
+import type { FactRow, ForgetItem, ForgetSelection, LineInput, MemoryHit, SearchRequest, SearchResult, Speaker, SummaryRecord } from "./memory/db";
+import { duePeriods, type PeriodSpan } from "./memory/periods";
 import type { MemoryStore } from "./memory/store";
+
+export type { ForgetItem, ForgetSelection, PeriodSpan, SummaryRecord };
+
+/** What a summary touched by a forget is rewritten from: the lines left (episode, day) or the days (week, month). */
+export interface RewriteMaterial {
+  lines: ConversationEntry[];
+  days: SummaryRecord[];
+}
+
+/** Rewrites a summary from what is left; null deletes it instead. */
+export type Rewriter = (summary: SummaryRecord, material: RewriteMaterial) => Promise<string | null>;
+
+export interface ForgetReport {
+  lines: number;
+  facts: number;
+  summaries: number;
+  /** Summaries rewritten from what was left, and deleted because nothing (or no model) was left. */
+  rewritten: number;
+  removed: number;
+}
 import { localStamp } from "./memory/search";
 
 export type { MemoryHit, Speaker };
@@ -154,6 +175,8 @@ export function describeHit(hit: MemoryHit, user: string, maxChars = 700): strin
     return `[${localStamp(hit.at)}] ${clip(lines.join("\n"))}`;
   }
   if (hit.kind === "day") return `[diario ${localStamp(hit.at).slice(0, 10)}] ${clip(hit.text)}`;
+  if (hit.kind === "week") return `[settimana ${localStamp(hit.at).slice(0, 10)} - ${localStamp(new Date(Date.parse(hit.end) - 1).toISOString()).slice(0, 10)}] ${clip(hit.text)}`;
+  if (hit.kind === "month") return `[mese ${localStamp(hit.at).slice(0, 7)}] ${clip(hit.text)}`;
   return `[riassunto ${localStamp(hit.at)} - ${localStamp(hit.end).slice(11)}] ${clip(hit.text)}`;
 }
 
@@ -162,6 +185,8 @@ export class Memory {
   private readonly writer: DebouncedWriter | null;
   /** The old archive (before memory.db); renamed once imported. */
   private readonly legacyArchive: string | null;
+  /** Where the daily backups go, and how many to keep (0: none). */
+  private backups: { dir: string; keep: () => number } | null = null;
 
   constructor(
     file: string | null,
@@ -308,7 +333,10 @@ export class Memory {
     const bornAt = this.data.stats.bornAt;
     this.data = this.empty();
     this.data.stats.bornAt = bornAt;
-    void this.store?.clear();
+    const store = this.store;
+    const backups = this.backups;
+    // The backups would still hold everything: they start over too
+    void store?.clear().then(() => (backups ? store.backup(backups.dir, backups.keep(), true).catch((err: unknown) => log.warn("Resetting the memory backups failed", err)) : null));
     for (const file of this.legacyArchive ? [this.legacyArchive, `${this.legacyArchive}.imported`] : []) {
       try {
         rmSync(file, { force: true });
@@ -317,6 +345,113 @@ export class Memory {
       }
     }
     this.save();
+  }
+
+  // ---- backups (10.4) ----
+
+  setBackups(dir: string, keep: () => number): void {
+    this.backups = { dir, keep };
+  }
+
+  /** Today's backup of memory.db, if not taken yet (and older ones rotated). */
+  async backup(): Promise<void> {
+    if (!this.store || !this.backups) return;
+    try {
+      const file = await this.store.backup(this.backups.dir, this.backups.keep());
+      if (file) log.info(`Memory backup: ${file}`);
+    } catch (err) {
+      log.warn("The memory backup failed", err);
+    }
+  }
+
+  // ---- weeks and months (10.4) ----
+
+  /** Weeks and months that are over and have no summary yet (a few at a time). */
+  async duePeriods(max = 4): Promise<PeriodSpan[]> {
+    const state = this.store ? await this.store.periodState() : null;
+    return state ? duePeriods(state.dayStarts, new Set(state.existing), this.now(), max) : [];
+  }
+
+  /** The day summaries of a period, oldest first. */
+  async daysIn(start: string, end: string): Promise<SummaryRecord[]> {
+    return this.store ? this.store.summariesIn(["day"], start, end) : [];
+  }
+
+  addPeriodSummary(span: PeriodSpan, text: string): void {
+    const clean = text.trim().slice(0, 2500);
+    if (clean) this.store?.addSummary({ kind: span.kind, start: span.start, end: span.end, text: clean });
+  }
+
+  // ---- forgetting (10.5) ----
+
+  /** What may be about `query`, in every layer, for the user to choose (nothing is deleted here). */
+  async findForForget(query: string): Promise<ForgetItem[]> {
+    if (!this.store || !query.trim()) return [];
+    return this.store.findForForget(query.trim().slice(0, 300));
+  }
+
+  /**
+   * The forget cascade, for what the user chose: lines, summaries and
+   * facts go from memory.db (with vectors and index entries) and from
+   * memory.json; facts derived only from deleted lines go too; summaries
+   * that cited them are rewritten from what is left (or deleted); then
+   * the file is compacted so nothing deleted stays on disk, the old
+   * archive goes and the backups start over.
+   */
+  async forgetItems(selection: ForgetSelection, rewrite?: Rewriter): Promise<ForgetReport> {
+    if (!this.store) throw new Error("memory.db is not available");
+    const store = this.store;
+    const result = await store.forget(selection);
+    const report: ForgetReport = { lines: result.messages.length, facts: result.facts.length, summaries: result.summaries.length, rewritten: 0, removed: 0 };
+    // memory.json: the recent window, the facts, the episodes and diary days
+    const goneLines = new Set(result.messages.map((m) => `${m.ts}|${m.text}`));
+    this.data.conversation = this.data.conversation.filter((e) => !goneLines.has(`${e.at}|${e.text}`));
+    const goneFacts = new Set(result.facts);
+    this.data.facts = this.data.facts.filter((f) => !goneFacts.has(factNumber(f.id) ?? -1));
+    for (const g of result.summaries) this.dropSummaryCopy(g.kind, g.start);
+    for (const summary of result.stale) {
+      const material: RewriteMaterial = { lines: [], days: [] };
+      if (summary.kind === "episode" || summary.kind === "day") {
+        const lines = await store.between(summary.start, new Date(Date.parse(summary.end) + 1).toISOString());
+        material.lines = lines.map(({ id: _id, session: _session, channel: _channel, ...line }) => line);
+      } else material.days = await store.summariesIn(["day"], summary.start, summary.end);
+      const left = material.lines.length + material.days.length > 0;
+      let text: string | null = null;
+      if (left && rewrite) {
+        try {
+          text = (await rewrite(summary, material))?.trim().slice(0, 2500) || null;
+        } catch (err) {
+          log.warn("Rewriting a summary after a forget failed: it is deleted instead", err);
+        }
+      }
+      if (text) {
+        await store.replaceSummary(summary.id, text);
+        this.updateSummaryCopy(summary.kind, summary.start, text);
+        report.rewritten++;
+      } else {
+        // Nothing left, or no model to rewrite it: a summary that still says it can't stay
+        await store.deleteSummary(summary.id);
+        this.dropSummaryCopy(summary.kind, summary.start);
+        report.removed++;
+      }
+    }
+    this.save();
+    this.writer?.flush();
+    await store.compact();
+    for (const file of this.legacyArchive ? [this.legacyArchive, `${this.legacyArchive}.imported`] : []) rmSync(file, { force: true });
+    if (this.backups) await store.backup(this.backups.dir, this.backups.keep(), true);
+    log.info(`Forgot ${report.lines} lines, ${report.facts} facts, ${report.summaries} summaries; ${report.rewritten} summaries rewritten, ${report.removed} deleted`);
+    return report;
+  }
+
+  private dropSummaryCopy(kind: string, start: string): void {
+    if (kind === "episode") this.data.episodes = this.episodes().filter((e) => e.start !== start);
+    if (kind === "day") this.data.diary = this.data.diary.filter((d) => dayStart(d.date) !== start);
+  }
+
+  private updateSummaryCopy(kind: string, start: string, text: string): void {
+    if (kind === "episode") for (const e of this.episodes()) if (e.start === start) e.summary = text;
+    if (kind === "day") for (const d of this.data.diary) if (dayStart(d.date) === start) d.summary = text;
   }
 
   // ---- conversation and diary ----
