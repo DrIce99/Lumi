@@ -18,7 +18,8 @@
     "@discordjs/voice": "^0.19.2",
     "discord.js": "^14.27.0",
     "koffi": "^3.3.3",
-    "opusscript": "^0.1.1"
+    "opusscript": "^0.1.1",
+    "sqlite-vec": "0.1.9"
   },
   "devDependencies": {
     "@ricky0123/vad-web": "^0.0.31",

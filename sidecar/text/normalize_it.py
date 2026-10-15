@@ -13,6 +13,8 @@ import unicodedata
 
 from num2words import num2words
 
+from .lexicon_it import apply_lexicon
+
 MONTHS = [
     "gennaio",
     "febbraio",
@@ -350,8 +352,8 @@ def _markdown(text: str) -> str:
     return text.replace("*", "").replace("_", " ")
 
 
-def normalize(text: str) -> str:
-    """Spoken-Italian version of `text`, ready for a TTS engine."""
+def normalize(text: str, lexicon: tuple[tuple[str, str], ...] = ()) -> str:
+    """Spoken-Italian version of `text`, ready for a TTS engine. `lexicon`: see lexicon_it.lexicon_for."""
     if not text:
         return ""
     text = unicodedata.normalize("NFC", text)
@@ -359,6 +361,8 @@ def normalize(text: str) -> str:
     text = _strip_emoji(text)
     text = _URL.sub(_url, text)
     text = _EMAIL.sub(_email, text)
+    # Before acronyms and abbreviations: "VS Code" is a word to the user, not "vi esse"
+    text = apply_lexicon(text, lexicon)
     text = _abbreviations(text)
     text = _CURRENCY_BEFORE.sub(_currency_before, text)
     text = _CURRENCY_AFTER.sub(_currency_after, text)

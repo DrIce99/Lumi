@@ -17,6 +17,7 @@ import wave
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from text.lexicon_it import lexicon_for
 from text.normalize_it import normalize
 from tts.base import SAMPLE_RATE, Cancel
 
@@ -122,7 +123,7 @@ class BatchRunner:
                         current = index
                         job.chapters.append({"title": book.chapters[index].title, "startMs": written * 1000 // (2 * SAMPLE_RATE), "endMs": 0})
                     for part, dialogue in voice_parts(sentence):
-                        spoken = normalize(part)
+                        spoken = normalize(part, lexicon_for(self.manager.config("tts")))
                         if not spoken:
                             continue
                         audio = self._speak(spoken, dialogue_voice if dialogue and dialogue_voice else None, job.cancel)

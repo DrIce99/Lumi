@@ -64,8 +64,11 @@ const MAX_EPISODES = 300;
 export const RECENT_LINES = 16;
 /** Unsummarized older lines that make an episode worth writing. */
 const EPISODE_LINES = 20;
-/** Automatic recall must not slow the answer down. */
-const RECALL_TIMEOUT_MS = 400;
+/** Automatic recall must not slow the answer down: the query's embedding gets 250 ms, then words only. */
+const RECALL_TIMEOUT_MS = 500;
+const RECALL_EMBED_MS = 250;
+/** search_memory (the model asked): meaning is worth a short wait. */
+const SEARCH_EMBED_MS = 1500;
 
 export function localDate(d: Date = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -303,7 +306,7 @@ export class Memory {
   /** Past conversation, episodes and diary days related to the user's words (automatic recall: quick, or nothing). */
   async recall(query: string, limit = 3): Promise<MemoryHit[]> {
     if (!this.store) return [];
-    const result = await this.store.search({ query, limit, before: this.recentFrom() }, RECALL_TIMEOUT_MS);
+    const result = await this.store.search({ query, limit, before: this.recentFrom(), embedTimeoutMs: RECALL_EMBED_MS }, RECALL_TIMEOUT_MS);
     return result?.hits ?? [];
   }
 
@@ -311,7 +314,7 @@ export class Memory {
   async searchMemory(request: SearchRequest): Promise<SearchResult | null> {
     if (!this.store) return null;
     // Words skip what the prompt already shows; a date range lists everything in it
-    return this.store.search({ ...request, ...(request.query ? { before: this.recentFrom() } : {}) });
+    return this.store.search({ ...request, embedTimeoutMs: SEARCH_EMBED_MS, ...(request.query ? { before: this.recentFrom() } : {}) });
   }
 
   // ---- reminders ----

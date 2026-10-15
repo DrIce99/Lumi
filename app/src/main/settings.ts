@@ -6,6 +6,7 @@ import {
   BAR_REPLIES,
   DEFAULT_SETTINGS,
   DEVICES,
+  EMBEDDING_PROVIDERS,
   LISTEN_MODES,
   OCR_ENGINES,
   PROFILES,
@@ -111,6 +112,9 @@ export function sanitizeSettings(input: unknown): Settings {
   const discord = obj(raw.discord);
   const perception = obj(raw.perception);
   const vision = obj(raw.vision);
+  const memory = obj(raw.memory);
+  const embeddings = obj(memory.embeddings);
+  const weights = obj(memory.weights);
   return {
     profile: oneOf(raw.profile, PROFILES, d.profile),
     userName: str(raw.userName, d.userName, 50).trim(),
@@ -141,6 +145,7 @@ export function sanitizeSettings(input: unknown): Settings {
       speed: Math.round(num(tts.speed, d.tts.speed, 0.7, 1.4) * 100) / 100,
       volume: Math.round(num(tts.volume, d.tts.volume, 0.1, 1) * 100) / 100,
       seed: Math.round(num(tts.seed, d.tts.seed, 0, 2 ** 31 - 1)),
+      pronunciations: strings(tts.pronunciations, d.tts.pronunciations, 300, 210).filter((line) => /^[^=]+=[^=]*\S/.test(line)),
     },
     listen: {
       mode: oneOf(listen.mode, LISTEN_MODES, d.listen.mode),
@@ -153,6 +158,17 @@ export function sanitizeSettings(input: unknown): Settings {
       backchannel: bool(listen.backchannel, d.listen.backchannel),
       fillers: bool(listen.fillers, d.listen.fillers),
       micDevice: str(listen.micDevice, d.listen.micDevice, 200),
+    },
+    memory: {
+      embeddings: {
+        provider: oneOf(embeddings.provider, EMBEDDING_PROVIDERS, d.memory.embeddings.provider),
+        model: str(embeddings.model, d.memory.embeddings.model, 120).trim() || d.memory.embeddings.model,
+      },
+      weights: {
+        relevance: num(weights.relevance, d.memory.weights.relevance, 0, 3),
+        recency: num(weights.recency, d.memory.weights.recency, 0, 3),
+        importance: num(weights.importance, d.memory.weights.importance, 0, 3),
+      },
     },
     voices: {
       enabled: bool(voices.enabled, d.voices.enabled),

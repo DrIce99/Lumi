@@ -93,3 +93,70 @@ export function localStamp(iso: string): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
+
+// ---------------- hybrid search: fusion and score ----------------
+
+/** Reciprocal Rank Fusion constant (the usual 60: a rank-1 hit is not worth everything). */
+export const RRF_K = 60;
+
+/** Fuses ranked lists of ids: each id scores the sum of 1 / (k + rank) over the lists it appears in. */
+export function rrf(lists: string[][], k = RRF_K): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const list of lists) list.forEach((id, i) => out.set(id, (out.get(id) ?? 0) + 1 / (k + i + 1)));
+  return out;
+}
+
+export interface ScoreWeights {
+  relevance: number;
+  recency: number;
+  importance: number;
+}
+
+/** Generative Agents (Park et al., 2023) weights, to tune. */
+export const DEFAULT_WEIGHTS: ScoreWeights = { relevance: 1, recency: 0.5, importance: 0.5 };
+
+/** Recency 0..1: decays by 0.5% per hour since the memory (a day: 0.89, a week: 0.43, a month: 0.03). */
+export function recency(hoursAgo: number, base = 0.995): number {
+  return Math.pow(base, Math.max(0, hoursAgo));
+}
+
+/**
+ * The final order of a memory: relevance (fused, normalized 0..1),
+ * recency and importance (0..1; facts only, later) weighted. It only
+ * orders: nothing is dropped because of it.
+ */
+export function memoryScore(m: { relevance: number; hoursAgo: number; importance?: number }, w: ScoreWeights = DEFAULT_WEIGHTS): number {
+  return w.relevance * m.relevance + w.recency * recency(m.hoursAgo) + w.importance * (m.importance ?? 0);
+}
+
+/**
+ * Below this cosine similarity a vector hit is noise, not a memory.
+ * Measured on Italian questions vs. lines (scripts in the 10.2 notes):
+ * bge-m3 puts unrelated lines at 0.31-0.51 and right answers at 0.54-0.71;
+ * nomic-embed-text (English) packs everything in 0.43-0.66.
+ */
+const SIMILARITY_FLOOR: [RegExp, number][] = [
+  [/^bge-m3/i, 0.5],
+  [/^nomic-embed-text/i, 0.6],
+];
+const DEFAULT_FLOOR = 0.55;
+
+export function similarityFloor(model: string): number {
+  return SIMILARITY_FLOOR.find(([re]) => re.test(model))?.[1] ?? DEFAULT_FLOOR;
+}
+
+/** Vector hits further than this below the best one are dropped: the best match stands out, the rest is noise. */
+export const RELATIVE_MARGIN = 0.06;
+
+/** The vector hits worth keeping (cosine similarities, any order). */
+export function keepSimilar<T extends { similarity: number }>(hits: T[], model: string): T[] {
+  const floor = similarityFloor(model);
+  const best = Math.max(-1, ...hits.map((h) => h.similarity));
+  return hits.filter((h) => h.similarity >= floor && h.similarity >= best - RELATIVE_MARGIN);
+}
+
+/** Some embedding models want a task prefix (nomic-embed-text); bge-m3 doesn't. */
+export function embeddingInput(model: string, kind: "query" | "document", text: string): string {
+  if (/^nomic-embed-text/i.test(model)) return `${kind === "query" ? "search_query" : "search_document"}: ${text}`;
+  return text;
+}

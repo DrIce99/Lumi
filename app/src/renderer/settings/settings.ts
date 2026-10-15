@@ -319,6 +319,29 @@ function renderStatus(status: SidecarStatus): void {
 
 // ---------------- form ----------------
 
+/** The embedding queue's state, in words. */
+function memoryIndexText(status: SettingsSnapshot["memoryIndex"], model: string): string {
+  if (!status) return "";
+  const count = `${status.done} ricordi su ${status.total} hanno il loro indice.`;
+  switch (status.state) {
+    case "off":
+      return "Ricerca solo per parole.";
+    case "unavailable":
+      return "La ricerca per significato non è disponibile (sqlite-vec non si carica): restano le parole.";
+    case "missing":
+      return `Ollama non ha il modello ${model}: scaricalo con "ollama pull ${model}". Intanto la ricerca usa le parole.`;
+    case "offline":
+      return "Ollama non risponde: la ricerca usa le parole finché non torna.";
+    case "error":
+      return `Problema con gli embedding: ${status.detail ?? "dettagli nel log"}.`;
+    case "indexing":
+    case "waiting":
+      return `Sto indicizzando i ricordi con ${status.model} (quando Lumi non parla). ${count}`;
+    default:
+      return `Ricerca per significato attiva con ${status.model}. ${count}`;
+  }
+}
+
 function listItems(id: string, items: { tag: string; text: string; action?: () => void; actionLabel?: string }[], empty: string): void {
   const list = $<HTMLUListElement>(id);
   if (!items.length) {
@@ -417,6 +440,10 @@ function fill(next: SettingsSnapshot): void {
   $("speed").value = String(s.tts.speed);
   $("volume").value = String(s.tts.volume);
   $("seed").value = String(s.tts.seed);
+  $<HTMLTextAreaElement>("pronunciations").value = s.tts.pronunciations.join("\n");
+  $<HTMLSelectElement>("embeddingProvider").value = s.memory.embeddings.provider;
+  $("embeddingModel").value = s.memory.embeddings.model;
+  $<HTMLElement>("memoryIndex").textContent = memoryIndexText(next.memoryIndex, s.memory.embeddings.model);
 
   $("perceptionEnabled").checked = s.perception.enabled;
   $<HTMLSelectElement>("ocr").value = s.perception.ocr;
@@ -481,6 +508,10 @@ function collect(): Settings {
     launchAtLogin: $("launchAtLogin").checked,
     face: { scale: num("scale", s.face.scale), color: $("color").value, subtitles: $("subtitles").checked, adaptiveShadow: $("adaptiveShadow").checked, glare: $("glare").checked },
     voices: { enabled: $("voicesEnabled").checked, onlyMe: $("onlyMe").checked },
+    memory: {
+      ...s.memory,
+      embeddings: { provider: $<HTMLSelectElement>("embeddingProvider").value as Settings["memory"]["embeddings"]["provider"], model: $("embeddingModel").value.trim() },
+    },
     discord: { enabled: $("discordEnabled").checked, userId: $("discordUserId").value.trim() },
     appAudio: {
       enabled: $("appAudioEnabled").checked,
@@ -529,6 +560,10 @@ function collect(): Settings {
       speed: num("speed", s.tts.speed),
       volume: num("volume", s.tts.volume),
       seed: num("seed", s.tts.seed),
+      pronunciations: $<HTMLTextAreaElement>("pronunciations")
+        .value.split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean),
     },
     perception: {
       enabled: $("perceptionEnabled").checked,

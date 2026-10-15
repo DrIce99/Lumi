@@ -5,13 +5,25 @@
 import { Worker } from "node:worker_threads";
 import { log } from "../../log";
 import type { LegacyImport, LineInput, MemoryDb, SearchRequest, SearchResult, StoredLine, SummaryInput } from "./db";
+import type { IndexStatus } from "./indexer";
+import type { ScoreWeights } from "./search";
 
-export const STORE_METHODS = ["append", "addSummary", "between", "count", "search", "importLegacy", "clear", "close"] as const;
+export const STORE_METHODS = ["append", "addSummary", "between", "count", "search", "importLegacy", "clear", "close", "configure", "setBusy", "indexStatus", "warm", "ping"] as const;
 export type StoreMethod = (typeof STORE_METHODS)[number];
+
+/** Where the memory's embeddings come from, and how search results are ordered. */
+export interface EmbeddingConfig {
+  provider: "ollama" | "none";
+  /** Ollama's address. */
+  url: string;
+  model: string;
+  keepAlive: string;
+  weights?: ScoreWeights;
+}
 
 export interface StoreRequest {
   id: number;
-  method: StoreMethod | "ping";
+  method: StoreMethod;
   args: unknown[];
 }
 
@@ -24,9 +36,12 @@ export class MemoryStore {
 
   constructor(private readonly call: Call) {}
 
-  /** A store backed by the worker thread (the app). `script`: the bundled worker.ts. */
-  static open(file: string, script: string): MemoryStore {
-    const worker = new Worker(script, { workerData: { file } });
+  /**
+   * A store backed by the worker thread (the app). `script`: the bundled
+   * worker.ts; `vecExtension`: sqlite-vec's library (null: words only).
+   */
+  static open(file: string, script: string, vecExtension: string | null): MemoryStore {
+    const worker = new Worker(script, { workerData: { file, vecExtension } });
     const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
     let next = 1;
     let dead = false;
@@ -58,12 +73,38 @@ export class MemoryStore {
     });
   }
 
-  /** A store on a database in this thread (tests). */
+  /** A store on a database in this thread (tests): words only, no embedding queue. */
   static local(db: MemoryDb): MemoryStore {
     return new MemoryStore(async (method, args) => {
-      if (method === "ping") return null;
+      if (method === "ping" || method === "configure" || method === "setBusy" || method === "warm") return null;
+      if (method === "indexStatus") return { state: "off", model: "", done: 0, total: 0 } satisfies IndexStatus;
+      if (method === "search") return db.search(args[0] as SearchRequest);
       return (db[method] as (...a: unknown[]) => unknown).apply(db, args);
     });
+  }
+
+  /** Embeddings provider and score weights (the queue starts or switches model). */
+  configure(config: EmbeddingConfig): void {
+    this.write("configure", [config]);
+  }
+
+  /** Lumi is answering or speaking: the embedding queue waits (the GPU is shared with the voice). */
+  setBusy(busy: boolean): void {
+    this.write("setBusy", [busy]);
+  }
+
+  /**
+   * The user is about to ask something (started talking, opened the chat or
+   * the bar): the embedding model loads now, so the question's embedding
+   * fits the short wait of automatic recall.
+   */
+  warm(): void {
+    this.write("warm", []);
+  }
+
+  /** How far the embedding queue is; null when the worker doesn't answer. */
+  async indexStatus(): Promise<IndexStatus | null> {
+    return (this.call("indexStatus", []) as Promise<IndexStatus>).catch(() => null);
   }
 
   /** Appends a line to the raw log (fire and forget). */
@@ -76,7 +117,7 @@ export class MemoryStore {
   }
 
   /** Searches memory; a slow or failed search is no result (`null` after `timeoutMs`). */
-  async search(request: SearchRequest, timeoutMs = 2000): Promise<SearchResult | null> {
+  async search(request: SearchRequest, timeoutMs = 4000): Promise<SearchResult | null> {
     try {
       return await withTimeout(this.call("search", [request]) as Promise<SearchResult>, timeoutMs);
     } catch (err) {

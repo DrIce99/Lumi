@@ -54,6 +54,7 @@ from ocr.base import lines_to_json  # noqa: E402
 from ocr.engines import OCRConfig  # noqa: E402
 from stt.base import SAMPLE_RATE as STT_RATE  # noqa: E402
 from stt.base import STTConfig, pcm16_to_float  # noqa: E402
+from text.lexicon_it import lexicon_for  # noqa: E402
 from text.normalize_it import normalize  # noqa: E402
 from tts.base import SAMPLE_RATE as TTS_RATE  # noqa: E402
 from tts.base import Cancel, EngineUnavailable, TTSConfig  # noqa: E402
@@ -311,7 +312,7 @@ async def tts_socket(ws: WebSocket) -> None:
             if not text:
                 await send_json({"id": req_id, "done": True, "cancelled": False, "firstMs": None, "ms": 0, "audioMs": 0})
                 continue
-            spoken = text if data.get("raw") else normalize(text)
+            spoken = text if data.get("raw") else normalize(text, lexicon_for(state.manager.config("tts")))
             req = SpeakRequest(req_id, spoken, str(data.get("emotion") or "neutra"), float(data.get("intensity", 0.6)), data.get("voice"))
             requests[req_id] = req
             pending.put_nowait(req)

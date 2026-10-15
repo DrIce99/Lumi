@@ -8,7 +8,7 @@ import type { Emotion } from "../shared/emotions";
 import { toEmotion } from "../shared/emotions";
 import { applyProfile } from "../shared/profiles";
 import { PROVIDER_IDS, type ProviderId } from "../shared/providers";
-import type { BarContext, GpuInfo, KeySource, Settings, SettingsSnapshot, TtsEngine } from "../shared/types";
+import type { BarContext, GpuInfo, KeySource, MemoryIndexStatus, Settings, SettingsSnapshot, TtsEngine } from "../shared/types";
 import { Activity } from "./activity";
 import { readAttachments, type Attachment } from "./attachments";
 import { Audiobooks } from "./audiobook";
@@ -106,8 +106,8 @@ function start(): void {
   const settings = () => settingsStore.get();
   const apiKeys = new ApiKeyStore(dataDir);
   const services = new Services(settings, apiKeys);
-  // Every line said, searchable for years: SQLite in a worker thread
-  const memoryStore = MemoryStore.open(join(dataDir, "memory.db"), join(__dirname, "memoryWorker.js"));
+  // Every line said, searchable for years: SQLite in a worker thread, with sqlite-vec for search by meaning
+  const memoryStore = MemoryStore.open(join(dataDir, "memory.db"), join(__dirname, "memoryWorker.js"), vecExtensionPath());
   const memory = new Memory(join(dataDir, "memory.json"), memoryStore);
   void memory.importLegacy();
   const speakers = new Speakers(join(dataDir, "voices.json"));
@@ -340,7 +340,10 @@ function start(): void {
       mood.clearEmotion();
     },
     speaking: () => voice.busy(),
-    setListening: (listening) => mood.set({ listening }),
+    setListening: (listening) => {
+      mood.set({ listening });
+      if (listening) memoryStore.warm();
+    },
     recentSpeech: () =>
       memory
         .recentConversation(4)
@@ -634,6 +637,28 @@ function start(): void {
     },
   };
   const brain = new Brain(host);
+
+  // ---- memory: embeddings for search by meaning, in the background ----
+  let memoryIndex: MemoryIndexStatus | null = null;
+  const configureMemory = () => {
+    const s = settings();
+    memoryStore.configure({ provider: s.memory.embeddings.provider, url: s.brain.ollamaUrl, model: s.memory.embeddings.model, keepAlive: "10m", weights: s.memory.weights });
+  };
+  configureMemory();
+  // The embedding queue waits while Lumi answers or speaks: the GPU is shared with the voice
+  let memoryBusy = false;
+  setInterval(() => {
+    const busy = brain.isBusy() || voice.busy();
+    if (busy !== memoryBusy) memoryStore.setBusy((memoryBusy = busy));
+  }, 500).unref();
+  setInterval(() => {
+    void memoryStore.indexStatus().then((status) => {
+      if (status?.state !== memoryIndex?.state && (status?.state === "missing" || status?.state === "unavailable")) {
+        log.warn(`Memory search by meaning unavailable (${status.state}${status.detail ? `: ${status.detail}` : ""}): words only`);
+      }
+      memoryIndex = status;
+    });
+  }, 10_000).unref();
   const autonomy = new Autonomy(
     () => settings().sociability,
     () => canReact() && !activity.snapshot().away,
@@ -825,6 +850,7 @@ function start(): void {
 
   function talk(): void {
     if (!visible) setVisible(true);
+    memoryStore.warm();
     if (face.isInputOpen()) face.closeInput();
     else face.openInput();
   }
@@ -891,7 +917,10 @@ function start(): void {
       context: () => (settings().commandBar.useSelection ? perception.selection() : null),
       gaze: (rect) => {
         // While the bar is open the eyes look at it, like at a caret
-        if (rect) perception.add({ id: "commandbar", kind: "caret", rect, salience: 1, t: Date.now() });
+        if (rect) {
+          perception.add({ id: "commandbar", kind: "caret", rect, salience: 1, t: Date.now() });
+          memoryStore.warm();
+        }
         else perception.remove("commandbar");
       },
       submit: ({ text, context, files }) => void askFromBar(text, context, files),
@@ -950,6 +979,7 @@ function start(): void {
       diary: memory.diary(),
       appAudioStatus: appAudio.statuses,
       discord: { ...discordVoice.status(), token: discordToken.source() },
+      memoryIndex,
       knownVoices: speakers.voices().map((v) => ({ id: v.id, label: voiceLabel(v, settings().userName), owner: !!v.owner, via: v.via, samples: v.samples, lastHeard: v.lastHeard })),
       dataPath: dataDir,
       sidecar: sidecar.status(),
@@ -1098,10 +1128,13 @@ function start(): void {
   /** Starts the local Ollama server when one of the brain choices (or the local vision) needs it. */
   const startOllamaIfUsed = () => {
     const b = settings().brain;
-    if ([b.chat, b.idle, b.vision].some((c) => c.provider === "ollama" && c.model) || (settings().vision.provider === "ollama" && settings().vision.model)) void ensureOllama(b.ollamaUrl);
+    const s = settings();
+    const used = [b.chat, b.idle, b.vision].some((c) => c.provider === "ollama" && c.model) || (s.vision.provider === "ollama" && s.vision.model) || s.memory.embeddings.provider === "ollama";
+    if (used) void ensureOllama(b.ollamaUrl);
   };
   settingsStore.onChange((next, prev) => {
-    if (JSON.stringify(next.brain) !== JSON.stringify(prev.brain) || JSON.stringify(next.vision) !== JSON.stringify(prev.vision)) startOllamaIfUsed();
+    if (JSON.stringify(next.brain) !== JSON.stringify(prev.brain) || JSON.stringify(next.vision) !== JSON.stringify(prev.vision) || JSON.stringify(next.memory) !== JSON.stringify(prev.memory)) startOllamaIfUsed();
+    if (JSON.stringify(next.memory) !== JSON.stringify(prev.memory) || next.brain.ollamaUrl !== prev.brain.ollamaUrl) configureMemory();
   });
 
   startOllamaIfUsed();
@@ -1128,4 +1161,14 @@ function start(): void {
     return chosen ? `${chosen.provider.id}/${chosen.model}` : "offline";
   };
   log.info(`Ready: chat ${brainInfo("chat")}, moments ${brainInfo("idle")}; face at ${JSON.stringify(face.win.getBounds())}`);
+}
+
+/** sqlite-vec's loadable library (vec0.dll), or null: the memory then searches by words only. */
+function vecExtensionPath(): string | null {
+  try {
+    return (require("sqlite-vec") as { getLoadablePath(): string }).getLoadablePath();
+  } catch (err) {
+    log.warn("sqlite-vec not found: the memory will search by words only", err);
+    return null;
+  }
 }

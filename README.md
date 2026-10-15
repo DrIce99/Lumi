@@ -43,7 +43,7 @@ L'obiettivo è che sembri **il più umano possibile**, cioè con poca latenza, t
 - **Voce espressiva in italiano**: emozioni decise dal modello e applicate sia alla voce sia agli occhi.
 - **Vede lo schermo**: legge il testo con l'OCR locale in tempo reale e, quando serve, manda uno screenshot a un modello con visione.
 - **Cervello a scelta**: Ollama in locale, Google Gemini, Groq, OpenRouter (modelli `:free`) o qualsiasi API compatibile OpenAI (LM Studio…).
-- **Memoria persistente** e **momenti autonomi** (commenti spontanei nelle pause), come in Pixel Pet. Ogni frase della conversazione finisce in un database locale (`memory.db`): le parti più vecchie vengono riassunte in "episodi" che restano nel contesto, i fatti importanti su di te vengono estratti da soli, e a ogni domanda Lumi cerca nel suo passato i ricordi collegati (ricerca full-text sull'italiano, tutta sul PC; tool `search_memory` per le ricerche esplicite, anche per data: "ti ricordi quando…", "cosa ti ho detto a marzo?").
+- **Memoria persistente** e **momenti autonomi** (commenti spontanei nelle pause), come in Pixel Pet. Ogni frase della conversazione finisce in un database locale (`memory.db`): le parti più vecchie vengono riassunte in "episodi" che restano nel contesto, i fatti importanti su di te vengono estratti da soli, e a ogni domanda Lumi cerca nel suo passato i ricordi collegati (ricerca per parole e per significato, tutta sul PC; tool `search_memory` per le ricerche esplicite, anche per data: "ti ricordi quando…", "cosa ti ho detto a marzo?").
 - **Memoria che dura anni** (fase 10, prevista): ricorda tutto ciò che è stato detto e lo ritrova per significato, per parole esatte o per data. Dà priorità a ciò che conta, ma non butta niente e dimentica solo quando glielo chiedi tu.
 - **Si muove sullo schermo** (fase 14, prevista): se le chiedi di spostarsi ("vai in alto a destra", "sull'altro schermo", "levati, mi copri") vola lì da sola, anche tra i monitor; e si muove anche di sua iniziativa quando ha un motivo, per indicarti qualcosa o per farti un piccolo dispetto se l'hai infastidita.
 - **Passa sul telefono** (fase 15, prevista): con il tasto "Chiama" dell'app Lumi viene risucchiata fuori dallo schermo del PC (come un oggetto che cade in un buco nero) e riemerge nell'app, dove la vedi e le parli; voce, cervello e memoria restano sul PC.
@@ -390,7 +390,7 @@ look_at_screen({ question })
 
 ## Memoria a lungo termine
 
-> In costruzione (fase 10). **Fatto**: `memory.db` con il log grezzo di ogni frase, gli episodi e i giorni del diario, l'indice full-text (FTS5) e `search_memory` con i filtri per data e tipo; al primo avvio importa `archive.jsonl` (poi rinominato `archive.jsonl.imported`), episodi e diario. **Ancora da fare**: vettori e ricerca ibrida, fatti con importanza (oggi restano in `memory.json`), riassunti settimanali e mensili, oblio a cascata, backup.
+> In costruzione (fase 10). **Fatto**: `memory.db` con il log grezzo di ogni frase, gli episodi e i giorni del diario, l'indice full-text (FTS5) e `search_memory` con i filtri per data e tipo; al primo avvio importa `archive.jsonl` (poi rinominato `archive.jsonl.imported`), episodi e diario. Embedding con Ollama (`bge-m3`) in una coda in background, vettori in sqlite-vec e ricerca ibrida (parole + significato, RRF, punteggio con recenza). **Ancora da fare**: fatti con importanza (oggi restano in `memory.json`), riassunti settimanali e mensili, oblio a cascata, backup, embedding nel sidecar per chi non ha Ollama.
 >
 > Il database usa `node:sqlite`, incluso nel Node di Electron (nessun modulo nativo da ricompilare), e gira in un worker thread: le query SQLite sono sincrone e non devono mai fermare il thread principale, dove vive l'hook del mouse.
 
@@ -448,7 +448,14 @@ summaries(id, period, start, end, text, source_ids)               -- livello 4
 
 Lumi può anche **cercare da solo** con il tool `search_memory({ query, from, to, kind })`, per esempio quando gli chiedi "cosa ti ho detto a marzo sul trasloco?" o quando il recupero automatico non basta.
 
-**Embedding**: via Ollama con `bge-m3` (multilingue, buono in italiano, 1024 dimensioni) oppure `nomic-embed-text`, più leggero. Senza Ollama, ad esempio nel profilo leggero, gli embedding girano nel sidecar su CPU. Se nessuno dei due è disponibile, la memoria funziona con il solo FTS e i vettori vengono calcolati in seguito.
+**Embedding**: via Ollama con `bge-m3` (multilingue, buono in italiano, 1024 dimensioni, circa 660 MB di VRAM; si scarica con `ollama pull bge-m3`, si sceglie in Impostazioni → Memoria). `nomic-embed-text` è più leggero ma è un modello inglese: misurato su domande italiane, mette risposte giuste e sbagliate quasi alla pari (0,43–0,66), mentre `bge-m3` separa bene (risposte giuste 0,54–0,71, il resto 0,31–0,51). Senza Ollama (o con «Spenta») la memoria funziona con le sole parole e i vettori vengono calcolati in seguito, quando il modello c'è; gli embedding nel sidecar su CPU, per il profilo leggero, arriveranno dopo.
+
+Come funziona (fatto, passo 10.2):
+
+- **Cosa ha un vettore**: ogni frase di almeno 12 caratteri, insieme alla frase precedente della stessa sessione (così "come si chiama?" porta con sé "ho preso un gatto"), e ogni riassunto. Ogni vettore salva il nome del modello; c'è una tabella `vec0` di sqlite-vec per modello (distanza coseno, con data e tipo come metadati per filtrare dentro la ricerca).
+- **La coda** (`memory/indexer.ts`, nel worker): cerca ciò che non ha ancora un vettore del modello scelto, dal più recente, a gruppi di 16. Si ferma mentre Lumi risponde o parla e per 5 s dopo, perché la GPU è condivisa con la voce. Se il modello manca riprova ogni 5 minuti (e Impostazioni → Memoria dice quale `ollama pull` fare), se Ollama è spento ogni minuto. Cambiando modello si ricalcola tutto in background: nel frattempo la ricerca usa le parole, e i vettori vecchi si cancellano solo quando il nuovo modello copre tutto.
+- **La domanda**: l'embedding della domanda ha 250 ms per il recupero automatico (`<recalled>`) e 1,5 s per `search_memory`; se non arriva in tempo, la ricerca usa solo le parole. Per non perdere il significato al primo messaggio dopo una pausa, il modello viene "scaldato" quando inizi a parlare, apri la chat o la barra dei comandi. A modello caldo una ricerca completa richiede circa 20–30 ms.
+- **Soglia**: un risultato per significato conta solo sopra una similarità minima per modello (0,50 per `bge-m3`, 0,60 per `nomic-embed-text`, 0,55 per gli altri) e solo se non è più di 0,06 sotto il migliore: la risposta giusta di solito spicca, il resto è rumore.
 
 **Dimensioni**: con circa 200 scambi al giorno per 5 anni si arriva a circa 365.000 righe. Con vettori da 1024 dimensioni in float32 sono circa 1,5 GB, molto meno se quantizzati (int8 o binari, con un riordino finale sui float). Per SQLite è un volume gestibile, con ricerche nell'ordine dei decimi di secondo.
 
@@ -735,6 +742,16 @@ L'intensità (da 0 a 1) modula l'istruzione ("leggermente", "molto") o il parame
 
 Le clip di backchannel e dei riempitivi vengono **pre-generate all'avvio** con la voce scelta e salvate in cache.
 
+### Pronuncia italiana
+
+L'italiano ha trappole che i modelli multilingua sbagliano spesso: accento tonico (àncora/ancóra), e e o aperte e chiuse (pèsca/pésca), c e g dolci e dure, doppie, raddoppiamento sintattico ("a casa" → "a ccasa"), parole straniere dentro la frase. Si interviene dal più economico al più costoso:
+
+1. **Misurare** (fatto): `sidecar/text/trappole_it.txt` contiene una ventina di frasi trappola, ognuna con cosa ascoltare. `scripts/pronuncia.py` le fa leggere a un sidecar avviato a mano, per più motori e voci (`--voices qwen3:1.7B-CustomVoice:ryan,kokoro:v1.0:if_sara`), salva i WAV e con `--asr` le ritrascrive con il riconoscimento vocale, dando un punteggio a ogni frase (trova le parole sbagliate, non ogni accento: va comunque ascoltato).
+2. **Una voce madrelingua**: gli speaker di Qwen3-TTS CustomVoice (`ryan`, `aiden`, `vivian`…) non sono italiani, ed è la causa più probabile dell'accento straniero. Alternative già supportate, da confrontare con lo script: **Qwen3 Base** clonato da 10–20 s di un parlante italiano (accento migliore, ma senza istruzioni di emozione, vedi le note su Base) e **Qwen3 VoiceDesign** con una descrizione italiana (emozioni sì, va verificato che la voce resti stabile tra le frasi). Su Kokoro le voci italiane sono `im_nicola` e `if_sara`.
+3. **Lessico di pronuncia** (fatto): Impostazioni → Voce → «Pronuncia», una riga per parola (`VS Code = vi es code`). Prima della sintesi la parola viene riscritta come si legge, in lettere italiane (`sidecar/text/lexicon_it.py`, applicato in `normalize()` prima di sigle e abbreviazioni, per ogni motore). La trascrizione fonetica IPA non serve: Qwen3-TTS e Chatterbox leggono testo, non fonemi, e leggerebbero i simboli. Kokoro invece passa da espeak-ng, che legge all'italiana le parole inglesi ("mouse" → "mo-u-se"): per lui ci sono già una quarantina di riscritture predefinite (mouse → maus, download → daunlod, "il file" → "il fail"…), che le voci dell'utente possono sostituire.
+4. **Accenti grafici** sulle parole ambigue (àncora, pèsca): solo se il punto 1 mostra che il modello li rispetta; in quel caso il prompt chiede al cervello di scriverli, perché solo lui conosce il senso della frase.
+5. **LoRA** (facoltativo, solo se dopo i punti 2–4 restano errori sistematici): un adattamento leggero di Qwen3-TTS Base su 5–10 ore di **un solo** parlante italiano pulito (per esempio un lettore di LibriVox / Multilingual LibriSpeech, pubblico dominio; Common Voice no: migliaia di voci di qualità variabile). Probabilmente 16–24 GB di VRAM per il modello 1.7B (da verificare). I pesi del LoRA vanno fusi nel modello, così faster-qwen3-tts resta veloce; il rischio è perdere in parte le istruzioni di emozione o la clonazione di altre voci, il vantaggio possibile è una voce italiana stabile **con** le emozioni. Lo script del punto 1 serve anche a confrontare prima e dopo.
+
 ---
 
 ## Riconoscimento vocale (STT)
@@ -802,10 +819,12 @@ lumi/
 │  │  ├─ brain/
 │  │  │  ├─ brain.ts  prompt.ts  tools.ts  memory.ts
 │  │  │  ├─ memory/            (fase 10, in costruzione)
-│  │  │  │  ├─ db.ts           node:sqlite + FTS5 (poi sqlite-vec), migrazioni, ricerca
+│  │  │  │  ├─ db.ts           node:sqlite + FTS5 + sqlite-vec, migrazioni, ricerca ibrida
 │  │  │  │  ├─ worker.ts       il worker thread che possiede memory.db
-│  │  │  │  ├─ store.ts        il client asincrono nel main (poi coda embedding)
-│  │  │  │  ├─ search.ts       termini, query FTS, date (puro, testato; poi RRF e punteggio)
+│  │  │  │  ├─ store.ts        il client asincrono nel main
+│  │  │  │  ├─ embed.ts        embedding da Ollama
+│  │  │  │  ├─ indexer.ts      la coda degli embedding, in background
+│  │  │  │  ├─ search.ts       termini, query FTS, date, RRF, punteggio, soglie (puro, testato)
 │  │  │  │  ├─ facts.ts        (previsto) estrazione e aggiornamento dei fatti
 │  │  │  │  ├─ summaries.ts    (previsto) riassunti giornalieri/settimanali/mensili
 │  │  │  │  └─ forget.ts       (previsto) oblio a cascata con conferma
@@ -873,7 +892,7 @@ Il sidecar ascolta solo su `127.0.0.1`, con una porta casuale e un token generat
   "profile": "bilanciato",
   "brain":   { "chat": { "provider": "groq", "model": "..." }, "idle": { "provider": "ollama", "model": "qwen3" } },
   "stt":     { "engine": "faster-whisper", "model": "large-v3-turbo", "vocabulary": ["Sme.UP", "RPG"] },
-  "tts":     { "engine": "qwen3", "model": "1.7B-CustomVoice", "voice": "...", "speed": 1.0 },
+  "tts":     { "engine": "qwen3", "model": "1.7B-CustomVoice", "voice": "...", "speed": 1.0, "pronunciations": ["VS Code = vi es code"] },
   "vision":  { "provider": "ollama", "model": "qwen3-vl:8b", "keepAlive": "2m", "maxSide": 1344 },
   "listen":  { "mode": "push-to-talk", "hotkey": "Ctrl+Alt+Space", "wakeWord": "ehi lumi", "wakeThreshold": 0.5, "followUpSeconds": 8 },
   "chatHotkey": "Control+Alt+L",
@@ -949,7 +968,7 @@ Ogni fase si chiude con `npm run check` e `pytest` verdi e una prova manuale.
    6. ~~[Attivazione per nome](#attivazione-per-nome) con openWakeWord~~ (fatto; il modello "lumi" va addestrato con `train.py`).
 10. **Memoria a lungo termine** ([dettagli](#memoria-a-lungo-termine)):
     1. ~~`db.ts` + log + FTS + `search_memory` per date; import di `archive.jsonl`, episodi e diario~~ (fatto).
-    2. Coda di embedding (Ollama `bge-m3`, sqlite-vec con `loadExtension`) e ricerca ibrida con RRF e punteggio.
+    2. ~~Coda di embedding (Ollama `bge-m3`, sqlite-vec con `loadExtension`) e ricerca ibrida con RRF e punteggio~~ (fatto; gli embedding nel sidecar su CPU, senza Ollama, restano da fare).
     3. Fatti con importanza in `memory.db` (import dei fatti di `memory.json`), `superseded_by`.
     4. Riassunti gerarchici (giorno → settimana → mese) e backup giornalieri.
     5. Oblio a cascata con conferma.
@@ -973,6 +992,12 @@ Ogni fase si chiude con `npm run check` e `pytest` verdi e una prova manuale.
     3. File: `find_files` sull'indice di Windows Search e sui recenti, apertura, spostamento nel cestino con conferma.
     4. UI Automation nel sidecar (`ui_action`) e tastiera (`press_keys`, `type_text`), con verifica dopo ogni passo.
     5. Ultima risorsa: `click` con la visione locale. Poi le azioni automatiche delle abitudini (fase 11) usano lo stesso esecutore e la stessa policy.
+17. **Pronuncia italiana** ([dettagli](#pronuncia-italiana)). Indipendente dalle altre fasi:
+    1. ~~Frasi trappola e `scripts/pronuncia.py` (WAV per motore e voce, punteggio con `--asr`)~~ (fatto).
+    2. ~~Lessico di pronuncia nelle impostazioni, riscritture predefinite per Kokoro~~ (fatto).
+    3. Confronto delle voci con lo script (CustomVoice, Base clonata da un parlante italiano, VoiceDesign) e scelta della voce predefinita.
+    4. Accenti grafici scritti dal cervello sulle parole ambigue, solo se il confronto mostra che il modello li rispetta.
+    5. Facoltativo, solo se restano errori sistematici: LoRA su Qwen3-TTS Base con 5–10 ore di un solo parlante italiano, pesi fusi nel modello, confronto prima/dopo con lo script.
 
 ---
 

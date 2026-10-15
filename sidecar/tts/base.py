@@ -28,6 +28,8 @@ class TTSConfig:
     speed: float = 1.0
     seed: int = 7
     device: str = "auto"
+    #: ["parola", "pronuncia"] pairs (text/lexicon_it.py); a light setting, no reload
+    lexicon: list = field(default_factory=list)
 
     def key(self) -> tuple:
         """Settings that need a new engine instance when they change."""

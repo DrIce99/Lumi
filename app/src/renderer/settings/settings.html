@@ -264,6 +264,11 @@
             <input id="seed" type="number" min="0" max="2147483647" step="1" />
           </label>
         </div>
+        <label class="field">
+          <span>Pronuncia (una per riga: parola = come va detta)</span>
+          <textarea id="pronunciations" rows="3" placeholder="VS Code = vi es code&#10;Sme.UP = smi ap"></textarea>
+          <small class="hint">Per le parole che la voce sbaglia: scrivile come si leggono, in lettere italiane. Valgono per ogni motore.</small>
+        </label>
         <div class="row">
           <input id="voiceText" type="text" value="Ciao! Sono Lumi. Come posso aiutarti oggi?" />
           <button id="testVoice" type="button">Prova la voce</button>
@@ -338,6 +343,22 @@
         <ul id="reminders" class="list"></ul>
         <h2>Diario</h2>
         <ul id="diary" class="list"></ul>
+        <h2>Ricerca nei ricordi</h2>
+        <p class="hint">Lumi ritrova i ricordi per parole e, con un modello di embedding in Ollama, anche per significato ("il mio animale" trova "il gatto"). Tutto resta sul PC.</p>
+        <div class="grid2">
+          <label class="field">
+            <span>Ricerca per significato</span>
+            <select id="embeddingProvider">
+              <option value="ollama">Ollama (sul PC)</option>
+              <option value="none">Spenta (solo parole)</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Modello di embedding</span>
+            <input id="embeddingModel" type="text" placeholder="bge-m3" />
+          </label>
+        </div>
+        <small id="memoryIndex" class="hint"></small>
         <h2>Voci riconosciute</h2>
         <p class="hint">La prima voce sentita al microfono è la tua. Per dare un nome a una voce dillo a Lumi: "quello che ha appena parlato è Marco". Se Lumi ha preso un'altra voce per la tua, dimentica la tua: la imparerà di nuovo.</p>
         <ul id="knownVoices" class="list"></ul>

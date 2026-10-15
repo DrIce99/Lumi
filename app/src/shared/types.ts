@@ -66,7 +66,8 @@ export interface Settings {
     maxSide: number;
   };
   stt: { engine: SttEngine; model: string; device: Device; vocabulary: string[] };
-  tts: { engine: TtsEngine; model: string; voice: string; speed: number; volume: number; seed: number };
+  /** `pronunciations`: "parola = pronuncia" lines, respelled before synthesis (sidecar/text/lexicon_it.py). */
+  tts: { engine: TtsEngine; model: string; voice: string; speed: number; volume: number; seed: number; pronunciations: string[] };
   listen: {
     mode: ListenMode;
     /** Push-to-talk, held down (Electron accelerator syntax). */
@@ -82,6 +83,13 @@ export interface Settings {
     backchannel: boolean;
     fillers: boolean;
     micDevice: string;
+  };
+  /** Long-term memory (memory.db): where the embeddings come from, and how results are ordered. */
+  memory: {
+    /** Ollama (local) or none (search by words only). */
+    embeddings: { provider: EmbeddingProvider; model: string };
+    /** Generative Agents score: relevance + recency + importance (to tune). */
+    weights: { relevance: number; recency: number; importance: number };
   };
   /** Recognizing voices (voiceprints stay on this computer). */
   voices: {
@@ -148,7 +156,8 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   vision: { provider: "ollama", model: "qwen3-vl:8b", keepAlive: "2m", maxSide: 1344 },
   stt: { engine: "faster-whisper", model: "large-v3-turbo", device: "auto", vocabulary: [] },
-  tts: { engine: "qwen3", model: "1.7B-CustomVoice", voice: "ryan", speed: 1, volume: 1, seed: 7 },
+  tts: { engine: "qwen3", model: "1.7B-CustomVoice", voice: "ryan", speed: 1, volume: 1, seed: 7, pronunciations: [] },
+  memory: { embeddings: { provider: "ollama", model: "bge-m3" }, weights: { relevance: 1, recency: 0.5, importance: 0.5 } },
   listen: {
     mode: "push-to-talk",
     hotkey: "Control+Alt+Space",
@@ -445,7 +454,20 @@ export interface SettingsSnapshot {
   /** Listened apps and their state ("in ascolto", "chiusa", "errore: ..."). */
   appAudioStatus: Record<string, string>;
   discord: { state: string; detail: string; token: "env" | "saved" | "none" };
+  /** The memory's embedding queue: how much has vectors of the chosen model. */
+  memoryIndex: MemoryIndexStatus | null;
 }
+
+export interface MemoryIndexStatus {
+  state: "off" | "unavailable" | "idle" | "indexing" | "waiting" | "missing" | "offline" | "error";
+  model: string;
+  done: number;
+  total: number;
+  detail?: string;
+}
+
+export const EMBEDDING_PROVIDERS = ["ollama", "none"] as const;
+export type EmbeddingProvider = (typeof EMBEDDING_PROVIDERS)[number];
 
 export interface KnownVoice {
   id: string;

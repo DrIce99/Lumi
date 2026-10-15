@@ -2,10 +2,13 @@
 // through node:sqlite (bundled with Electron's Node: no native module to
 // rebuild). Layer 1 is the raw log of every line said (append-only, the
 // source of truth); FTS5 indexes it and the summaries (episodes and diary
-// days). Synchronous: it runs in a worker thread (worker.ts), never on the
-// main thread, where the click-through mouse hook lives.
+// days); sqlite-vec holds their embeddings, one vec0 table per model (the
+// vectors are a rebuildable index: text stays the truth). Search is hybrid:
+// FTS and vector candidates fused with RRF, then ordered by relevance,
+// recency and importance. Synchronous: it runs in a worker thread
+// (worker.ts), never on the main thread, where the mouse hook lives.
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
-import { dateRange, enoughMatched, ftsQuery, queryTerms } from "./search";
+import { dateRange, DEFAULT_WEIGHTS, enoughMatched, ftsQuery, keepSimilar, memoryScore, queryTerms, rrf, type ScoreWeights } from "./search";
 
 export type Speaker = "user" | "lumi" | "other";
 
@@ -51,6 +54,8 @@ export interface SearchRequest {
   /** Lines from this moment on are already in the prompt: skip them (ISO). */
   before?: string;
   limit?: number;
+  /** How long the worker may wait for the query's embedding before searching words only. */
+  embedTimeoutMs?: number;
 }
 
 export interface SearchResult {
@@ -59,6 +64,8 @@ export interface SearchResult {
   more: number;
   /** The dates could not be read. */
   badRange?: boolean;
+  /** The search used meaning (vectors) as well as words. */
+  semantic?: boolean;
 }
 
 export interface LegacyImport {
@@ -66,14 +73,31 @@ export interface LegacyImport {
   summaries: SummaryInput[];
 }
 
+/** An item to embed: a line (with the one before it, for context) or a summary. */
+export interface EmbedItem {
+  kind: "message" | "summary";
+  id: number;
+  text: string;
+}
+
+/** The query's embedding, from the model whose vectors to search. */
+export interface QueryVector {
+  model: string;
+  vector: number[];
+}
+
 /** A pause this long starts a new session. */
 export const SESSION_GAP_MS = 30 * 60_000;
-/** FTS candidates checked before the "half of the words" filter. */
-const CANDIDATES = 200;
+/** FTS and vector candidates per list (the "top 50" of the design). */
+const CANDIDATES = 50;
+/** FTS rows read before the "half of the words" filter. */
+const FTS_ROWS = 200;
 /** Lines around a hit, for context (same session). */
 const CONTEXT_LINES = 1;
+/** Lines shorter than this ("ok", "sì") get no vector: words find them. */
+export const MIN_EMBED_CHARS = 12;
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 const MIGRATIONS: string[] = [
   `CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -104,6 +128,17 @@ const MIGRATIONS: string[] = [
    CREATE VIRTUAL TABLE summaries_fts USING fts5(text, content='summaries', content_rowid='id', tokenize='unicode61 remove_diacritics 2');
    CREATE TRIGGER summaries_ai AFTER INSERT ON summaries BEGIN INSERT INTO summaries_fts(rowid, text) VALUES (new.id, new.text); END;
    CREATE TRIGGER summaries_ad AFTER DELETE ON summaries BEGIN INSERT INTO summaries_fts(summaries_fts, rowid, text) VALUES ('delete', old.id, old.text); END;`,
+  // v2: embeddings. Each row names its model; the vectors live in one vec0 table per model (vec_tables)
+  `CREATE TABLE embeddings (
+     id INTEGER PRIMARY KEY,
+     owner_kind TEXT NOT NULL,
+     owner_id INTEGER NOT NULL,
+     model TEXT NOT NULL,
+     dim INTEGER NOT NULL,
+     created TEXT NOT NULL,
+     UNIQUE (owner_kind, owner_id, model)
+   );
+   CREATE TABLE vec_tables (model TEXT PRIMARY KEY, dim INTEGER NOT NULL, name TEXT NOT NULL);`,
 ];
 
 interface MessageRow {
@@ -142,13 +177,28 @@ function toLine(r: MessageRow): StoredLine {
   };
 }
 
+const vectorBytes = (v: number[]) => new Uint8Array(new Float32Array(v).buffer);
+
 export class MemoryDb {
   private readonly db: DatabaseSync;
   private last: { ts: string; session: number } | null = null;
+  /** sqlite-vec is loaded: vectors can be stored and searched. */
+  readonly vectors: boolean;
 
-  constructor(file: string) {
-    this.db = new DatabaseSync(file);
+  /** `vecExtension`: path of sqlite-vec's loadable library; without it the memory searches words only. */
+  constructor(file: string, options: { vecExtension?: string | null } = {}) {
+    this.db = new DatabaseSync(file, { allowExtension: true });
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;");
+    let vectors = false;
+    if (options.vecExtension) {
+      try {
+        this.db.loadExtension(options.vecExtension);
+        vectors = true;
+      } catch {
+        vectors = false;
+      }
+    }
+    this.vectors = vectors;
     this.migrate();
     const row = this.db.prepare("SELECT ts, session_id FROM messages ORDER BY id DESC LIMIT 1").get() as { ts: string; session_id: number } | undefined;
     if (row) this.last = { ts: row.ts, session: row.session_id };
@@ -202,66 +252,187 @@ export class MemoryDb {
     return { messages: n("SELECT COUNT(*) AS n FROM messages"), summaries: n("SELECT COUNT(*) AS n FROM summaries") };
   }
 
-  search(request: SearchRequest): SearchResult {
+  // ---------------- embeddings ----------------
+
+  /** The vec0 table of a model, created on first use (the dimension comes with the first vectors). */
+  private vecTable(model: string, dim?: number): string | null {
+    if (!this.vectors) return null;
+    const row = this.db.prepare("SELECT name, dim FROM vec_tables WHERE model = ?").get(model) as { name: string; dim: number } | undefined;
+    if (row) {
+      if (dim !== undefined && dim !== row.dim) throw new Error(`${model} gave ${dim} dimensions, ${row.dim} expected`);
+      return row.name;
+    }
+    if (dim === undefined) return null;
+    const next = (this.db.prepare("SELECT COUNT(*) AS n FROM vec_tables").get() as { n: number }).n + 1;
+    let name = `vec_${next}`;
+    while (this.db.prepare("SELECT 1 FROM sqlite_master WHERE name = ?").get(name)) name = `${name}x`;
+    this.db.exec(`CREATE VIRTUAL TABLE ${name} USING vec0(embedding float[${Math.round(dim)}] distance_metric=cosine, kind text, ts text, te text)`);
+    this.db.prepare("INSERT INTO vec_tables (model, dim, name) VALUES (?, ?, ?)").run(model, dim, name);
+    return name;
+  }
+
+  /** Lines and summaries without a vector for `model`, newest first (recent memories matter sooner). */
+  pendingEmbeddings(model: string, limit: number): EmbedItem[] {
+    if (!this.vectors) return [];
+    const lines = this.db
+      .prepare(
+        `SELECT m.id, m.speaker, m.name, m.text,
+           (SELECT p.speaker || '|' || COALESCE(p.name, '') || '|' || p.text FROM messages p WHERE p.id = m.id - 1 AND p.session_id = m.session_id) AS previous
+         FROM messages m LEFT JOIN embeddings e ON e.owner_kind = 'message' AND e.owner_id = m.id AND e.model = ?
+         WHERE e.id IS NULL AND length(m.text) >= ? ORDER BY m.id DESC LIMIT ?`,
+      )
+      .all(model, MIN_EMBED_CHARS, limit) as { id: number; speaker: string; name: string | null; text: string; previous: string | null }[];
+    const label = (speaker: string, name: string | null) => (speaker === "user" ? "Utente" : speaker === "lumi" ? "Lumi" : name || "Qualcun altro");
+    const items: EmbedItem[] = lines.map((r) => {
+      const [ps, pn, ...pt] = r.previous?.split("|") ?? [];
+      const before = r.previous ? `${label(ps, pn || null)}: ${pt.join("|")}\n` : "";
+      return { kind: "message", id: r.id, text: `${before}${label(r.speaker, r.name)}: ${r.text}` };
+    });
+    if (items.length < limit) {
+      const summaries = this.db
+        .prepare(
+          `SELECT s.id, s.text FROM summaries s LEFT JOIN embeddings e ON e.owner_kind = 'summary' AND e.owner_id = s.id AND e.model = ?
+           WHERE e.id IS NULL ORDER BY s.id DESC LIMIT ?`,
+        )
+        .all(model, limit - items.length) as { id: number; text: string }[];
+      for (const s of summaries) items.push({ kind: "summary", id: s.id, text: s.text });
+    }
+    return items;
+  }
+
+  /** Stores the vectors of `items` (same order) for `model`. */
+  storeEmbeddings(model: string, items: EmbedItem[], vectors: number[][]): void {
+    if (!this.vectors || !items.length) return;
+    if (vectors.length !== items.length) throw new Error(`${items.length} items, ${vectors.length} vectors`);
+    const table = this.vecTable(model, vectors[0].length)!;
+    const owner = {
+      message: this.db.prepare("SELECT ts AS ts, ts AS te FROM messages WHERE id = ?"),
+      summary: this.db.prepare("SELECT start AS ts, end AS te FROM summaries WHERE id = ?"),
+    };
+    const insertRow = this.db.prepare("INSERT OR IGNORE INTO embeddings (owner_kind, owner_id, model, dim, created) VALUES (?, ?, ?, ?, ?)");
+    const insertVec = this.db.prepare(`INSERT INTO ${table} (rowid, embedding, kind, ts, te) VALUES (?, ?, ?, ?, ?)`);
+    const now = new Date().toISOString();
+    this.db.exec("BEGIN");
+    try {
+      items.forEach((item, i) => {
+        const span = owner[item.kind].get(item.id) as { ts: string; te: string } | undefined;
+        // Gone meanwhile ("Dimentica tutto" during a batch)
+        if (!span) return;
+        const row = insertRow.run(item.kind, item.id, model, vectors[i].length, now);
+        if (!row.changes) return;
+        insertVec.run(BigInt(row.lastInsertRowid), vectorBytes(vectors[i]), item.kind, span.ts, span.te);
+      });
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
+  /** How much of the memory has vectors of `model`. */
+  embeddingCoverage(model: string): { done: number; total: number } {
+    const n = (sql: string, ...params: SQLInputValue[]) => (this.db.prepare(sql).get(...params) as { n: number }).n;
+    const total = n("SELECT COUNT(*) AS n FROM messages WHERE length(text) >= ?", MIN_EMBED_CHARS) + n("SELECT COUNT(*) AS n FROM summaries");
+    return { done: n("SELECT COUNT(*) AS n FROM embeddings WHERE model = ?", model), total };
+  }
+
+  /** Once a new model covers everything, the old models' vectors go (they can't be searched with its queries). */
+  dropOtherModels(model: string): number {
+    if (!this.vectors) return 0;
+    const others = this.db.prepare("SELECT model, name FROM vec_tables WHERE model <> ?").all(model) as { model: string; name: string }[];
+    for (const o of others) {
+      this.db.exec(`DROP TABLE IF EXISTS ${o.name}`);
+      this.db.prepare("DELETE FROM embeddings WHERE model = ?").run(o.model);
+      this.db.prepare("DELETE FROM vec_tables WHERE model = ?").run(o.model);
+    }
+    return others.length;
+  }
+
+  // ---------------- search ----------------
+
+  search(request: SearchRequest, query: QueryVector | null = null, options: { now?: number; weights?: ScoreWeights } = {}): SearchResult {
     const range = dateRange(request.from, request.to);
     if (!range) return { hits: [], more: 0, badRange: true };
     const limit = Math.max(1, Math.min(30, request.limit ?? 5));
     const kind = request.kind ?? "all";
     const until = request.before && request.before < range.to ? request.before : range.to;
     const fts = request.query ? ftsQuery(request.query) : null;
-    if (request.query && !fts) return { hits: [], more: 0 };
+    const table = query ? this.vecTable(query.model) : null;
+    if (!request.query) return this.list(range.from, until, kind, limit);
+    if (!fts && !table) return { hits: [], more: 0 };
+
+    const lists: string[][] = [];
+    const words = queryTerms(request.query);
+    if (fts && kind !== "summary") {
+      const rows = this.db
+        .prepare("SELECT m.id, m.text FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid WHERE messages_fts MATCH ? AND m.ts >= ? AND m.ts < ? ORDER BY bm25(messages_fts) LIMIT ?")
+        .all(fts, range.from, until, FTS_ROWS) as { id: number; text: string }[];
+      lists.push(rows.filter((r) => enoughMatched(r.text, words)).slice(0, CANDIDATES).map((r) => `message:${r.id}`));
+    }
+    if (fts && kind !== "conversation") {
+      const rows = this.db
+        .prepare("SELECT s.id, s.text FROM summaries_fts JOIN summaries s ON s.id = summaries_fts.rowid WHERE summaries_fts MATCH ? AND s.end >= ? AND s.start < ? ORDER BY bm25(summaries_fts) LIMIT ?")
+        .all(fts, range.from, until, FTS_ROWS) as { id: number; text: string }[];
+      lists.push(rows.filter((r) => enoughMatched(r.text, words)).slice(0, CANDIDATES).map((r) => `summary:${r.id}`));
+    }
+    let semantic = false;
+    if (query && table) {
+      semantic = true;
+      const filter = kind === "conversation" ? " AND v.kind = 'message'" : kind === "summary" ? " AND v.kind = 'summary'" : "";
+      const rows = this.db
+        .prepare(
+          `SELECT e.owner_kind AS kind, e.owner_id AS id, v.distance FROM ${table} v JOIN embeddings e ON e.id = v.rowid
+           WHERE v.embedding MATCH ? AND k = ? AND v.te >= ? AND v.ts < ?${filter} ORDER BY v.distance`,
+        )
+        .all(vectorBytes(query.vector), CANDIDATES, range.from, until) as { kind: string; id: number; distance: number }[];
+      const similar = keepSimilar(rows.map((r) => ({ ...r, similarity: 1 - r.distance })), query.model);
+      lists.push(similar.map((r) => `${r.kind}:${r.id}`));
+    }
+
+    const fused = rrf(lists);
+    if (!fused.size) return { hits: [], more: 0, ...(semantic ? { semantic } : {}) };
+    const best = Math.max(...fused.values());
+    const now = options.now ?? Date.now();
+    const weights = options.weights ?? DEFAULT_WEIGHTS;
+    const message = this.db.prepare("SELECT * FROM messages WHERE id = ?");
+    const summary = this.db.prepare("SELECT * FROM summaries WHERE id = ?");
+    const hits: MemoryHit[] = [];
+    for (const [key, value] of fused) {
+      const [ownerKind, idText] = key.split(":");
+      const id = Number(idText);
+      const score = (at: string) => memoryScore({ relevance: value / best, hoursAgo: (now - Date.parse(at)) / 3_600_000 }, weights);
+      if (ownerKind === "message") {
+        const row = message.get(id) as MessageRow | undefined;
+        if (row) hits.push({ kind: "conversation", at: row.ts, lines: this.around(row), score: score(row.ts) });
+      } else {
+        const row = summary.get(id) as SummaryRow | undefined;
+        if (row) hits.push({ kind: row.period as SummaryKind, at: row.start, end: row.end, text: row.text, score: score(row.end) });
+      }
+    }
+    const kept = mergeOverlapping(hits.sort((a, b) => b.score - a.score)).slice(0, limit);
+    return { hits: kept, more: Math.max(0, fused.size - kept.length), ...(semantic ? { semantic } : {}) };
+  }
+
+  /** No words: the period in order, summaries first ("cosa ti ho detto il 12 marzo?"). */
+  private list(from: string, until: string, kind: SearchRequest["kind"], limit: number): SearchResult {
     const hits: MemoryHit[] = [];
     let total = 0;
-
-    if (kind !== "summary") {
-      if (fts) {
-        const words = queryTerms(request.query!);
-        const rows = (
-          this.db
-            .prepare(
-              "SELECT m.*, bm25(messages_fts) AS score FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid WHERE messages_fts MATCH ? AND m.ts >= ? AND m.ts < ? ORDER BY score LIMIT ?",
-            )
-            .all(fts, range.from, until, CANDIDATES) as unknown as MessageRow[]
-        ).filter((r) => enoughMatched(r.text, words));
-        total += rows.length;
-        for (const r of rows) hits.push({ kind: "conversation", at: r.ts, lines: this.around(r), score: -(r.score ?? 0) });
-      } else {
-        const n = (this.db.prepare("SELECT COUNT(*) AS n FROM messages WHERE ts >= ? AND ts < ?").get(range.from, until) as { n: number }).n;
-        total += n;
-        const rows = this.db.prepare("SELECT * FROM messages WHERE ts >= ? AND ts < ? ORDER BY id LIMIT ?").all(range.from, until, limit * 6) as unknown as MessageRow[];
-        // Without words the lines are listed in order, a few per hit
-        for (let i = 0; i < rows.length; i += 3) {
-          const group = rows.slice(i, i + 3).map(toLine);
-          hits.push({ kind: "conversation", at: group[0].at, lines: group, score: 0 });
-        }
-        total = Math.ceil(total / 3);
-      }
-    }
-
     if (kind !== "conversation") {
-      const params: SQLInputValue[] = [range.from, until];
-      if (fts) {
-        const words = queryTerms(request.query!);
-        const rows = (
-          this.db
-            .prepare(
-              "SELECT s.*, bm25(summaries_fts) AS score FROM summaries_fts JOIN summaries s ON s.id = summaries_fts.rowid WHERE summaries_fts MATCH ? AND s.end >= ? AND s.start < ? ORDER BY score LIMIT ?",
-            )
-            .all(fts, ...params, CANDIDATES) as unknown as SummaryRow[]
-        ).filter((r) => enoughMatched(r.text, words));
-        total += rows.length;
-        // Summaries carry more per hit than a line: a small edge in the ranking
-        for (const r of rows) hits.push({ kind: r.period as SummaryKind, at: r.start, end: r.end, text: r.text, score: -(r.score ?? 0) * 1.2 });
-      } else {
-        const rows = this.db.prepare("SELECT * FROM summaries WHERE end >= ? AND start < ? ORDER BY start").all(...params) as unknown as SummaryRow[];
-        total += rows.length;
-        for (const r of rows) hits.push({ kind: r.period as SummaryKind, at: r.start, end: r.end, text: r.text, score: 1 });
+      const rows = this.db.prepare("SELECT * FROM summaries WHERE end >= ? AND start < ? ORDER BY start").all(from, until) as unknown as SummaryRow[];
+      total += rows.length;
+      for (const r of rows) hits.push({ kind: r.period as SummaryKind, at: r.start, end: r.end, text: r.text, score: 1 });
+    }
+    if (kind !== "summary") {
+      const n = (this.db.prepare("SELECT COUNT(*) AS n FROM messages WHERE ts >= ? AND ts < ?").get(from, until) as { n: number }).n;
+      total += Math.ceil(n / 3);
+      const rows = this.db.prepare("SELECT * FROM messages WHERE ts >= ? AND ts < ? ORDER BY id LIMIT ?").all(from, until, limit * 6) as unknown as MessageRow[];
+      // A few lines per hit, in order
+      for (let i = 0; i < rows.length; i += 3) {
+        const group = rows.slice(i, i + 3).map(toLine);
+        hits.push({ kind: "conversation", at: group[0].at, lines: group, score: 0 });
       }
     }
-
-    // With words: most relevant first, overlapping context merged; without: summaries first, then in order
-    const sorted = fts ? hits.sort((a, b) => b.score - a.score) : hits.sort((a, b) => b.score - a.score || a.at.localeCompare(b.at));
-    const kept = mergeOverlapping(sorted).slice(0, limit);
+    const kept = hits.slice(0, limit);
     return { hits: kept, more: Math.max(0, total - kept.length) };
   }
 
@@ -291,9 +462,11 @@ export class MemoryDb {
     return data.lines.length;
   }
 
-  /** Forgets everything ("Dimentica tutto"): rows, indexes, and the free pages in the file. */
+  /** Forgets everything ("Dimentica tutto"): rows, indexes, vectors, and the free pages in the file. */
   clear(): void {
-    this.db.exec("DELETE FROM messages; DELETE FROM summaries;");
+    const tables = this.db.prepare("SELECT name FROM vec_tables").all() as { name: string }[];
+    for (const t of tables) this.db.exec(`DROP TABLE IF EXISTS ${t.name}`);
+    this.db.exec("DELETE FROM vec_tables; DELETE FROM embeddings; DELETE FROM messages; DELETE FROM summaries;");
     this.db.exec("INSERT INTO messages_fts(messages_fts) VALUES ('rebuild'); INSERT INTO summaries_fts(summaries_fts) VALUES ('rebuild');");
     this.last = null;
     this.db.exec("VACUUM");

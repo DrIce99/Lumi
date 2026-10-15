@@ -21,7 +21,7 @@ export interface VoiceHooks {
 /** What the sidecar should load for these settings. */
 export function sidecarConfig(settings: Settings, preload: boolean): Record<string, unknown> {
   return {
-    tts: { engine: settings.tts.engine, model: settings.tts.model, voice: settings.tts.voice, speed: settings.tts.speed, seed: settings.tts.seed, device: "auto" },
+    tts: { engine: settings.tts.engine, model: settings.tts.model, voice: settings.tts.voice, speed: settings.tts.speed, seed: settings.tts.seed, lexicon: settings.tts.pronunciations, device: "auto" },
     stt: { engine: settings.stt.engine, model: settings.stt.model, device: settings.stt.device, language: "it" },
     ocr: { enabled: settings.perception.enabled, engine: settings.perception.ocr },
     uia: { enabled: settings.perception.enabled && settings.perception.uia },

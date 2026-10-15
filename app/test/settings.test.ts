@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { clampAnchor, computeLayout, OVERLAY_HEIGHT } from "../src/main/layout";
 import { sanitizeSettings, SettingsStore } from "../src/main/settings";
+import { sidecarConfig } from "../src/main/voice/voice";
 import { applyProfile, suggestProfile } from "../src/shared/profiles";
 import { DEFAULT_SETTINGS } from "../src/shared/types";
 
@@ -86,4 +87,11 @@ test("models a service retired are replaced on load", () => {
   assert.deepEqual(s.brain.chat, { provider: "groq", model: "openai/gpt-oss-120b" });
   assert.equal(s.brain.idle.model, "llama-3.3-70b-versatile", "only that service's models");
   assert.deepEqual(s.brain.vision, { provider: "groq", model: "qwen/qwen3.8-27b" });
+});
+
+test("pronunciations keep only 'parola = pronuncia' lines, and reach the sidecar", () => {
+  const s = sanitizeSettings({ tts: { pronunciations: ["VS Code = vi es code", "senza uguale", "vuoto =", " Sme.UP=smi ap ", 3] } });
+  assert.deepEqual(s.tts.pronunciations, ["VS Code = vi es code", "Sme.UP=smi ap"]);
+  assert.deepEqual((sidecarConfig(s, true).tts as { lexicon: string[] }).lexicon, s.tts.pronunciations);
+  assert.deepEqual(sanitizeSettings({}).tts.pronunciations, []);
 });

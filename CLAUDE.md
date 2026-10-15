@@ -79,6 +79,16 @@ Work one roadmap phase at a time; finish each with checks green.
   settings) + semantic check (Smart Turn or the trailing-word heuristic in
   `endpoint.ts`); an unfinished-sounding turn waits 2.4x the pause, max 4 s.
   The user found 500 ms too eager: Lumi answered mid-thought.
+- Pronunciation: no IPA/G2P (Qwen3-TTS and Chatterbox read text tokens,
+  they would read the symbols). Words are respelled in Italian letters by
+  `sidecar/text/lexicon_it.py`, applied in `normalize()` before acronyms:
+  the user's "parola = pronuncia" lines (`tts.pronunciations`, sent as
+  `TTSConfig.lexicon`, a light setting: no reload) for every engine, plus
+  `ESPEAK_LOANWORDS` for Kokoro only (espeak-ng reads English loanwords
+  the Italian way; "file" only with an article, it is also "fila"'s
+  plural). `scripts/pronuncia.py` reads `text/trappole_it.txt` through a
+  running sidecar per engine:model:voice and scores it with `--asr`.
+  A LoRA on Qwen3 Base is only a later, optional step (roadmap 17).
 - Text sent to TTS is normalized to spoken Italian first
   (`sidecar/text/normalize_it.py`): numbers, dates, times, currency,
   acronyms, URLs, emoji.
@@ -189,7 +199,7 @@ Work one roadmap phase at a time; finish each with checks green.
   (`Brain.writeEpisode`, JSON with summary + facts; requests to Lumi are
   not facts).
 - `memory.db` uses `node:sqlite` (bundled with Electron's Node 24: FTS5,
-  `loadExtension` for sqlite-vec later), not `better-sqlite3` (native
+  `loadExtension` for sqlite-vec), not `better-sqlite3` (native
   module to rebuild for Electron). It lives in a worker thread
   (`memory/worker.ts`, bundled as `dist/main/memoryWorker.js`): SQLite is
   synchronous and must not stall the mouse-hook thread. `MemoryStore`
@@ -204,7 +214,27 @@ Work one roadmap phase at a time; finish each with checks green.
   are lightly stemmed in `search.ts` and matched as prefixes (`"gatt"*`),
   then a hit needs half of the query's words (checked in JS on the row).
   Hits come with the line before and after (same session).
-- `<recalled>` comes from `Memory.recall` (400 ms timeout, recent window
+- Vectors (step 10.2): `sqlite-vec` npm (prebuilt `vec0.dll`, path from
+  `getLoadablePath()` in main, passed to the worker; null = words only).
+  Schema v2: `embeddings` (owner_kind message|summary, owner_id, model,
+  dim) + `vec_tables` (one `vec0` table per model: `distance_metric=cosine`,
+  metadata `kind`, `ts`, `te` so date/kind filters run inside the KNN).
+  Embedded: lines >= 12 chars with the previous line of the session as
+  context, and summaries. `indexer.ts` (worker) is the queue: "what has no
+  vector of the current model", newest first, batches of 16, paused while
+  `setBusy` (main polls brain/voice busy) and 5 s after; model missing ->
+  retry in 5 min, Ollama down -> 1 min; old models' vectors dropped only
+  when the new one covers everything. `embed.ts` = Ollama `/api/embed`
+  (task prefixes for nomic). Search: FTS lists (messages, summaries) and
+  the vector top 50 fused with RRF (k 60), then relevance (normalized
+  RRF) + recency 0.995^hours (age of the memory, not last access) +
+  importance (0 until facts) with `memory.weights`. Vector hits need the
+  model's floor (bge-m3 0.50, nomic 0.60, else 0.55: measured, see
+  README) and to be within 0.06 of the best. Query embedding: 250 ms for
+  `<recalled>`, 1.5 s for the tool, else words only; `store.warm()` (on
+  listening, chat, bar) loads the model ahead, at most once a minute.
+  bge-m3 warm: ~15-100 ms per query, whole search ~20-30 ms.
+- `<recalled>` comes from `Memory.recall` (500 ms timeout, recent window
   excluded) for every message; the model calls `search_memory({ query?,
   from?, to?, kind? })` with local dates ("2026-03", "2026-03-12 18:00",
   a month or day alone means all of it). The old `recall` tool name is
@@ -324,9 +354,10 @@ code yet; when a piece lands, move its notes to the sections above.
 
 ### Memory (`main/brain/memory/`, phase 10)
 
-Step 1 (raw log, FTS, `search_memory`, import) is built: see the notes
-above. Still planned: vectors and hybrid search, facts (still in
-`memory.json`, to import), week/month summaries, backups, forget.
+Steps 1 (raw log, FTS, `search_memory`, import) and 2 (embeddings,
+hybrid search) are built: see the notes above. Still planned: facts (still
+in `memory.json`, to import) with importance in the score, week/month
+summaries, backups, forget, sidecar CPU embeddings without Ollama.
 
 - Goal: remember everything for years, prioritize what matters, forget
   only on explicit request. Memories never go into model weights.

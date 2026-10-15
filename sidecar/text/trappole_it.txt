@@ -1,0 +1,23 @@
+# Frasi trappola per la pronuncia italiana (scripts/pronuncia.py).
+# Una per riga: la frase, poi " | " e cosa ascoltare. Le righe con # sono commenti.
+
+Ancora non so se prenderò l'àncora della barca. | ancóra / àncora: accento tonico
+Ho mangiato una pesca e poi sono andato a pesca. | pèsca (frutto) / pésca (sport): e aperta e chiusa
+La botte piena e la moglie ubriaca. | bótte (contenitore) con o chiusa
+Le pèsche erano mature, ma il lago era deserto. | è aperta segnata con l'accento grave
+Il principe guardava i princìpi della legge. | prìncipe / princìpi: accento tonico
+Il capitano ha capitato per caso in capitolo. | accenti su parole simili
+Cerco il gelato, la gelosia e il ghiaccio. | c e g dolci e dure
+Chiara ha chiesto chi c'era in chiesa. | ch dura davanti a e/i
+Gli gnocchi con la paglia e il bagno caldo. | gl e gn
+Fatto, detto, messo, rosso, cappello, tutto pronto. | consonanti doppie
+A casa tua, da Roma, va bene. | raddoppiamento sintattico (a ccasa, da RRoma, va bbene)
+Che cosa fai? Chi sa! | raddoppiamento dopo che, chi
+Zio Zeno, la zanzara e la pizza. | z sorda e sonora
+Lo sci e lo scialle sono sulla scena. | sc dolce
+Euro, aiuola, quaglia, guaio. | dittonghi e trittonghi
+Perché, però, poiché, così, già, più. | accenti finali
+Ho aperto il file nel browser e ho fatto il download. | parole inglesi in frase italiana
+Apri VS Code e controlla il terminale. | nomi di programmi
+Domani alle 15:30 ho la riunione, il 12/03. | numeri, ore e date (normalizzazione)
+Ciao! Sono Lumi, la tua compagna di scrivania. | il nome e una frase tipica
