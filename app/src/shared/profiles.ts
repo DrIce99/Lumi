@@ -54,7 +54,7 @@ export function applyProfile(settings: Settings, profile: Profile): Settings {
       s.brain.vision = { provider: "gemini", model: "" };
       s.vision = { ...s.vision, provider: "ollama", model: "qwen3-vl:8b" };
       s.stt = { ...s.stt, engine: "faster-whisper", model: "large-v3-turbo", device: "auto" };
-      s.tts = { ...s.tts, engine: "qwen3", model: "1.7B-CustomVoice", voice: "ryan" };
+      s.tts = { ...s.tts, engine: "qwen3", model: "1.7B-Base", voice: "" };
       break;
     case "locale":
       s.brain.chat = { provider: "ollama", model: "qwen3" };
@@ -62,7 +62,7 @@ export function applyProfile(settings: Settings, profile: Profile): Settings {
       s.brain.vision = { provider: "ollama", model: "qwen2.5vl" };
       s.vision = { ...s.vision, provider: "ollama", model: "qwen3-vl:8b" };
       s.stt = { ...s.stt, engine: "faster-whisper", model: "large-v3-turbo", device: "auto" };
-      s.tts = { ...s.tts, engine: "qwen3", model: "1.7B-CustomVoice", voice: "ryan" };
+      s.tts = { ...s.tts, engine: "qwen3", model: "1.7B-Base", voice: "" };
       break;
   }
   return s;

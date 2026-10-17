@@ -5,14 +5,21 @@ Three flavours, chosen by the model in the settings:
   style instruction (ignored by the 0.6B model);
 - VoiceDesign: the voice is described in words (the `voice` setting);
 - Base: the voice is cloned from a reference clip (x-vector only, so the
-  accent of the clip doesn't bleed into the Italian). No style instruction:
+  accent of the clip doesn't bleed into the Italian); without a clip, the
+  Italian reader in voices/italiana.flac (the default voice: in the
+  roadmap 17.3 comparison the Base clones sounded the most Italian and
+  VoiceDesign drifted between sentences). No style instruction:
   Base models aren't trained to follow one, and with it every emotion
   pulled the timbre somewhere else (it sounded like different people).
+- Trained ("1.7B-Italiano"): Base with a LoRA on one Italian reader, merged
+  into a one-speaker CustomVoice-style model by lora/train.py (roadmap
+  17.5), in models/lora/<name>/model. No style instruction, like Base.
 The voice must stay the same between sentences: fixed speaker and seed.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from collections.abc import Iterator
@@ -20,7 +27,7 @@ from pathlib import Path
 
 from devices import prepare_cuda_dlls
 
-from .base import Cancel, EngineUnavailable, TTSEngine, to_pcm16
+from .base import Cancel, EngineUnavailable, TTSEngine, bundled_voice, to_pcm16
 from .emotions import qwen_instruct
 
 log = logging.getLogger("lumi.tts.qwen3")
@@ -33,6 +40,8 @@ REPOS = {
     "0.6B-Base": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
 }
 SPEAKERS = ["ryan", "aiden", "eric", "dylan", "uncle_fu", "vivian", "serena", "sohee", "ono_anna"]
+# Models trained by lora/train.py: settings id -> folder under models/lora
+TRAINED = {"1.7B-Italiano": "italiano"}
 LANGUAGE = "italian"
 DEFAULT_DESCRIPTION = "Voce maschile giovane, calda e vivace, italiano naturale con dizione chiara"
 # Codec steps per streamed chunk: 4 steps = ~333 ms of audio. Smaller chunks
@@ -40,6 +49,12 @@ DEFAULT_DESCRIPTION = "Voce maschile giovane, calda e vivace, italiano naturale 
 CHUNK_STEPS = 4
 # Longer reference clips usually mix several voices or music
 MAX_CLIP_SECONDS = 30
+
+
+def clip_path(voice: str) -> str:
+    """The reference clip for a voice setting: a file path, a bundled voice's name or empty ("italiana")."""
+    voice = (voice or "").strip()
+    return bundled_voice(voice or "italiana") or voice
 
 
 def clip_seconds(path: str) -> float | None:
@@ -94,8 +109,11 @@ class Qwen3Engine(TTSEngine):
             raise EngineUnavailable("Qwen3-TTS non è installato: nel sidecar esegui `uv sync --extra gpu`.") from err
         if not torch.cuda.is_available():
             raise EngineUnavailable("Qwen3-TTS ha bisogno di una scheda video NVIDIA con CUDA: scegli Kokoro.")
-        repo = REPOS.get(self.config.model, REPOS["1.7B-CustomVoice"])
-        self.kind = "design" if "VoiceDesign" in repo else "clone" if repo.endswith("Base") else "custom"
+        if self.config.model in TRAINED:
+            repo = self._trained(TRAINED[self.config.model])
+        else:
+            repo = REPOS.get(self.config.model, REPOS["1.7B-Base"])
+            self.kind = "design" if "VoiceDesign" in repo else "clone" if repo.endswith("Base") else "custom"
         # qwen_tts installs its own RoPE shim on import: replace it after the import
         import qwen_tts  # noqa: F401
 
@@ -112,7 +130,21 @@ class Qwen3Engine(TTSEngine):
         # Captures the CUDA graphs now rather than on the first sentence
         self.model.warmup(prefill_len=100)
 
+    def _trained(self, name: str) -> str:
+        """The folder of a model merged by lora/train.py, and its speaker."""
+        folder = Path(self.models_dir) / "lora" / name / "model"
+        config = folder / "config.json"
+        if not config.is_file():
+            raise EngineUnavailable("Il modello addestrato in italiano non c'è ancora: crealo con lora.prepare e lora.train (vedi sidecar/lora/README.md).")
+        meta = json.loads(config.read_text(encoding="utf8")).get("lumi_finetune") or {}
+        self.kind = "trained"
+        self.speakers = [meta.get("speaker") or name]
+        # The language tag it was trained with ("auto" = none)
+        self.trained_language = meta.get("language") or "auto"
+        return str(folder)
+
     def _prepare_clone(self, clip: str) -> None:
+        clip = clip_path(clip)
         if not clip or not Path(clip).is_file():
             raise EngineUnavailable("Per clonare una voce scegli un file audio (10-20 secondi di voce pulita).")
         seconds = clip_seconds(clip)
@@ -151,14 +183,20 @@ class Qwen3Engine(TTSEngine):
                 chunks = self.model.generate_custom_voice_streaming(
                     text=text, speaker=speaker, language=LANGUAGE, instruct=instruct, chunk_size=CHUNK_STEPS
                 )
+            elif self.kind == "trained":
+                # Its only speaker; no instruction, it was never trained on one
+                chunks = self.model.generate_custom_voice_streaming(
+                    text=text, speaker=self.speakers[0], language=self.trained_language, chunk_size=CHUNK_STEPS
+                )
             elif self.kind == "design":
                 description = (voice or self.config.voice or DEFAULT_DESCRIPTION).strip()
                 chunks = self.model.generate_voice_design_streaming(
                     text=text, instruct=f"{description}. {instruct}", language=LANGUAGE, chunk_size=CHUNK_STEPS
                 )
             else:
-                if voice and voice != getattr(self, "_clip", None) and Path(voice).is_file():
-                    self._prepare_clone(voice)
+                clip = clip_path(voice or self.config.voice)
+                if clip != getattr(self, "_clip", None) and Path(clip).is_file():
+                    self._prepare_clone(clip)
                 chunks = self.model.generate_voice_clone_streaming(
                     text=text,
                     language=LANGUAGE,

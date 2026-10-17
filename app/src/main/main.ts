@@ -46,6 +46,7 @@ import { TeeSpeech } from "./teeSpeech";
 import { LumiTray } from "./tray";
 import { Clips } from "./voice/clips";
 import { GroqStt } from "./voice/groqStt";
+import { addressedWithoutModel, classifyAddressing, type AddressingInput, type Opened } from "./voice/addressing";
 import { Speakers, voiceLabel } from "./voice/speakers";
 import { botScript, DiscordToken, DiscordVoice } from "./discordVoice";
 import { AppAudioClient, type AppUtterance } from "./voice/appAudio";
@@ -136,6 +137,11 @@ function start(): void {
     .then(() => memory.backup());
   setInterval(() => void memory.backup(), 3 * 3_600_000).unref();
   const speakers = new Speakers(join(dataDir, "voices.json"));
+
+  /** When a voice other than the user's was last heard at the microphone: people talking to each other. */
+  let lastOtherVoiceAt = 0;
+  /** A second voice heard this recently means the user is talking with someone, not to Lumi. */
+  const OTHERS_HEARD_MS = 30_000;
 
   /** Who said an utterance at the microphone: the user, or another voice (by name or "Voce N"). */
   function micSpeaker(print: number[] | undefined): { other: string | null } {
@@ -315,6 +321,47 @@ function start(): void {
     }, 1200);
   }
 
+  /**
+   * Whether a heard sentence is meant for Lumi: the hotkey and the name always are; otherwise
+   * the transcript is read (addressing.ts) and, when that can't tell, a small model call decides.
+   * Sentences meant for someone else are dropped (never stored, never sent to the model).
+   */
+  async function forLumi(text: string, opened: Opened, otherVoice: string | null): Promise<boolean> {
+    const s = settings();
+    if (!s.listen.addressCheck) return true;
+    const recent = memory.recentConversation(6);
+    const lastLumi = [...recent].reverse().find((e) => e.who === "lumi");
+    const ago = lastLumi ? (Date.now() - Date.parse(lastLumi.at)) / 1000 : null;
+    // The exchange with Lumi: her last line, if it answered the user (not a remark of her own)
+    const lastIndex = lastLumi ? recent.lastIndexOf(lastLumi) : -1;
+    const threadAgo = ago !== null && lastIndex > 0 && recent[lastIndex - 1].who === "user" ? ago : null;
+    const input: AddressingInput = {
+      text,
+      opened,
+      wakeWord: s.listen.wakeWord,
+      lumiAsked: !!lastLumi && ago !== null && ago < 25 && /\?\s*$/.test(lastLumi.text.trim()),
+      inCall: !onPhone() && inCall(),
+      names: speakers
+        .voices()
+        .filter((v) => v.name && !v.owner)
+        .map((v) => v.name!),
+      threadAgo,
+      // Without voice recognition nobody can tell whether a second voice answers
+      othersHeard: s.voices.enabled ? Date.now() - lastOtherVoiceAt < OTHERS_HEARD_MS : null,
+      otherVoice: otherVoice !== null,
+    };
+    const verdict = classifyAddressing(input);
+    if (verdict.verdict !== "maybe") {
+      log.info(`Addressing: ${verdict.verdict} (${verdict.reason})`);
+      return verdict.verdict === "yes";
+    }
+    const answer = await brain.isAddressed(text, { inCall: input.inCall, opened, othersHeard: input.othersHeard });
+    // Without an answer: the window after her answer, or an exchange still open with nobody else talking, counts
+    const yes = answer ?? addressedWithoutModel(input);
+    log.info(`Addressing: ${yes ? "yes" : "no"} (${answer === null ? `no model answer, ${verdict.reason}` : `model, ${verdict.reason}`})`);
+    return yes;
+  }
+
   // ---- hearing: speech recognition, turn-taking, push-to-talk ----
   const sidecarStt = new SttClient(() => sidecar.socketUrl("/stt"));
   const sidecarBackend: SttBackend = {
@@ -379,16 +426,22 @@ function start(): void {
         face.micControl({ ...control, enabled: false });
       } else face.micControl(control);
     },
-    utterance: (text, print) => {
+    utterance: (text, print, opened = "open") => {
       if (process.env.LUMI_DEBUG_HEAR) log.info(`Heard: ${text}`);
       else log.perception(`Heard: ${text}`);
       const { other } = micSpeaker(print);
+      if (other) lastOtherVoiceAt = Date.now();
       if (other && settings().voices.onlyMe) {
         // Someone else in the room: context for Lumi, not a request
         memory.addMessage("other", text, false, { name: other });
         return;
       }
-      heard(text, other ?? undefined);
+      // Open listening hears everything: only what is meant for Lumi gets an answer
+      void forLumi(text, opened, other).then((yes) => {
+        if (yes) heard(text, other ?? undefined);
+        // Someone else's words to someone else stay as context
+        else if (other) memory.addMessage("other", text, false, { name: other });
+      });
     },
     interrupt: () => {
       voice.stopAll();
@@ -624,8 +677,11 @@ function start(): void {
     let name = `Qualcuno su ${u.app}`;
     if (u.voiceprint && settings().voices.enabled) {
       // The user's own voice doesn't come back from the call: never the owner
-      const found = speakers.identify(u.voiceprint, u.app, { exclude: (v) => !!v.owner });
-      if (found.voice && found.status !== "uncertain") name = voiceLabel(found.voice);
+      // Short clips make no new voice; a close but uncertain voice is named as the likely one
+      const found = speakers.identify(u.voiceprint, u.app, { exclude: (v) => !!v.owner, seconds: u.durationMs / 1000 });
+      const who = found.status === "uncertain" ? found.likely : found.voice;
+      if (who) name = voiceLabel(who);
+      log.info(`Voice on ${u.app}: ${found.status}${who ? ` ${who.id}` : ""} (${found.similarity.toFixed(2)}, ${(u.durationMs / 1000).toFixed(1)} s)`);
     }
     // Lumi's own voice coming back from the call the bot is in
     if (discordVoice.live() && isEcho(u.text, memory.recentConversation(6).filter((e) => e.who === "lumi").map((e) => e.text).join(" "))) return;

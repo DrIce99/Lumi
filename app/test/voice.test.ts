@@ -256,7 +256,7 @@ test("restart delays grow and the sidecar gets the engines from the settings", (
   assert.deepEqual([0, 1, 2, 3, 10].map(restartDelay), [1000, 2000, 4000, 8000, 60_000]);
   const config = sidecarConfig(DEFAULT_SETTINGS, true) as { tts: { engine: string; model: string }; stt: { engine: string }; uia: { enabled: boolean }; preload: boolean };
   assert.equal(config.tts.engine, "qwen3");
-  assert.equal(config.tts.model, "1.7B-CustomVoice");
+  assert.equal(config.tts.model, "1.7B-Base");
   assert.equal(config.stt.engine, "faster-whisper");
   assert.equal(config.uia.enabled, true);
   assert.equal(config.preload, true);

@@ -32,6 +32,14 @@ def test_app_roots_are_the_topmost_processes():
     assert appaudio.app_roots("Telegram", table) == []
 
 
+def test_discord_means_its_variants_too():
+    table = [(1, 0, "explorer.exe"), (10, 1, "DiscordPTB.exe"), (11, 10, "DiscordPTB.exe"), (20, 1, "Vesktop.exe"), (30, 1, "chrome.exe")]
+    assert appaudio.app_roots("Discord", table) == [10, 20]
+    # A browser is only captured when it is named (every tab would be heard)
+    assert appaudio.app_roots("chrome", table) == [30]
+    assert appaudio.app_roots("Vesktop", table) == [20]
+
+
 def test_segmenter_cuts_utterances_at_pauses():
     seg = appaudio.Segmenter()
     out = []
@@ -82,6 +90,33 @@ def test_listener_follows_apps_opening_and_closing():
     listener.scan()
     assert statuses[-1] == {"Discord": "chiusa", "Telegram": "chiusa"}
     assert made[0].alive is False
+    listener.close()
+
+
+def test_status_says_when_an_open_app_is_silent(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(appaudio.time, "monotonic", lambda: clock[0])
+    table = [(10, 1, "Discord.exe")]
+    made = []
+    statuses = []
+
+    def factory(pid, on_audio):
+        made.append(FakeCapture(pid, on_audio))
+        return made[-1]
+
+    listener = appaudio.AppListener(lambda app, a: None, statuses.append, factory, lambda: table, every=3600)
+    listener.set_apps(["Discord"])
+    listener.scan()
+    assert statuses[-1] == {"Discord": "in ascolto"}
+    # Nothing but silence for a while: open, but silent
+    clock[0] += appaudio.QUIET_AFTER_S + 1
+    made[0].on_audio(quiet(0.5))
+    listener.scan()
+    assert statuses[-1] == {"Discord": "in ascolto, silenzio"}
+    # A friend speaks: listening again
+    made[0].on_audio(tone(0.5))
+    listener.scan()
+    assert statuses[-1] == {"Discord": "in ascolto"}
     listener.close()
 
 

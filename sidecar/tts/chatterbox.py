@@ -15,7 +15,7 @@ from pathlib import Path
 
 from devices import prepare_cuda_dlls, resolve_device
 
-from .base import Cancel, EngineUnavailable, TTSEngine, chunked, to_pcm16
+from .base import Cancel, EngineUnavailable, TTSEngine, bundled_voice, chunked, to_pcm16
 from .emotions import chatterbox_exaggeration
 
 log = logging.getLogger("lumi.tts.chatterbox")
@@ -40,7 +40,7 @@ class ChatterboxEngine(TTSEngine):
         self.device = resolve_device(self.config.device)
         log.info("Loading Chatterbox Multilingual on %s", self.device)
         self.model = ChatterboxMultilingualTTS.from_pretrained(device=torch.device(self.device))
-        clip = self.config.voice
+        clip = bundled_voice(self.config.voice) or self.config.voice
         self.clip = clip if clip and Path(clip).is_file() else None
         if self.clip:
             self.model.prepare_conditionals(self.clip, exaggeration=0.5)

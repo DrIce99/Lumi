@@ -53,6 +53,8 @@ L'obiettivo è che sembri **il più umano possibile**, cioè con poca latenza, t
 - **Riconosce le voci**: un piccolo modello (WeSpeaker ResNet34, ONNX su CPU) misura l'"impronta" di ogni frase. La prima voce sentita al microfono è la tua; le altre diventano "Voce 2", "Voce 3"… finché non dici a Lumi chi sono ("quello che ha parlato è Marco", tool `name_voice`). Le impronte restano in `voices.json` e si cancellano dalle impostazioni.
 - **Parla nelle chiamate Discord** (facoltativo, spento di default): un bot ti segue nei canali vocali dei server e parla con la voce di Lumi, così la sentono anche i tuoi amici; tu la senti in Discord (sul PC non suona due volte) e gli occhi continuano ad animarsi. Il bot entra "silenziato in ascolto" (non riceve l'audio di nessuno). Non funziona nelle chiamate private: i bot non possono entrarci.
 - **Ascolta l'audio delle app** (facoltativo, spento di default): per esempio i tuoi amici su Discord. Windows cattura solo l'audio di quelle app (process loopback), mai la voce di Lumi, la musica o i video; il sidecar lo divide in frasi, lo trascrive in locale e riconosce chi parla. Le frasi entrano nella conversazione come contesto; Lumi risponde a un amico solo se lo chiama per nome, e durante una chiamata l'ascolto continuo aspetta la parola di attivazione.
+  - **Quali app**: il nome del programma («Discord» vale anche per Discord PTB, Canary, Vesktop…). Se usi Discord **dal browser** scrivi il browser (`chrome`, `opera`…): così Lumi sentirà però anche le altre schede, video compresi. Se l'app non è aperta, nelle impostazioni lo stato dice «non è aperta su questo PC»; «in ascolto, silenzio» vuol dire che è aperta ma non arriva suono.
+  - **Chi parla**: serve «Riconosci le voci» (impostazioni, Ascolto). Ogni frase di almeno 2 secondi dà un'impronta; una voce nuova nasce solo da frasi di almeno 2 s (le brevi non creano profili), una voce simile a una nota (≥ 0,50) è indicata come «probabile» senza imparare da essa, due profili che diventano troppo vicini (media ≥ 0,72) si fondono e i profili sentiti una volta sola e mai più dopo un giorno vengono eliminati. Per dare un nome basta dirglielo («quello è Marco»).
 - **Audiolibri**: dal menu della tray, lo stesso motore TTS converte un `.txt` o un `.epub` in un file `.m4b` con i capitoli (WAV senza ffmpeg), con una voce diversa per i dialoghi.
 
 ---
@@ -298,6 +300,19 @@ microfono ─► AEC del browser ─► VAD (Silero) ─► STT in streaming ─
 | Conversazione continua | dopo una risposta resta in ascolto per 8 s senza bisogno di richiamarla |
 | **Barra dei comandi** | `Ctrl+Alt+L` → campo di testo in sovrimpressione (vedi sotto) |
 | Chat | clic sugli occhi → riquadro di chat con la cronologia, come in Pixel Pet |
+
+### Capire se la frase è per lei
+
+Con l'ascolto continuo, e nei secondi dopo ogni risposta, il microfono sente tutto: te che parli con qualcuno, con te stesso, con gli amici in chiamata. Prima di rispondere Lumi legge la trascrizione e decide se è rivolta a lei (`voice/addressing.ts`, puro e testato; si disattiva con «Rispondi solo se parlo con lei»).
+
+- **Sempre per lei**: il tasto per parlare, il nome (dove vuoi nella frase: «senti Lumi, apri…»; solo quello scritto bene: «lui» e «luci» non valgono) e l'intervento mentre parla.
+- **Chi c'è intorno** (serve «Riconosci le voci»): se negli ultimi 30 secondi si è sentita **un'altra voce** oltre alla tua, due persone stanno parlando tra loro e la frase non è per lei, a meno che contenga il suo nome o risponda a una sua domanda; una richiesta tipica in quel caso passa al modello. Se invece si sente solo la tua voce, nessuno ti risponde e il contesto conta di più. Una frase pronunciata da un'altra voce è per lei solo se la chiama per nome o risponde a una sua domanda; altrimenti resta come contesto («Marco: …»).
+- **Il filo della conversazione**: dopo una sua risposta lo scambio resta aperto 90 secondi (oltre la finestra di 8 s dopo la risposta). Una frase che lo riprende («e domani invece?», «perché lo pensi?», «quello che hai detto prima», «aspetta, spiega meglio») è per lei anche senza il nome, finché nessun altro entra nel discorso. Fino a 5 minuti dalla risposta il modello legge lo scambio (con l'età di ogni riga) per giudicare se la frase lo riprende; oltre è un argomento nuovo.
+- **Per lei, senza consultare nessuno**: una risposta a una sua domanda («sì», «domani alle tre»), richieste tipiche («che ore sono», «cerca…», «apri…», «come stai», «ricordati di…») e un «grazie» subito dopo una risposta.
+- **Non per lei, senza modello**: «ok», «ahah» e simili fuori da una conversazione, frasi che chiamano altri («ragazzi…», «mamma…», «Marco, passami…» se Marco è una voce con nome) e, con gli amici in chiamata, tutto ciò che non contiene il suo nome né risponde a una sua domanda.
+- **Dubbie** (per esempio «il volume è troppo alto»): un controllo piccolo e veloce con il modello dei momenti autonomi (le ultime righe di conversazione con la loro età, se si sono sentite altre voci, nessuna risposta lunga, massimo 1,5 s). Se non risponde in tempo vale la regola: è per lei dentro la finestra dopo una risposta o con uno scambio ancora aperto, ma mai se altre voci stanno parlando, se è in corso una chiamata o se la voce non è la tua.
+- Le frasi giudicate non rivolte a lei non vengono salvate né mandate al cervello (il controllo sulle dubbie manda al modello solo quella frase e le ultime righe di conversazione). Nel log restano solo il verdetto e il motivo, mai il testo.
+- In più il prompt dice al modello di restare in silenzio (`stay_quiet`) se una frase è palesemente per altri.
 
 ### Attivazione per nome
 
@@ -762,7 +777,8 @@ class TTSEngine:
 
 | Motore | Italiano | Emozioni | Clonazione voce | Licenza | Uso consigliato |
 | --- | --- | --- | --- | --- | --- |
-| **Qwen3-TTS 1.7B** (CustomVoice / VoiceDesign) | sì | sì, con istruzione testuale | sì (modello Base) | Apache 2.0 | **predefinito**: assistente e audiolibri |
+| **Qwen3-TTS 1.7B Base** + voce italiana inclusa | sì, l'accento migliore | no | sì, da 10–20 s | Apache 2.0 | **predefinito**: assistente e audiolibri |
+| Qwen3-TTS 1.7B CustomVoice / VoiceDesign | sì, con accento straniero | sì, con istruzione testuale | no | Apache 2.0 | quando contano le emozioni nella voce |
 | Qwen3-TTS 0.6B | sì | no | sì | Apache 2.0 | PC con poca VRAM |
 | **Chatterbox Multilingual** | sì | sì (`exaggeration`) | sì, zero-shot | MIT | voce personalizzata clonata |
 | Kokoro | sì | no | no | Apache 2.0 | fallback leggero, anche su CPU |
@@ -786,11 +802,49 @@ Le clip di backchannel e dei riempitivi vengono **pre-generate all'avvio** con l
 
 L'italiano ha trappole che i modelli multilingua sbagliano spesso: accento tonico (àncora/ancóra), e e o aperte e chiuse (pèsca/pésca), c e g dolci e dure, doppie, raddoppiamento sintattico ("a casa" → "a ccasa"), parole straniere dentro la frase. Si interviene dal più economico al più costoso:
 
-1. **Misurare** (fatto): `sidecar/text/trappole_it.txt` contiene una ventina di frasi trappola, ognuna con cosa ascoltare. `scripts/pronuncia.py` le fa leggere a un sidecar avviato a mano, per più motori e voci (`--voices qwen3:1.7B-CustomVoice:ryan,kokoro:v1.0:if_sara`), salva i WAV e con `--asr` le ritrascrive con il riconoscimento vocale, dando un punteggio a ogni frase (trova le parole sbagliate, non ogni accento: va comunque ascoltato).
-2. **Una voce madrelingua**: gli speaker di Qwen3-TTS CustomVoice (`ryan`, `aiden`, `vivian`…) non sono italiani, ed è la causa più probabile dell'accento straniero. Alternative già supportate, da confrontare con lo script: **Qwen3 Base** clonato da 10–20 s di un parlante italiano (accento migliore, ma senza istruzioni di emozione, vedi le note su Base) e **Qwen3 VoiceDesign** con una descrizione italiana (emozioni sì, va verificato che la voce resti stabile tra le frasi). Su Kokoro le voci italiane sono `im_nicola` e `if_sara`.
+1. **Misurare** (fatto): `sidecar/text/trappole_it.txt` contiene una ventina di frasi trappola, ognuna con cosa ascoltare. `scripts/pronuncia.py` le fa leggere a un sidecar avviato a mano, per più motori e voci (`--voices qwen3:1.7B-Base:,kokoro:v1.0:if_sara`), e salva i WAV. Con `--asr` le ritrascrive con il riconoscimento vocale e dà un punteggio a ogni frase: le lettere confrontate senza accenti grafici e senza spazi, perché «chi sa» e «chissà» sono la grafia del riconoscitore, non un errore della voce. Con `--accent` misura anche quanto Whisper è sicuro che la frase sia italiana: un accento straniero abbassa questo numero anche quando tutte le parole sono giuste. `--stt-device cpu` lascia la memoria video alla voce.
+2. **Una voce madrelingua** (fatto): confronto con lo script, 20 frasi trappola per voce, voce stabile = somiglianza media delle impronte vocali tra le frasi (`voiceprint.py`; con frasi di 2-3 secondi la misura è rumorosa: Kokoro, che ha una voce fissa, arriva a 0,71).
+
+   | Voce | Parole giuste | Italiano (Whisper) | Voce stabile |
+   | --- | --- | --- | --- |
+   | **Base 1.7B clonata da una lettrice italiana** (Lisa Caputo, LibriVox) | 0,996 | **0,999** | 0,52 |
+   | Base 1.7B clonata da un lettore italiano (Riccardo Fasol, LibriVox) | 0,995 | 0,998 | 0,62 |
+   | Base 1.7B clonata da un campione non italiano | 0,994 | 0,997 | 0,53 |
+   | VoiceDesign 1.7B, descrizione italiana | 0,992 | 0,948 | **0,35**: cambia tra le frasi |
+   | CustomVoice 1.7B `ryan` / `serena` | 0,970 / 0,964 | 0,919 / 0,887 | 0,50 / 0,58 |
+   | Kokoro `if_sara` | 0,982 | 0,987 | 0,71 |
+
+   Con il clonaggio solo dall'impronta della voce (x-vector), l'accento del campione non passa nell'italiano. Gli speaker di CustomVoice invece hanno l'accento straniero: alcune frasi Whisper le riconosce in un'altra lingua. VoiceDesign cambia voce da una frase all'altra. La **voce predefinita** è quindi Qwen3-TTS **1.7B Base** con il campo voce vuoto, cioè la voce «italiana» inclusa nel sidecar (`sidecar/tts/voices/italiana.flac`: 15 s di Lisa Caputo che legge *I Malavoglia*, pubblico dominio). C'è anche «italiano» (Riccardo Fasol, *Il fu Mattia Pascal*), che negli audiolibri fa la seconda voce dei dialoghi. Le due voci valgono anche per Chatterbox. Il prezzo è che Base non riceve istruzioni di emozione: per una voce che cambia tono con le emozioni resta CustomVoice, con l'accento straniero. Su Kokoro le voci italiane sono `im_nicola` e `if_sara`.
 3. **Lessico di pronuncia** (fatto): Impostazioni → Voce → «Pronuncia», una riga per parola (`VS Code = vi es code`). Prima della sintesi la parola viene riscritta come si legge, in lettere italiane (`sidecar/text/lexicon_it.py`, applicato in `normalize()` prima di sigle e abbreviazioni, per ogni motore). La trascrizione fonetica IPA non serve: Qwen3-TTS e Chatterbox leggono testo, non fonemi, e leggerebbero i simboli. Kokoro invece passa da espeak-ng, che legge all'italiana le parole inglesi ("mouse" → "mo-u-se"): per lui ci sono già una quarantina di riscritture predefinite (mouse → maus, download → daunlod, "il file" → "il fail"…), che le voci dell'utente possono sostituire.
-4. **Accenti grafici** sulle parole ambigue (àncora, pèsca): solo se il punto 1 mostra che il modello li rispetta; in quel caso il prompt chiede al cervello di scriverli, perché solo lui conosce il senso della frase.
-5. **LoRA** (facoltativo, solo se dopo i punti 2–4 restano errori sistematici): un adattamento leggero di Qwen3-TTS Base su 5–10 ore di **un solo** parlante italiano pulito (per esempio un lettore di LibriVox / Multilingual LibriSpeech, pubblico dominio; Common Voice no: migliaia di voci di qualità variabile). Probabilmente 16–24 GB di VRAM per il modello 1.7B (da verificare). I pesi del LoRA vanno fusi nel modello, così faster-qwen3-tts resta veloce; il rischio è perdere in parte le istruzioni di emozione o la clonazione di altre voci, il vantaggio possibile è una voce italiana stabile **con** le emozioni. Lo script del punto 1 serve anche a confrontare prima e dopo.
+4. **Accenti grafici** (fatto): `scripts/accenti.py` fa leggere 18 coppie (`text/accenti_it.txt`) in due frasi neutre («Ho detto … due volte»), senza accento e con ciascuno dei due accenti. Poi allinea l'audio lettera per lettera (MMS_FA di torchaudio, scaricato una volta nella cartella dei modelli) e misura le sillabe (`scripts/prosody.py`):
+   - per l'accento tonico, la sillaba più prominente (durata, energia e altezza);
+   - per le vocali aperte e chiuse, la prima formante: è più alta in è/ò che in é/ó.
+
+   Kokoro, che legge con espeak-ng, serve da controllo che la misura funzioni.
+
+   | Voce | Accento tonico seguito (coppie) | Aperta/chiusa seguita | F1 aperta − chiusa |
+   | --- | --- | --- | --- |
+   | Kokoro `if_sara` | **11/20** (a caso: circa 2) | **13/16** | **+275 Hz** |
+   | Qwen3 1.7B Base (voce predefinita) | 1/20 | 4/16 | −4 Hz |
+   | Qwen3 1.7B Base, altra voce | 4/20 | 8/16 | +26 Hz |
+   | Qwen3 1.7B CustomVoice `ryan` | 3/20 | 8/15 | +12 Hz |
+   | Qwen3 1.7B VoiceDesign | 4/20 | 6/14 | +21 Hz |
+   | Qwen3 0.6B Base | 3/20 | 7/16 | +27 Hz |
+
+   **Qwen3-TTS ignora gli accenti grafici**: per lui «àncora» è solo un altro modo di scrivere «ancora». Kokoro invece li segue. Per questo il prompt chiede al cervello di scrivere l'accento sulle parole ambigue **solo quando la voce è Kokoro** (`writtenAccents` in `brain/prompt.ts`). Con Qwen3 scriverli non serve, ma non fa danni: le frasi accentate si ritrascrivono uguali. Le coppie di contesto dello stesso file (la parola senza accento in frasi che ne decidono il senso: «non è ancora pronto» / «ha gettato l'ancora») misurano se la voce legge giusto da sola. Qui la voce predefinita arriva a 3/10 per l'accento tonico e 1/5 per le vocali, CustomVoice a 0/10 e 1/4, con una tendenza ad accentare la prima sillaba. La misura però non è precisa: anche su Kokoro coglie circa metà degli accenti tonici seguiti.
+5. **LoRA** (fatto, ma non è la voce predefinita): `sidecar/lora/` (istruzioni nel suo README). Le fasi sono tre:
+   - `prepare.py` scarica un audiolibro LibriVox, lo trascrive con Whisper, lo taglia nelle pause e lo codifica con il codec di Qwen;
+   - `train.py` addestra un LoRA su Qwen3-TTS 1.7B Base con peft (4,8 GB di VRAM, non 16-24) e lo fonde nel modello;
+   - il modello fuso compare nelle impostazioni come «1.7B addestrato in italiano».
+
+   Prova fatta: 6,8 ore de *I Malavoglia* letti da Lisa Caputo, la stessa voce della clip predefinita, 2 epoche, 21 minuti su una RTX 4070. Il risultato arriva vicino alla Base ma non la supera. Parole giuste: 0,990 contro 0,994. Italiano secondo Whisper: 0,982 contro 0,998. Stabilità della voce: 0,52 contro 0,54. Omografi letti giusti dal contesto: nessun miglioramento. Per questo la voce predefinita resta la Base clonata. Anche il modello addestrato non riceve istruzioni di emozione: nei dati non ce ne sono.
+
+   Strada facendo sono emersi alcuni problemi, tutti corretti:
+   - **La ricetta ufficiale di Qwen non corrispondeva alla libreria installata.** Aveva tre differenze: il testo non passava per `text_projection`, le etichette venivano spostate due volte, e il predittore dei codebook riceveva lo stato del passo sbagliato. Sulle nostre clip il modello non ancora addestrato dava una loss di 11,8 nel formato della ricetta e di 1,36 in quello corretto.
+   - **Il prefisso della lingua.** La ricetta addestra senza il token della lingua, mentre il sidecar genera con «italian»: ora l'addestramento usa lo stesso prefisso.
+   - **I tagli delle clip.** Tagliando ai confini dei segmenti di Whisper, nel 25% delle clip restava l'inizio della parola dopo, e il modello imparava ad aggiungere parole in fondo alla frase («…e chi è?»). Ora le pause si cercano nell'audio, perché i tempi delle parole di Whisper non lasciano spazi, e ogni parola va con il tratto di parlato in cui finisce.
+
+   Per migliorare ancora servirebbero il testo del libro allineato all'audio al posto della trascrizione di Whisper, oppure dati con le emozioni. Gli script dei punti 1 e 4 fanno il confronto prima/dopo.
 
 ---
 
@@ -893,11 +947,13 @@ lumi/
 ├─ sidecar/                    Python 3.11+
 │  ├─ server.py                FastAPI + WebSocket su 127.0.0.1:<porta casuale>
 │  ├─ stt/                     base.py  faster_whisper.py  parakeet.py
-│  ├─ tts/                     base.py  qwen3.py  chatterbox.py  kokoro.py
+│  ├─ tts/                     base.py  qwen3.py  chatterbox.py  kokoro.py  voices/ (voci italiane LibriVox)
 │  ├─ ocr/                     winocr_engine.py  rapidocr_engine.py
 │  ├─ uia/                     focus.py  caret.py  (eventi UIA)  act.py (azioni, previsto)
 │  ├─ wake/                    detector.py  train.py  (openWakeWord, dati sintetici dal TTS)
-│  ├─ text/                    normalize_it.py
+│  ├─ text/                    normalize_it.py  lexicon_it.py  trappole_it.txt  accenti_it.txt
+│  ├─ lora/                    data.py  prepare.py  train.py  (voce addestrata in italiano, fase 17.5)
+│  ├─ scripts/                 smoke.py  pronuncia.py  accenti.py  prosody.py
 │  ├─ pyproject.toml
 │  └─ tests/
 ├─ CLAUDE.md
@@ -936,7 +992,7 @@ Il sidecar ascolta solo su `127.0.0.1`, con una porta casuale e un token generat
   "profile": "bilanciato",
   "brain":   { "chat": { "provider": "groq", "model": "..." }, "idle": { "provider": "ollama", "model": "qwen3" } },
   "stt":     { "engine": "faster-whisper", "model": "large-v3-turbo", "vocabulary": ["Sme.UP", "RPG"] },
-  "tts":     { "engine": "qwen3", "model": "1.7B-CustomVoice", "voice": "...", "speed": 1.0, "pronunciations": ["VS Code = vi es code"] },
+  "tts":     { "engine": "qwen3", "model": "1.7B-Base", "voice": "", "speed": 1.0, "pronunciations": ["VS Code = vi es code"] },
   "vision":  { "provider": "ollama", "model": "qwen3-vl:8b", "keepAlive": "2m", "maxSide": 1344 },
   "listen":  { "mode": "push-to-talk", "hotkey": "Ctrl+Alt+Space", "wakeWord": "ehi lumi", "wakeThreshold": 0.5, "followUpSeconds": 8 },
   "chatHotkey": "Control+Alt+L",
@@ -1030,12 +1086,12 @@ Ogni fase si chiude con `npm run check` e `pytest` verdi e una prova manuale.
     3. File: `find_files` sull'indice di Windows Search e sui recenti, apertura, spostamento nel cestino con conferma.
     4. UI Automation nel sidecar (`ui_action`) e tastiera (`press_keys`, `type_text`), con verifica dopo ogni passo.
     5. Ultima risorsa: `click` con la visione locale. Poi le azioni automatiche delle abitudini (fase 11) usano lo stesso esecutore e la stessa policy.
-17. **Pronuncia italiana** ([dettagli](#pronuncia-italiana)). Indipendente dalle altre fasi:
+17. ~~**Pronuncia italiana**~~ (fatto) ([dettagli](#pronuncia-italiana)). Indipendente dalle altre fasi:
     1. ~~Frasi trappola e `scripts/pronuncia.py` (WAV per motore e voce, punteggio con `--asr`)~~ (fatto).
     2. ~~Lessico di pronuncia nelle impostazioni, riscritture predefinite per Kokoro~~ (fatto).
-    3. Confronto delle voci con lo script (CustomVoice, Base clonata da un parlante italiano, VoiceDesign) e scelta della voce predefinita.
-    4. Accenti grafici scritti dal cervello sulle parole ambigue, solo se il confronto mostra che il modello li rispetta.
-    5. Facoltativo, solo se restano errori sistematici: LoRA su Qwen3-TTS Base con 5–10 ore di un solo parlante italiano, pesi fusi nel modello, confronto prima/dopo con lo script.
+    3. ~~Confronto delle voci con lo script (CustomVoice, Base clonata da un parlante italiano, VoiceDesign) e scelta della voce predefinita~~ (fatto: Base 1.7B con la voce italiana inclusa).
+    4. ~~Accenti grafici scritti dal cervello sulle parole ambigue, solo se il confronto mostra che il modello li rispetta~~ (fatto: `scripts/accenti.py`; li rispetta solo Kokoro, quindi il prompt li chiede solo con Kokoro).
+    5. ~~Facoltativo, solo se restano errori sistematici: LoRA su Qwen3-TTS Base con 5–10 ore di un solo parlante italiano, pesi fusi nel modello, confronto prima/dopo con lo script~~ (fatto: `sidecar/lora/`; il modello addestrato non supera la Base clonata e resta un'opzione).
 
 ---
 

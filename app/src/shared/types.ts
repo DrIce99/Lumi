@@ -82,6 +82,8 @@ export interface Settings {
     bargeIn: boolean;
     backchannel: boolean;
     fillers: boolean;
+    /** Answer only sentences meant for Lumi (the name, a reply, a request; the model judges the rest). */
+    addressCheck: boolean;
     micDevice: string;
   };
   /**
@@ -175,7 +177,7 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   vision: { provider: "ollama", model: "qwen3-vl:8b", keepAlive: "2m", maxSide: 1344 },
   stt: { engine: "faster-whisper", model: "large-v3-turbo", device: "auto", vocabulary: [] },
-  tts: { engine: "qwen3", model: "1.7B-CustomVoice", voice: "ryan", speed: 1, volume: 1, seed: 7, pronunciations: [] },
+  tts: { engine: "qwen3", model: "1.7B-Base", voice: "", speed: 1, volume: 1, seed: 7, pronunciations: [] },
   movement: { enabled: true, initiative: true, pranks: true, dodge: true },
   habits: { enabled: true, proposalCooldownMinutes: 20, minOccurrences: 5, minFrequency: 0.7 },
   phone: { enabled: false, port: 47821 },
@@ -191,6 +193,7 @@ export const DEFAULT_SETTINGS: Settings = {
     bargeIn: true,
     backchannel: true,
     fillers: true,
+    addressCheck: true,
     micDevice: "",
   },
   voices: { enabled: true, onlyMe: false },

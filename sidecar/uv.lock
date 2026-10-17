@@ -1016,6 +1016,12 @@ gpu = [
     { name = "torch" },
     { name = "torchaudio" },
 ]
+lora = [
+    { name = "faster-qwen3-tts" },
+    { name = "peft" },
+    { name = "torch" },
+    { name = "torchaudio" },
+]
 wakeword = [
     { name = "onnxscript" },
     { name = "openwakeword" },
@@ -1037,6 +1043,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "faster-qwen3-tts", marker = "extra == 'chatterbox'", specifier = ">=0.5.4" },
     { name = "faster-qwen3-tts", marker = "extra == 'gpu'", specifier = ">=0.5.4" },
+    { name = "faster-qwen3-tts", marker = "extra == 'lora'", specifier = ">=0.5.4" },
     { name = "faster-whisper", specifier = ">=1.2" },
     { name = "huggingface-hub", specifier = ">=1.5,<2" },
     { name = "kokoro-onnx", specifier = ">=0.5" },
@@ -1046,6 +1053,7 @@ requires-dist = [
     { name = "onnxruntime", specifier = ">=1.20.1" },
     { name = "onnxscript", marker = "extra == 'wakeword'", specifier = ">=0.5" },
     { name = "openwakeword", marker = "extra == 'wakeword'", specifier = ">=0.6" },
+    { name = "peft", marker = "extra == 'lora'", specifier = ">=0.17" },
     { name = "pillow", specifier = ">=10" },
     { name = "pywhispercpp", marker = "extra == 'whispercpp'", specifier = ">=1.5" },
     { name = "rapidocr", specifier = ">=3.0" },
@@ -1053,13 +1061,15 @@ requires-dist = [
     { name = "soxr", specifier = ">=0.5" },
     { name = "torch", marker = "extra == 'chatterbox'", specifier = "==2.11.0", index = "https://download.pytorch.org/whl/cu128" },
     { name = "torch", marker = "extra == 'gpu'", specifier = "==2.11.0", index = "https://download.pytorch.org/whl/cu128" },
+    { name = "torch", marker = "extra == 'lora'", specifier = "==2.11.0", index = "https://download.pytorch.org/whl/cu128" },
     { name = "torchaudio", marker = "extra == 'chatterbox'", specifier = "==2.11.0", index = "https://download.pytorch.org/whl/cu128" },
     { name = "torchaudio", marker = "extra == 'gpu'", specifier = "==2.11.0", index = "https://download.pytorch.org/whl/cu128" },
+    { name = "torchaudio", marker = "extra == 'lora'", specifier = "==2.11.0", index = "https://download.pytorch.org/whl/cu128" },
     { name = "uiautomation", marker = "sys_platform == 'win32'", specifier = ">=2.0.20" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
     { name = "winocr", marker = "sys_platform == 'win32'", specifier = ">=0.0.15" },
 ]
-provides-extras = ["gpu", "chatterbox", "whispercpp", "wakeword"]
+provides-extras = ["gpu", "chatterbox", "whispercpp", "wakeword", "lora"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1677,6 +1687,28 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e2/17/d7b106e05bfa642e8694451e7d3d759c6a241c5386a5d962e4f66c047e06/pandas-3.0.6.tar.gz", hash = "sha256:66b07ef7315a31bfe1089cd3d71a7de781c9dca986762d0b4fe7c0ef17465d10", size = 4667686, upload-time = "2026-09-17T23:23:18.345Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c7/33/5b717af24d2f27995e51e0875a269dddd373045216e34cf62e3aa764eaa1/pandas-3.0.6-cp312-cp312-pyemscripten_2024_0_wasm32.whl", hash = "sha256:2a8fc94be2ee5f1d86f97aacd8cc566f81680b6498e76f3007421bb5d98151bf", size = 7118499, upload-time = "2026-09-17T23:21:07.661Z" },
+]
+
+[[package]]
+name = "peft"
+version = "0.21.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "accelerate" },
+    { name = "huggingface-hub" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "packaging" },
+    { name = "psutil" },
+    { name = "pyyaml" },
+    { name = "safetensors" },
+    { name = "torch" },
+    { name = "tqdm" },
+    { name = "transformers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/80/af/2e08abf1cd3b8792a02f5116808f2398c2f77ecdff801ced2ce16007a6f9/peft-0.21.2.tar.gz", hash = "sha256:b803ccfb3f3f316004d850284306687833a2235ea278fb56abc856203456142e", size = 983614, upload-time = "2026-10-01T10:26:36.129Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/70/0b/59441cdbfdd342ed03c08af90a2fe16173f0cd48ab219f523b39ca059a79/peft-0.21.2-py3-none-any.whl", hash = "sha256:106ab6077ff72c54d21577f9af5970e34bac7582cb14209f7b2b511e322a4eae", size = 835427, upload-time = "2026-10-01T10:26:34.085Z" },
 ]
 
 [[package]]

@@ -16,6 +16,7 @@ import functools
 import logging
 import sys
 import threading
+import time
 from collections.abc import Callable
 from ctypes import wintypes
 from dataclasses import dataclass, field
@@ -26,6 +27,9 @@ import numpy as np
 log = logging.getLogger("lumi.appaudio")
 
 RATE = 16000
+# Sound above this level counts as the app playing something; this long without it is "silence" in the status
+SOUND_LEVEL = 0.004
+QUIET_AFTER_S = 20.0
 
 
 # ---------------------------------------------------------------- processes
@@ -74,11 +78,23 @@ def exe_stem(app: str) -> str:
     return name[:-4] if name.endswith(".exe") else name
 
 
+# One name, several programs: "Discord" is also its test builds and the clients that wrap its web app
+VARIANTS = {
+    "discord": {"discord", "discordptb", "discordcanary", "discorddevelopment", "vesktop", "legcord", "armcord", "webcord"},
+}
+
+
+def exe_stems(app: str) -> set[str]:
+    """Every executable name an app goes by."""
+    stem = exe_stem(app)
+    return VARIANTS.get(stem, {stem})
+
+
 def app_roots(app: str, table: list[tuple[int, int, str]] | None = None) -> list[int]:
     """The topmost processes of an app (the capture includes their children)."""
     table = processes() if table is None else table
-    stem = exe_stem(app)
-    pids = {pid for pid, _, exe in table if Path(exe).stem.lower() == stem}
+    stems = exe_stems(app)
+    pids = {pid for pid, _, exe in table if Path(exe).stem.lower() in stems}
     return sorted(pid for pid, parent, exe in table if pid in pids and parent not in pids)
 
 
@@ -415,6 +431,8 @@ class AppListener:
         self.every = every
         self.apps: list[str] = []
         self._captures: dict[tuple[str, int], tuple[ProcessCapture, Segmenter]] = {}
+        # When each app last made sound (monotonic): "in ascolto" or "in ascolto, silenzio"
+        self._sound: dict[str, float] = {}
         self._status: dict[str, str] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -462,16 +480,20 @@ class AppListener:
             if capture.error:
                 status[key[0]] = f"errore: {capture.error}"
         for app, pid in sorted(wanted - set(self._captures)):
+            self._sound.setdefault(app, time.monotonic())
             segmenter = Segmenter()
             capture = self.capture_factory(pid, self._feeder(app, segmenter))
             if capture.start():
                 self._captures[(app, pid)] = (capture, segmenter)
             else:
                 status[app] = f"errore: {capture.error or 'non parte'}"
+        now = time.monotonic()
         for app in apps:
             if any(k[0] == app for k in self._captures):
-                status[app] = "in ascolto"
+                # An app that makes no sound for a while is open but silent (nobody talks, or its audio doesn't reach us)
+                status[app] = "in ascolto, silenzio" if now - self._sound.get(app, now) > QUIET_AFTER_S else "in ascolto"
             else:
+                self._sound.pop(app, None)
                 status.setdefault(app, "chiusa")
         if status != self._status:
             self._status = status
@@ -479,6 +501,8 @@ class AppListener:
 
     def _feeder(self, app: str, segmenter: Segmenter) -> Callable[[np.ndarray], None]:
         def feed(chunk: np.ndarray) -> None:
+            if chunk.size and float(np.abs(chunk).max()) > SOUND_LEVEL:
+                self._sound[app] = time.monotonic()
             for audio in segmenter.push(chunk):
                 self.on_utterance(app, audio)
 

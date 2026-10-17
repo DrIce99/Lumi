@@ -15,6 +15,16 @@ import { DebouncedWriter, readJson } from "../jsonStore";
 export const SAME_VOICE = 0.55;
 /** Less than this similar to every known voice: someone new. */
 export const NEW_VOICE = 0.4;
+/** Between "new" and "same" the closest voice is still the likely one, at least this similar (for labels, never for learning). */
+export const LIKELY_VOICE = 0.5;
+/** A new voice is only made from at least this much speech: a short clip's voiceprint is noise (call audio especially). */
+export const MIN_ENROLL_SECONDS = 2;
+/** A known voice's average is only refined by at least this much speech. */
+export const MIN_LEARN_SECONDS = 1.5;
+/** Two voices whose averages are this close are the same person (averages are steadier than single clips). */
+export const MERGE_VOICES = 0.72;
+/** A voice heard once and never again after this long was a chance clip, not a person. */
+const ONE_SHOT_DAYS = 1;
 /** A voice's average stops moving much after this many samples. */
 const MAX_WEIGHT = 30;
 const MAX_VOICES = 40;
@@ -39,6 +49,15 @@ export interface Identified {
   voice: VoiceProfile | null;
   similarity: number;
   status: "match" | "uncertain" | "new";
+  /** An uncertain voice that is still close enough to be named as the likely one (LIKELY_VOICE). */
+  likely?: VoiceProfile;
+}
+
+export interface IdentifyOptions {
+  learn?: boolean;
+  exclude?: (v: VoiceProfile) => boolean;
+  /** How much speech the voiceprint comes from: short clips never make a new voice. */
+  seconds?: number;
 }
 
 interface VoicesFile {
@@ -80,6 +99,15 @@ export class Speakers {
     const loaded = file ? readJson<VoicesFile>(file) : null;
     this.data = loaded?.version === 1 ? loaded : { version: 1, nextNumber: 2, voices: [] };
     this.writer = file ? new DebouncedWriter(file, () => this.data) : null;
+    if (this.tidy()) this.save();
+  }
+
+  /** Drops the chance clips: unnamed voices heard once, long ago. Returns whether anything went. */
+  tidy(): boolean {
+    const limit = this.now().getTime() - ONE_SHOT_DAYS * 86_400_000;
+    const before = this.data.voices.length;
+    this.data.voices = this.data.voices.filter((v) => v.owner || v.name || v.samples > 1 || Date.parse(v.lastHeard) > limit);
+    return this.data.voices.length !== before;
   }
 
   voices(): VoiceProfile[] {
@@ -95,8 +123,9 @@ export class Speakers {
    * is remembered. `via` says where it was heard. At the microphone, the
    * first voice ever heard becomes the owner's.
    */
-  identify(print: number[], via: string, options: { learn?: boolean; exclude?: (v: VoiceProfile) => boolean } = {}): Identified {
+  identify(print: number[], via: string, options: IdentifyOptions = {}): Identified {
     const learn = options.learn ?? true;
+    const seconds = options.seconds ?? Infinity;
     const candidates = this.data.voices.filter((v) => !options.exclude?.(v));
     let best: VoiceProfile | null = null;
     let similarity = -1;
@@ -108,16 +137,17 @@ export class Speakers {
       }
     }
     if (best && similarity >= SAME_VOICE) {
-      if (learn) this.update(best, print, via);
+      if (learn && seconds >= MIN_LEARN_SECONDS) best = this.update(best, print, via);
       return { voice: best, similarity, status: "match" };
     }
     if (!best || similarity < NEW_VOICE) {
-      if (!learn) return { voice: null, similarity, status: "new" };
+      // A clip too short to trust doesn't make a voice: nobody is named for it, nothing is learned
+      if (!learn || seconds < MIN_ENROLL_SECONDS) return { voice: null, similarity, status: seconds < MIN_ENROLL_SECONDS ? "uncertain" : "new" };
       const owner = via === "mic" && !this.owner();
       const voice = this.add(print, via, owner);
       return { voice, similarity, status: "new" };
     }
-    return { voice: best, similarity, status: "uncertain" };
+    return { voice: best, similarity, status: "uncertain", ...(similarity >= LIKELY_VOICE ? { likely: best } : {}) };
   }
 
   /** Gives a voice a name ("Voce 3" -> "Marco"); the voice is found by id, number, label or current name. */
@@ -187,13 +217,41 @@ export class Speakers {
     return voice;
   }
 
-  private update(voice: VoiceProfile, print: number[], via: string): void {
+  /** Refines a voice with a new clip; the voice it ends up as (two that became close are one person). */
+  private update(voice: VoiceProfile, print: number[], via: string): VoiceProfile {
     const w = Math.min(voice.samples, MAX_WEIGHT);
     voice.centroid = normalize(voice.centroid.map((x, i) => (x * w + (print[i] ?? 0)) / (w + 1)));
     voice.samples += 1;
     voice.lastHeard = this.now().toISOString();
     if (!voice.via.includes(via)) voice.via.push(via);
+    const merged = this.mergeInto(voice);
     this.save();
+    return merged;
+  }
+
+  /**
+   * A voice that grew close to another one: the same person heard before as two. The one
+   * with more samples stays (and its name); an owner or a name is never given up for another.
+   */
+  private mergeInto(voice: VoiceProfile): VoiceProfile {
+    let kept = voice;
+    for (const other of [...this.data.voices]) {
+      // `other` may be the voice folded in a moment ago (the list is a copy)
+      if (other === kept || !this.data.voices.includes(other) || cosine(kept.centroid, other.centroid) < MERGE_VOICES) continue;
+      if (!!kept.owner !== !!other.owner) continue;
+      if (kept.name && other.name && kept.name !== other.name) continue;
+      const [big, small] = kept.samples >= other.samples ? [kept, other] : [other, kept];
+      const total = big.samples + small.samples;
+      big.centroid = normalize(big.centroid.map((x, i) => (x * big.samples + (small.centroid[i] ?? 0) * small.samples) / total));
+      big.samples = total;
+      big.name ??= small.name;
+      big.firstHeard = big.firstHeard < small.firstHeard ? big.firstHeard : small.firstHeard;
+      big.lastHeard = big.lastHeard > small.lastHeard ? big.lastHeard : small.lastHeard;
+      for (const via of small.via) if (!big.via.includes(via)) big.via.push(via);
+      this.data.voices = this.data.voices.filter((v) => v !== small);
+      kept = big;
+    }
+    return kept;
   }
 
   /** Too many voices: the unnamed ones heard least recently go first. */

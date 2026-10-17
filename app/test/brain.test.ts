@@ -521,6 +521,11 @@ test("the prompt asks for spoken style and carries the screen and interruptions"
   assert.match(system, /No lists, no markdown/);
   assert.match(system, /At most one question at a time/);
   assert.match(system, /Certo!/);
+  // Written accents only for the voice that reads them (Kokoro), not Qwen3-TTS
+  assert.doesNotMatch(system, /àncora/);
+  const kokoro = buildSystemPrompt({ ...DEFAULT_SETTINGS, tts: { ...DEFAULT_SETTINGS.tts, engine: "kokoro" } });
+  assert.match(kokoro, /follows written accents.*l'àncora/);
+  assert.match(kokoro, /Leave every other word as usual\.\n\n# Personality/);
   const memory = new Memory(null);
   memory.addMessage("user", "Spiegami le closure");
   memory.addMessage("lumi", "Una closure è una funzione che", true);

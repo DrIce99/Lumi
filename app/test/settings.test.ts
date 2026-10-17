@@ -4,6 +4,7 @@ import test from "node:test";
 import { clampAnchor, computeLayout, OVERLAY_HEIGHT } from "../src/main/layout";
 import { sanitizeSettings, SettingsStore } from "../src/main/settings";
 import { sidecarConfig } from "../src/main/voice/voice";
+import { DEFAULT_VOICE_DESCRIPTION, defaultVoice, TTS_MODELS } from "../src/shared/catalog";
 import { applyProfile, suggestProfile } from "../src/shared/profiles";
 import { DEFAULT_SETTINGS } from "../src/shared/types";
 
@@ -56,7 +57,18 @@ test("profiles follow the GPU", () => {
   const local = applyProfile(DEFAULT_SETTINGS, "locale");
   assert.equal(local.brain.chat.provider, "ollama");
   assert.equal(local.brain.vision.model, "qwen2.5vl");
+  // The Italian clone (roadmap 17.3): an empty clip is the bundled "italiana" voice
+  assert.deepEqual([local.tts.model, local.tts.voice], ["1.7B-Base", ""]);
   assert.equal(DEFAULT_SETTINGS.profile, "bilanciato", "applyProfile doesn't touch its input");
+});
+
+test("each TTS model starts from a voice it understands", () => {
+  assert.equal(defaultVoice("qwen3", "1.7B-Base"), "");
+  assert.equal(defaultVoice("qwen3", "1.7B-CustomVoice"), "ryan");
+  assert.equal(defaultVoice("qwen3", "1.7B-VoiceDesign"), DEFAULT_VOICE_DESCRIPTION);
+  assert.equal(defaultVoice("kokoro", "v1.0"), "im_nicola");
+  assert.equal(defaultVoice("qwen3", "1.7B-Italiano"), "", "the trained model has one voice");
+  assert.equal(TTS_MODELS.qwen3[0].id, DEFAULT_SETTINGS.tts.model);
 });
 
 test("the window keeps the face in place and the bubble on screen", () => {

@@ -10,6 +10,7 @@ import { guessEmotion, type Emotion } from "../../shared/emotions";
 import { PROVIDERS } from "../../shared/providers";
 import { FACT_KINDS, type FactKind, type Settings } from "../../shared/types";
 import { log } from "../log";
+import { ADDRESSING_SYSTEM, addressingPrompt, parseAddressingReply, THREAD_MAX_SECONDS, type Opened } from "../voice/addressing";
 import { PROMISES, readIntents } from "./intents";
 import { describeHit, factFromRow, importanceOf, RECENT_LINES, speakerLabel, type ConversationEntry, type Memory, type RewriteMaterial, type SummaryRecord } from "./memory";
 import { buildContext, buildSystemPrompt, messageForHistory, type Situation, type Trigger } from "./prompt";
@@ -74,6 +75,8 @@ export interface BrainHost {
 }
 
 const MAX_ROUNDS = 4;
+/** A sentence that waits longer than this for the "is it for me?" check is judged without the model. */
+const ADDRESSING_TIMEOUT_MS = 1500;
 const FOLLOW_UP = new Set<ToolCall["name"]>(["look_at_screen", "search_memory", "web_search", "read_page"]);
 /** search_memory results per call, and characters per result. */
 const MEMORY_RESULTS = 6;
@@ -241,6 +244,47 @@ export class Brain {
   /** Whether the running moment answers the user (not an autonomous one). */
   answering(): boolean {
     return this.busy && this.currentIsMessage;
+  }
+
+  /**
+   * Reads a heard sentence and says whether the user meant it for Lumi
+   * (true), someone else or nobody (false); null when no model answered in
+   * time. A tiny request with the last lines of conversation, not the whole
+   * prompt: the cheap model for autonomous moments is enough.
+   */
+  async isAddressed(text: string, context: { inCall: boolean; opened: Opened; othersHeard?: boolean | null }, timeoutMs = ADDRESSING_TIMEOUT_MS): Promise<boolean | null> {
+    const chosen = this.authFailed ? null : (this.host.provider("idle") ?? this.host.provider("chat"));
+    if (!chosen) return null;
+    const user = this.host.settings().userName || "Utente";
+    const now = Date.now();
+    // The last lines of the exchange with their age: a sentence may pick up a thread from a minute ago
+    const recent = this.host.memory
+      .recentConversation(6)
+      .filter((e) => now - Date.parse(e.at) <= THREAD_MAX_SECONDS * 1000);
+    const lastLumi = [...recent].reverse().find((e) => e.who === "lumi");
+    const prompt = addressingPrompt({
+      text,
+      conversation: recent.map((e) => `${speakerLabel(e, user)} (${Math.max(0, Math.round((now - Date.parse(e.at)) / 1000))} s ago): ${e.text.slice(0, 200)}`),
+      lumiAgo: lastLumi ? (now - Date.parse(lastLumi.at)) / 1000 : null,
+      inCall: context.inCall,
+      othersHeard: context.othersHeard ?? null,
+      opened: context.opened,
+    });
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const answer = await Promise.race([
+        chosen.provider.complete({ model: chosen.model, system: ADDRESSING_SYSTEM, prompt, maxTokens: 60 }).then((r) => parseAddressingReply(r.text)),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), timeoutMs);
+        }),
+      ]);
+      return answer;
+    } catch (err) {
+      log.warn("Checking whether a sentence was for Lumi failed", err);
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** Turns finished days of conversation into diary entries. */

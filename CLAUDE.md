@@ -92,8 +92,42 @@ Work one roadmap phase at a time; finish each with checks green.
   `ESPEAK_LOANWORDS` for Kokoro only (espeak-ng reads English loanwords
   the Italian way; "file" only with an article, it is also "fila"'s
   plural). `scripts/pronuncia.py` reads `text/trappole_it.txt` through a
-  running sidecar per engine:model:voice and scores it with `--asr`.
-  A LoRA on Qwen3 Base is only a later, optional step (roadmap 17).
+  running sidecar per engine:model:voice and scores it with `--asr`
+  (letters compared without accents and spaces: "chi sa"/"chissà" is the
+  recognizer's spelling) and `--accent` (Whisper's language-id
+  probability for Italian: a foreign accent lowers it with every word
+  right).
+- Default voice (roadmap 17.3, measured): Qwen3 1.7B Base with an empty
+  voice field = `sidecar/tts/voices/italiana.flac` (15 s of a LibriVox
+  reader, public domain; "italiano" is the male one, the audiobooks'
+  dialogue voice; Chatterbox takes the names too). Base clones scored
+  0.998-0.999 Italian, CustomVoice 0.89-0.92 (foreign accent),
+  VoiceDesign 0.95 and its voice drifted between sentences (voiceprint
+  similarity 0.35 vs 0.52-0.62). The price: Base gets no emotion
+  instruction.
+- Written accents (17.4): `scripts/accenti.py` reads `text/accenti_it.txt`
+  pairs, aligns letters with torchaudio's MMS_FA and measures syllable
+  prominence and F1 (`scripts/prosody.py`, pure). Qwen3-TTS ignores
+  "àncora"/"pèsca" (chance level, every model); Kokoro (espeak-ng)
+  follows them (stress 11/20, open/closed 13/16, +275 Hz), so the prompt
+  asks for accents on homographs only when `tts.engine` is kokoro
+  (`writtenAccents` in prompt.ts).
+- LoRA (17.5, `sidecar/lora/`, extra `lora` = peft): `prepare.py` (LibriVox
+  -> Whisper words -> clips cut at pauses found in the audio, by each
+  word's END: Whisper's word times leave no gaps and stretch a word's start
+  back into the pause; cutting at segment ends left the next word's onset
+  in 25% of clips and the model learned to add words) -> codec codes;
+  `train.py` = Qwen's sft recipe fixed (text through `text_projection`,
+  labels shifted once: Transformers' causal loss shifts again, code
+  predictor fed the hidden state one position earlier with unshifted
+  labels, language tag "italian" in the prefix like generation; checked
+  by the untrained model's loss: 11.8 -> 1.36), LoRA r16 on q/k/v/o/MLP,
+  merged into a one-speaker custom_voice checkpoint with `lumi_finetune`
+  {speaker, language} in config.json. Settings model "1.7B-Italiano" ->
+  `models/lora/italiano/model` (kind "trained": its speaker, its language,
+  no instruction). Result (6.8 h, Lisa Caputo): close to Base but not
+  better (words 0.990 vs 0.994, Italian 0.982 vs 0.998), so Base stays
+  the default.
 - Text sent to TTS is normalized to spoken Italian first
   (`sidecar/text/normalize_it.py`): numbers, dates, times, currency,
   acronyms, URLs, emoji.
@@ -137,7 +171,8 @@ Work one roadmap phase at a time; finish each with checks green.
 ## Testing
 
 - Pure modules (`attention`, `reading`, `chunker`, `endpoint`,
-  `normalize_it`, emotion mapping, `backdrop`, `glare`; later
+  `normalize_it`, emotion mapping, `backdrop`, `glare`, `prosody`,
+  `lora/data`; later
   `patterns`, memory `search`) get unit tests. Providers and the
   sidecar are mocked in app tests; sidecar engines are mocked in pytest
   except tests marked `@pytest.mark.model` (skipped by default).
@@ -441,6 +476,44 @@ Work one roadmap phase at a time; finish each with checks green.
   the whoosh. `LUMI_DEBUG_PAIR=<file>` writes a pairing link (an Electron
   page with `--use-fake-device-for-media-stream` on
   `http://127.0.0.1:<port>/app/?pair=<link>` makes a test phone).
+- Is it for Lumi? (`voice/addressing.ts`, pure): `TurnManager` tags every
+  turn with how it opened (`Opened`: ptt | name | barge | open | followup,
+  third argument of `host.utterance`) and `main.ts` `forLumi()` decides
+  before `heard()`: ptt/name/barge always; else `classifyAddressing`
+  (name anywhere via a strict regex, NOT `matchWakeWord`: "lui"/"luci" are
+  one edit from "lumi"; fillers; "ragazzi/mamma/<named voice>," vocatives;
+  an answer to Lumi's question <25 s; assistant-like requests; in a call
+  with friends nothing unless named) -> yes/no/maybe. Context signals
+  (all computed in `forLumi`): `threadAgo` (seconds since Lumi answered a
+  user line: an exchange; 90 s open, a continuation opener like "e
+  domani?" is then a yes, up to 300 s the model reads it), `othersHeard`
+  (a non-owner voice at the mic < 30 s, `lastOtherVoiceAt`; null without
+  `voices.enabled`: two voices answering each other = not for Lumi),
+  `otherVoice` (this sentence is not the user's: only the name or a
+  question of hers counts; else it is stored as context). "maybe" asks
+  `Brain.isAddressed` (tiny prompt: 6 lines with their age, who else was
+  heard, idle model, 1.5 s, no tools); no answer = `addressedWithoutModel`
+  (follow-up window or open exchange, never with other voices, a call or
+  another voice). A literal backspace once replaced `` in a regex written
+  through a Python heredoc: grep for  after such edits. Not-for-
+  Lumi sentences are neither stored nor sent anywhere; logs say verdict
+  and reason, never the text. Setting `listen.addressCheck` (on). The
+  prompt also lets the model `stay_quiet` on a message that is obviously
+  for someone else.
+- Speakers: `identify(print, via, { seconds })`: a new voice needs >= 2 s
+  of speech, a known voice learns from >= 1.5 s, uncertain voices >= 0.50
+  come back as `likely` (labels only), averages >= 0.72 merge
+  (`mergeInto`: the list is a copy, check `includes`, or a folded voice is
+  added twice), voices heard once and not for a day are tidied at load.
+  The sidecar always sends a voiceprint for app audio, but main only uses
+  it with `voices.enabled`: with it off every friend is "Qualcuno su
+  Discord" (this was the user's setting). App audio status from the
+  sidecar: "chiusa" (process not running), "in ascolto", "in ascolto,
+  silenzio" (no sound for 20 s). "Discord" also matches DiscordPTB,
+  DiscordCanary, Vesktop... (`appaudio.VARIANTS`); a browser has to be
+  named to hear Discord on the web. Checked live with a copy of
+  powershell.exe renamed Discord.exe playing a WAV: chiusa -> in ascolto,
+  3 utterances.
 - Moving (phase 14, `main/motion/`): the model calls `move_to({ where,
   text?, style?, stay? })`; `where` is a named place (`places.ts`, pure:
   nine grid spots 24 px inside the work area, other_screen at the same

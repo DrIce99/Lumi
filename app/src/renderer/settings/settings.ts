@@ -1,6 +1,6 @@
 // Settings window: profile, brain services and keys, voice, screen
 // perception, memory and the status of the voice engines.
-import { DEFAULT_VOICE_DESCRIPTION, STT_MODELS, TTS_MODELS, TTS_VOICES, voiceKind } from "../../shared/catalog";
+import { BUNDLED_VOICES, DEFAULT_VOICE_DESCRIPTION, STT_MODELS, TTS_MODELS, TTS_VOICES, defaultVoice, voiceKind } from "../../shared/catalog";
 import { PROFILE_INFO, suggestProfile } from "../../shared/profiles";
 import { PROVIDER_IDS, PROVIDERS, type ProviderId } from "../../shared/providers";
 import {
@@ -217,8 +217,6 @@ function ttsChoices(model: string, voice: string): void {
     TTS_MODELS[engine].map((m) => ({ value: m.id, label: m.label })),
     model || TTS_MODELS[engine][0].id,
   );
-  const voices = [...new Set([...(snapshot?.voices[engine] ?? []), ...TTS_VOICES[engine]])];
-  datalist($<HTMLDataListElement>("ttsVoices"), voices);
   $("ttsVoice").value = voice;
   voiceHint();
 }
@@ -226,14 +224,26 @@ function ttsChoices(model: string, voice: string): void {
 function voiceHint(): void {
   const engine = $<HTMLSelectElement>("ttsEngine").value as TtsEngine;
   const kind = voiceKind(engine, $<HTMLSelectElement>("ttsModel").value);
+  const voices = kind === "clip" ? BUNDLED_VOICES : [...new Set([...(snapshot?.voices[engine] ?? []), ...TTS_VOICES[engine]])];
+  datalist($<HTMLDataListElement>("ttsVoices"), voices);
   const input = $("ttsVoice");
-  input.placeholder = kind === "clip" ? "percorso di un file audio (10-20 s di voce pulita)" : kind === "description" ? DEFAULT_VOICE_DESCRIPTION : "nome della voce";
+  input.placeholder =
+    kind === "clip"
+      ? engine === "qwen3"
+        ? "vuoto = voce italiana inclusa; «italiano» = maschile; o un file audio (10-20 s)"
+        : "percorso di un file audio (10-20 s di voce pulita)"
+      : kind === "description"
+        ? DEFAULT_VOICE_DESCRIPTION
+        : kind === "trained"
+          ? "la voce dell'addestramento"
+          : "nome della voce";
+  input.disabled = kind === "trained";
   $<HTMLButtonElement>("pickVoice").hidden = kind !== "clip";
 }
 
 function onTtsEngineChange(): void {
   const engine = $<HTMLSelectElement>("ttsEngine").value as TtsEngine;
-  ttsChoices(TTS_MODELS[engine][0].id, TTS_VOICES[engine][0]);
+  ttsChoices(TTS_MODELS[engine][0].id, defaultVoice(engine, TTS_MODELS[engine][0].id));
 }
 
 function onTtsModelChange(): void {
@@ -242,7 +252,8 @@ function onTtsModelChange(): void {
   const voice = $("ttsVoice");
   if (kind === "description" && !voice.value.includes(" ")) voice.value = DEFAULT_VOICE_DESCRIPTION;
   if (kind === "speaker" && !TTS_VOICES[engine].includes(voice.value)) voice.value = TTS_VOICES[engine][0];
-  if (kind === "clip" && !/[\\/.]/.test(voice.value) && engine === "qwen3") voice.value = "";
+  if (kind === "trained") voice.value = "";
+  if (kind === "clip" && !/[\\/.]/.test(voice.value) && !BUNDLED_VOICES.includes(voice.value.trim().toLowerCase()) && engine === "qwen3") voice.value = "";
   voiceHint();
 }
 
@@ -379,6 +390,20 @@ function renderHabits(next: SettingsSnapshot): void {
 }
 
 /** The embedding queue's state, in words. */
+/** What the sidecar's status for an app means for the person looking at the settings. */
+function appAudioText(app: string, state: string): string {
+  switch (state) {
+    case "chiusa":
+      return `${app} non è aperta su questo PC (se la usi dal browser, scrivi il nome del browser nell'elenco, per esempio chrome o opera)`;
+    case "in ascolto":
+      return `${app} in ascolto`;
+    case "in ascolto, silenzio":
+      return `${app} in ascolto, ma non arriva suono (nessuno parla?)`;
+    default:
+      return `${app} ${state}`;
+  }
+}
+
 function memoryIndexText(status: SettingsSnapshot["memoryIndex"], model: string): string {
   if (!status) return "";
   const count = `${status.done} ricordi su ${status.total} hanno il loro indice.`;
@@ -468,7 +493,12 @@ function fill(next: SettingsSnapshot): void {
   $("appAudioEnabled").checked = s.appAudio.enabled;
   $<HTMLTextAreaElement>("appAudioApps").value = s.appAudio.apps.join("\n");
   const appStatus = Object.entries(next.appAudioStatus);
-  $<HTMLElement>("appAudioStatus").textContent = appStatus.length ? `Adesso: ${appStatus.map(([app, state]) => `${app} ${state}`).join(", ")}.` : "";
+  const appNotes = [
+    appStatus.length ? `Adesso: ${appStatus.map(([app, state]) => appAudioText(app, state)).join("; ")}.` : "",
+    // Without voiceprints every friend is "Qualcuno su Discord"
+    s.appAudio.enabled && !s.voices.enabled ? "Per distinguere chi parla attiva «Riconosci le voci» più sopra." : "",
+  ].filter(Boolean);
+  $<HTMLElement>("appAudioStatus").textContent = appNotes.join(" ");
   $("scale").value = String(s.face.scale);
   $("color").value = s.face.color.toLowerCase();
   $("chatHotkey").value = s.chatHotkey;
@@ -493,6 +523,7 @@ function fill(next: SettingsSnapshot): void {
   $("bargeIn").checked = s.listen.bargeIn;
   $("backchannel").checked = s.listen.backchannel;
   $("fillers").checked = s.listen.fillers;
+  $("addressCheck").checked = s.listen.addressCheck;
   void renderMicDevices(s.listen.micDevice);
   $<HTMLSelectElement>("sttEngine").value = s.stt.engine;
   $("sttModel").value = s.stt.model;
@@ -616,6 +647,7 @@ function collect(): Settings {
       bargeIn: $("bargeIn").checked,
       backchannel: $("backchannel").checked,
       fillers: $("fillers").checked,
+      addressCheck: $("addressCheck").checked,
       micDevice: $<HTMLSelectElement>("micDevice").value,
     },
     vision: {

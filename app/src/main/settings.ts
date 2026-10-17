@@ -162,6 +162,7 @@ export function sanitizeSettings(input: unknown): Settings {
       bargeIn: bool(listen.bargeIn, d.listen.bargeIn),
       backchannel: bool(listen.backchannel, d.listen.backchannel),
       fillers: bool(listen.fillers, d.listen.fillers),
+      addressCheck: bool(listen.addressCheck, d.listen.addressCheck),
       micDevice: str(listen.micDevice, d.listen.micDevice, 200),
     },
     movement: {

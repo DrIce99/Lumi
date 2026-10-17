@@ -25,6 +25,8 @@ export function dialogueVoice(settings: Settings): string | undefined {
   const { engine, model, voice } = settings.tts;
   if (engine === "kokoro") return voice === "if_sara" ? "im_nicola" : "if_sara";
   if (engine === "qwen3" && /CustomVoice/i.test(model)) return MALE.has(voice) ? "serena" : "ryan";
+  // Base: the bundled Italian voices (an own clip counts as female: "italiano" answers it)
+  if (engine === "qwen3" && /Base/i.test(model)) return voice.trim().toLowerCase() === "italiano" ? "italiana" : "italiano";
   return undefined;
 }
 

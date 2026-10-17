@@ -43,6 +43,9 @@ whispercpp = ["pywhispercpp>=1.5"]
 # gpu extra (torch) and a TTS engine; onnxscript is torch.onnx.export's
 # exporter since torch 2.9.
 wakeword = ["openwakeword>=0.6", "onnxscript>=0.5"]
+# LoRA on Qwen3-TTS Base with one Italian reader (lora/, roadmap 17.5):
+# training only, the merged model needs just the gpu extra
+lora = ["peft>=0.17", "faster-qwen3-tts>=0.5.4", "torch==2.11.0", "torchaudio==2.11.0"]
 
 [dependency-groups]
 dev = ["pytest>=8", "pytest-timeout>=2.3", "httpx>=0.27"]

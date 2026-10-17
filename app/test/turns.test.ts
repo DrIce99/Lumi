@@ -70,6 +70,7 @@ function setup(mode: ListenMode, extra: Partial<Settings["listen"]> = {}, inCall
   const stt = new FakeStt();
   const settings: Settings = { ...DEFAULT_SETTINGS, listen: { ...DEFAULT_SETTINGS.listen, mode, ...extra } };
   const said: string[] = [];
+  const opened: (string | undefined)[] = [];
   const controls: MicControl[] = [];
   const listening: boolean[] = [];
   let interrupts = 0;
@@ -79,7 +80,10 @@ function setup(mode: ListenMode, extra: Partial<Settings["listen"]> = {}, inCall
     settings: () => settings,
     stt: () => stt,
     micControl: (c) => controls.push(c),
-    utterance: (text) => said.push(text),
+    utterance: (text, _print, how) => {
+      said.push(text);
+      opened.push(how);
+    },
     interrupt: () => interrupts++,
     speaking: () => speaking,
     setListening: (on) => listening.push(on),
@@ -93,6 +97,7 @@ function setup(mode: ListenMode, extra: Partial<Settings["listen"]> = {}, inCall
     stt,
     turns,
     said,
+    opened,
     controls,
     listening,
     interrupts: () => interrupts,
@@ -445,4 +450,60 @@ test("remote speech recognition drops silence and Whisper's hallucinations", () 
   assert.equal(cleanTranscript("Grazie.", 0.4), "");
   assert.equal(cleanTranscript("Grazie.", 1.2), "Grazie.", "a real thank-you is long enough");
   assert.equal(cleanTranscript("Che  ore sono?", 1.5), "Che ore sono?");
+});
+
+test("every utterance says how its turn was opened: the key, the name, open listening, the window after an answer", () => {
+  // Open listening: nobody invited this sentence
+  const open = setup("continuous", { pauseMs: 500 });
+  open.turns.mic({ type: "speech-start" });
+  open.turns.mic({ type: "speech-confirmed" });
+  open.turns.mic({ type: "speech-end", durationMs: 600 });
+  open.clock.advance(300);
+  open.stt.final(1, "Passami il caffè");
+  assert.deepEqual(open.opened, ["open"]);
+
+  // Right after Lumi spoke: a follow-up
+  const follow = setup("continuous", { pauseMs: 500, followUpSeconds: 8 });
+  follow.setSpeaking(true);
+  follow.setSpeaking(false);
+  follow.clock.advance(2000);
+  follow.turns.mic({ type: "speech-start" });
+  follow.turns.mic({ type: "speech-confirmed" });
+  follow.turns.mic({ type: "speech-end", durationMs: 600 });
+  follow.clock.advance(300);
+  follow.stt.final(1, "E domani?");
+  assert.deepEqual(follow.opened, ["followup"]);
+
+  // The key
+  const ptt = setup("continuous");
+  ptt.turns.pttDown();
+  ptt.frame();
+  ptt.turns.pttUp();
+  ptt.clock.advance(200);
+  ptt.stt.final(1, "Che ore sono?");
+  assert.deepEqual(ptt.opened, ["ptt"]);
+
+  // The name in the transcript (no detector): the request after it is the name's
+  const named = setup("wake-word");
+  named.turns.mic({ type: "speech-start" });
+  named.turns.mic({ type: "speech-confirmed" });
+  named.turns.mic({ type: "speech-end", durationMs: 800 });
+  named.clock.advance(300);
+  named.stt.final(1, "Ehi Lumi, che ore sono?");
+  assert.deepEqual(named.said, ["che ore sono?"]);
+  assert.deepEqual(named.opened, ["name"]);
+
+  // The name alone, then the request: an invitation
+  named.turns.mic({ type: "speech-start" });
+  named.turns.mic({ type: "speech-confirmed" });
+  named.turns.mic({ type: "speech-end", durationMs: 500 });
+  named.clock.advance(300);
+  named.stt.final(2, "Ehi Lumi.");
+  named.clock.advance(1000);
+  named.turns.mic({ type: "speech-start" });
+  named.turns.mic({ type: "speech-confirmed" });
+  named.turns.mic({ type: "speech-end", durationMs: 700 });
+  named.clock.advance(300);
+  named.stt.final(3, "quanto fa due più due");
+  assert.deepEqual(named.opened, ["name", "name"]);
 });

@@ -1,0 +1,41 @@
+# Coppie per scripts/accenti.py: la stessa parola con due accenti grafici, divisa in sillabe.
+# stress | sil-la-be | variante=sillaba accentata (da 0) | ...
+# vowel  | sil-la-be | sillaba della vocale | variante=open|closed | ...
+
+stress | an-co-ra | àncora=0 | ancóra=1
+stress | prin-ci-pi | prìncipi=0 | princìpi=1
+stress | ca-pi-ta-no | càpitano=0 | capitàno=2
+stress | su-bi-to | sùbito=0 | subìto=1
+stress | am-bi-to | àmbito=0 | ambìto=1
+stress | com-pi-to | còmpito=0 | compìto=1
+stress | in-ti-mo | ìntimo=0 | intìmo=1
+stress | noc-cio-lo | nòcciolo=0 | nocciòlo=1
+stress | ru-bi-no | rùbino=0 | rubìno=1
+stress | vi-o-la | vìola=0 | viòla=1
+vowel | pe-sca | 0 | pèsca=open | pésca=closed
+vowel | ven-ti | 0 | vènti=open | vénti=closed
+vowel | bot-te | 0 | bòtte=open | bótte=closed
+vowel | col-to | 0 | còlto=open | cólto=closed
+vowel | fo-ro | 0 | fòro=open | fóro=closed
+vowel | men-to | 0 | mènto=open | ménto=closed
+vowel | ac-cet-ta | 1 | accètta=open | accétta=closed
+vowel | roc-ca | 0 | ròcca=open | rócca=closed
+
+# Contesto: la parola senza accento in frasi che ne decidono il senso ({} = la parola).
+# stressctx | sil-la-be | frase=sillaba accentata | ...
+# vowelctx  | sil-la-be | sillaba della vocale | frase=open|closed | ...
+stressctx | an-co-ra | Non è {} pronto, aspetta.=1 | La nave ha gettato l'{} nel porto.=0
+stressctx | prin-ci-pi | I {} della fisica sono chiari.=1 | Due {} sono arrivati al castello.=0
+stressctx | ca-pi-ta-no | Il {} della nave è salito a bordo.=2 | Queste cose {} a tutti prima o poi.=0
+stressctx | su-bi-to | Arrivo {}, aspettami qui.=0 | Ha {} un torto enorme.=1
+stressctx | am-bi-to | Lavora nell'{} della ricerca.=0 | È il premio più {} dell'anno.=1
+stressctx | com-pi-to | Ho finito il {} di matematica.=0 | Era un signore molto {} e gentile.=1
+stressctx | in-ti-mo | Un amico {} è venuto a cena.=0 | Io vi {} di uscire subito.=1
+stressctx | noc-cio-lo | Il {} della pesca è duro.=0 | Il legno di {} è chiaro.=1
+stressctx | ru-bi-no | Un anello con un {} rosso.=1 | Temo che {} la macchina.=0
+stressctx | vi-o-la | Una {} è sbocciata nel prato.=1 | Chi {} la legge paga.=0
+vowelctx | pe-sca | 0 | Ho mangiato una {} matura.=open | Domani vado a {} sul lago.=closed
+vowelctx | ven-ti | 0 | Ho compiuto {} anni ieri.=closed | I {} del nord soffiano forte.=open
+vowelctx | bot-te | 0 | Il vino invecchia nella {} di rovere.=closed | Ha preso tante {} nella rissa.=open
+vowelctx | col-to | 0 | È un uomo {} che legge molto.=closed | Ha {} un fiore nel giardino.=open
+vowelctx | men-to | 0 | Si è graffiato il {} radendosi.=closed | Ti giuro che non {} mai.=open

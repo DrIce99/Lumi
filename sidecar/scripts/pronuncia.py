@@ -11,7 +11,10 @@ and Chatterbox the voice is the path of the reference clip). The WAV files
 go to `--out/<variant>/NN.wav`. With `--asr` each sentence is transcribed
 back by the sidecar's speech recognizer and compared with the text: a low
 score points at the sentences to listen to first (it catches wrong words,
-not every wrong accent). `--lexicon` adds "parola = pronuncia" lines, like
+not every wrong accent). `--accent` adds how sure Whisper's language
+identification is that the sentence is Italian (local faster-whisper on
+the CPU): a foreign accent lowers it even when every word is right.
+`--lexicon` adds "parola = pronuncia" lines, like
 the settings' Pronuncia field.
 """
 
@@ -24,6 +27,7 @@ import difflib
 import os
 import re
 import sys
+import unicodedata
 import wave
 from pathlib import Path
 
@@ -49,13 +53,16 @@ def read_traps(path: Path) -> list[tuple[str, str]]:
     return out
 
 
-def words(text: str) -> list[str]:
-    return re.sub(r"[^\w\s]", " ", text.lower()).split()
+def letters(text: str) -> str:
+    """Lowercase letters only: written accents (àncora) and word breaks ("chi sa" / "chissà")
+    are the recognizer's spelling, not the voice's pronunciation."""
+    text = "".join(c for c in unicodedata.normalize("NFD", text.lower()) if unicodedata.category(c) != "Mn")
+    return re.sub(r"[^a-z0-9]", "", text)
 
 
 def score(expected: str, heard: str) -> float:
-    """Word similarity 0..1 between what should be said and what was heard."""
-    return difflib.SequenceMatcher(a=words(expected), b=words(heard)).ratio()
+    """Letter similarity 0..1 between what should be said and what was heard."""
+    return difflib.SequenceMatcher(a=letters(expected), b=letters(heard), autojunk=False).ratio()
 
 
 def save_wav(path: Path, pcm: bytes, rate: int = 24000) -> None:
@@ -64,6 +71,15 @@ def save_wav(path: Path, pcm: bytes, rate: int = 24000) -> None:
         w.setsampwidth(2)
         w.setframerate(rate)
         w.writeframes(pcm)
+
+
+def italian(model, pcm: bytes) -> float:
+    """Probability that Whisper's language identification gives to Italian."""
+    import soxr
+
+    audio = soxr.resample(np.frombuffer(pcm, "<i2").astype(np.float32) / 32768, 24000, 16000)
+    _lang, _p, probs = model.detect_language(audio)
+    return dict(probs).get("it", 0.0)
 
 
 def main() -> int:
@@ -76,6 +92,8 @@ def main() -> int:
     parser.add_argument("--emotion", default="neutra")
     parser.add_argument("--asr", action="store_true", help="transcribe back and score each sentence")
     parser.add_argument("--stt", default="faster-whisper")
+    parser.add_argument("--stt-device", default="auto", help="cpu leaves the VRAM to the voice (e.g. while Lumi runs)")
+    parser.add_argument("--accent", action="store_true", help="score how Italian each sentence sounds (Whisper language id)")
     parser.add_argument("--out", default="pronuncia")
     args = parser.parse_args()
     url, token = args.url.rstrip("/"), args.token
@@ -83,6 +101,13 @@ def main() -> int:
     traps = read_traps(Path(args.sentences))
     lexicon = [line for line in Path(args.lexicon).read_text(encoding="utf8").splitlines() if "=" in line] if args.lexicon else []
     rows: list[dict] = []
+    lang_id = None
+    if args.accent:
+        from faster_whisper import WhisperModel
+
+        from paths import models_dir
+
+        lang_id = WhisperModel("large-v3-turbo", device="cpu", compute_type="int8", download_root=str(models_dir() / "whisper"))
 
     for variant in [v.strip() for v in args.voices.split(",") if v.strip()]:
         engine, model, voice = (variant.split(":", 2) + ["", ""])[:3]
@@ -92,7 +117,7 @@ def main() -> int:
         config = {"tts": {"engine": engine, "model": model, "voice": voice, "lexicon": lexicon}, "preload": True}
         kinds = {"tts"}
         if args.asr:
-            config["stt"] = {"engine": args.stt}
+            config["stt"] = {"engine": args.stt, "device": args.stt_device}
             kinds.add("stt")
         http(url, token, "/config", config)
         print(f"\n== {variant}: loading...")
@@ -102,6 +127,8 @@ def main() -> int:
             file = folder / f"{i:02d}.wav"
             save_wav(file, pcm)
             row = {"variant": variant, "n": i, "text": text, "listen_for": note, "file": str(file), "first_ms": round(first * 1000)}
+            if lang_id is not None:
+                row["italian"] = round(italian(lang_id, pcm), 3)
             if args.asr:
                 import soxr
 
@@ -112,7 +139,7 @@ def main() -> int:
                 row["heard"] = heard
                 row["score"] = round(score(normalize(text), normalize(heard)), 2)
             rows.append(row)
-            print(f"{i:02d} {row.get('score', ''):>5} {text}")
+            print(f"{i:02d} {row.get('score', ''):>5} {row.get('italian', ''):>5} {text}")
 
     report = Path(args.out) / "report.csv"
     with report.open("w", newline="", encoding="utf8") as f:

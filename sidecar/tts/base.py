@@ -14,17 +14,27 @@ import threading
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 
 SAMPLE_RATE = 24_000
+# Reference clips shipped with the sidecar, 15 s of Italian LibriVox readers
+# (public domain, see voices/README.md), named in the voice field
+BUNDLED_VOICES = ("italiana", "italiano")
+
+
+def bundled_voice(name: str) -> str | None:
+    """The path of a bundled reference clip, None when `name` isn't one."""
+    name = (name or "").strip().lower()
+    return str(Path(__file__).resolve().parent / "voices" / f"{name}.flac") if name in BUNDLED_VOICES else None
 
 
 @dataclass
 class TTSConfig:
     engine: str = "qwen3"
-    model: str = "1.7B-CustomVoice"
-    voice: str = "ryan"
+    model: str = "1.7B-Base"
+    voice: str = ""
     speed: float = 1.0
     seed: int = 7
     device: str = "auto"

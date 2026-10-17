@@ -13,6 +13,7 @@
 // before the name is ever transcribed. Without it, every utterance is
 // transcribed and the name is spotted in the text (wakeWord.ts).
 import type { ListenMode, MicControl, MicEvent, Settings } from "../../shared/types";
+import type { Opened } from "./addressing";
 import { meaningless, requiredSilenceMs, silenceRange } from "./endpoint";
 import type { SttFinal, SttHandlers } from "./sttClient";
 import { matchWakeWord } from "./wakeWord";
@@ -51,8 +52,12 @@ export interface TurnHost {
   /** The speech recognizer to use now, or null when none is available. */
   stt(): SttBackend | null;
   micControl(control: MicControl): void;
-  /** The user said something to Lumi (with the voiceprint, when voices are recognized). */
-  utterance(text: string, voiceprint?: number[]): void;
+  /**
+   * The user said something that may be for Lumi (with the voiceprint, when voices are recognized).
+   * `opened`: how the turn began; the hotkey and the name are explicit, with open listening the
+   * sentence still has to be judged (addressing.ts).
+   */
+  utterance(text: string, voiceprint?: number[], opened?: Opened): void;
   /** Barge-in: stop the voice and the model now. */
   interrupt(): void;
   /** Lumi's voice is playing (or about to). */
@@ -83,6 +88,8 @@ interface Session {
   viaWake: boolean;
   /** Wake word heard, follow-up window or continuous mode: this utterance is for Lumi. */
   addressed: boolean;
+  /** What made this turn open: the key, the name, a barge-in, open listening, the window after an answer. */
+  opened: Opened;
   /** Started while Lumi was speaking: becomes a barge-in once the speech is confirmed. */
   overLumi: boolean;
   confirmed: boolean;
@@ -182,7 +189,7 @@ export class TurnManager {
     this.host.log?.("Wake word heard");
     // Calling Lumi by name while it talks interrupts it
     if (speaking) this.host.interrupt();
-    const s = this.open({ viaPtt: false, addressed: true, overLumi: false, viaWake: true });
+    const s = this.open({ viaPtt: false, addressed: true, overLumi: false, viaWake: true, opened: "name" });
     if (!s) return;
     s.confirmed = true;
     // The name and what was said with it, then the rest live
@@ -211,9 +218,10 @@ export class TurnManager {
       // Already capturing (follow-up or barge-in): keep it, now driven by the key
       this.session.viaPtt = true;
       this.session.addressed = true;
+      this.session.opened = "ptt";
       this.clearEndTimer(this.session);
     } else if (!this.session) {
-      this.open({ viaPtt: true, addressed: true, overLumi: false, viaWake: false });
+      this.open({ viaPtt: true, addressed: true, overLumi: false, viaWake: false, opened: "ptt" });
     }
     this.listen(true);
     this.refresh();
@@ -304,7 +312,7 @@ export class TurnManager {
 
   // ---------------- sessions ----------------
 
-  private open(flags: { viaPtt: boolean; addressed: boolean; overLumi: boolean; viaWake: boolean }): Session | null {
+  private open(flags: { viaPtt: boolean; addressed: boolean; overLumi: boolean; viaWake: boolean; opened: Opened }): Session | null {
     const stt = this.host.stt();
     if (!stt) return null;
     const s: Session = {
@@ -361,7 +369,9 @@ export class TurnManager {
         return;
       }
     }
-    this.open({ viaPtt: false, addressed, overLumi, viaWake: false });
+    // The name alone just opened a window for the request: that is an invitation, not a guess
+    const opened: Opened = overLumi ? "barge" : this.clock.now() < this.wakeUntil ? "name" : this.followUp() ? "followup" : "open";
+    this.open({ viaPtt: false, addressed, overLumi, viaWake: false, opened });
     if (addressed && !overLumi) this.listen(true);
     this.refresh();
   }
@@ -431,6 +441,7 @@ export class TurnManager {
     // In wake-word mode the face starts listening as soon as the name is heard
     if (!s.addressed && matchWakeWord(text, this.host.settings().listen.wakeWord).matched) {
       s.addressed = true;
+      s.opened = "name";
       this.listen(true);
     }
     if (s.silenceSince !== null) this.scheduleEndCheck(s);
@@ -511,6 +522,7 @@ export class TurnManager {
     } else if (!s.viaPtt && this.mode() === "wake-word" && !s.addressed) {
       const wake = matchWakeWord(text, settings.listen.wakeWord);
       if (!wake.matched) return this.refresh();
+      s.opened = "name";
       text = wake.rest;
       if (!text || meaningless(text)) return this.awaitRequest();
     } else if (this.mode() === "wake-word" && !s.viaPtt) {
@@ -525,7 +537,9 @@ export class TurnManager {
     }
     this.followUpUntil = 0;
     this.wakeUntil = 0;
-    this.host.utterance(text, result.voiceprint);
+    // The name heard in the transcript (wake-word mode without the detector) counts as the name
+    const opened: Opened = s.viaPtt ? "ptt" : s.viaWake ? "name" : s.opened;
+    this.host.utterance(text, result.voiceprint, opened);
     this.refresh();
   }
 
