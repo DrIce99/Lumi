@@ -54,6 +54,7 @@ export const IPC = {
   settingsHabit: "settings:habit",
   settingsRerollMood: "settings:reroll-mood",
   settingsPickModel: "settings:pick-model",
+  settingsConsolidate: "settings:consolidate",
   settingsPhonePair: "settings:phone-pair",
   settingsPhoneRevoke: "settings:phone-revoke",
   // command bar

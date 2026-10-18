@@ -141,6 +141,13 @@ Work one roadmap phase at a time; finish each with checks green.
   averages into an unstable voice).
 - Backchannel and filler clips are pre-generated at startup with the
   current voice and cached; they never go through the LLM.
+- Voice pitch (`tts.pitch`, -6..+8 semitones): `voice/pitch.ts`
+  `PitchStage` wraps main's AudioOut tee (speakers, phone, Discord, clips;
+  not audiobooks), one stateful `PitchShifter` per utterance: WSOLA
+  stretch by the ratio (30 ms Hann frames, 50% overlap, +-7.5 ms search
+  on every 4th sample) then linear resample by it. ~50 ms added latency,
+  ~5 ms CPU per second of voice on the main thread. Not a sidecar setting:
+  `voiceKey` leaves it out, so changing it reloads nothing.
 
 ## Sidecar conventions
 
@@ -305,6 +312,11 @@ Work one roadmap phase at a time; finish each with checks green.
   to `<recalled>`), the last 3 days, within 3000 chars, plus a line with
   how many are left out. bge-m3 can't link "che lavoro faccio?" to a fact
   about RPG (0.37): words or the model's own search_memory must do it.
+- Manual consolidation (Settings -> Memoria, "Consolida la memoria
+  adesso"): `Brain.consolidate()` (writeEpisode until nothing is pending,
+  then writeDiary + writePeriods, all returning counts) +
+  `Habits.reflect()` (when habits are on) + `Memory.backup()`; the Italian
+  report is `brain/consolidate.ts` (pure, tested).
 - Weeks, months, backups (step 10.4): schema v4 (summaries_au trigger,
   periods `week`/`month`). `periods.ts` (pure): local Monday weeks,
   calendar months, `duePeriods` (over, with day summaries, not written,

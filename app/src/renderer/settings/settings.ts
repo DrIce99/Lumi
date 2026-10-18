@@ -455,6 +455,22 @@ $<HTMLButtonElement>("pickModel").addEventListener("click", async () => {
   if (path) $("faceModel").value = path;
 });
 
+$<HTMLButtonElement>("consolidate").addEventListener("click", async () => {
+  const button = $<HTMLButtonElement>("consolidate");
+  const status = $<HTMLElement>("consolidateStatus");
+  button.disabled = true;
+  status.textContent = "Sto consolidando… con un modello locale può volerci qualche minuto.";
+  try {
+    const r = await api.consolidateMemory();
+    fill(r.snapshot);
+    status.textContent = r.message;
+  } catch (err) {
+    status.textContent = `Errore: ${err instanceof Error ? err.message : String(err)}`;
+  } finally {
+    button.disabled = false;
+  }
+});
+
 $<HTMLButtonElement>("moodReroll").addEventListener("click", async () => {
   await save(false);
   fill(await api.rerollMood());
@@ -651,6 +667,7 @@ function fill(next: SettingsSnapshot): void {
   $<HTMLSelectElement>("ttsEngine").value = s.tts.engine;
   ttsChoices(s.tts.model, s.tts.voice);
   $("speed").value = String(s.tts.speed);
+  $("pitch").value = String(s.tts.pitch);
   $("volume").value = String(s.tts.volume);
   $("seed").value = String(s.tts.seed);
   $<HTMLTextAreaElement>("pronunciations").value = s.tts.pronunciations.join("\n");
@@ -677,7 +694,7 @@ function fill(next: SettingsSnapshot): void {
   $("localVisionModel").value = s.vision.model;
   $<HTMLTextAreaElement>("pauseInApps").value = s.perception.pauseInApps.join("\n");
 
-  for (const id of ["scale", "followUpSeconds", "pauseMs", "wakeThreshold", "speed", "volume", "captureFps", "ocrFps"]) $(id).dispatchEvent(new Event("input"));
+  for (const id of ["scale", "followUpSeconds", "pauseMs", "wakeThreshold", "speed", "pitch", "volume", "captureFps", "ocrFps"]) $(id).dispatchEvent(new Event("input"));
 
   listItems(
     "facts",
@@ -798,6 +815,7 @@ function collect(): Settings {
       model: $<HTMLSelectElement>("ttsModel").value,
       voice: $("ttsVoice").value,
       speed: num("speed", s.tts.speed),
+      pitch: num("pitch", s.tts.pitch),
       volume: num("volume", s.tts.volume),
       seed: num("seed", s.tts.seed),
       pronunciations: $<HTMLTextAreaElement>("pronunciations")
@@ -859,6 +877,7 @@ bindOutput("scale", "scaleOut", (v) => `×${v.toFixed(1)}`);
 bindOutput("pauseMs", "pauseOut", (v) => `${(v / 1000).toLocaleString("it-IT", { minimumFractionDigits: 1 })} s`);
 bindOutput("followUpSeconds", "followUpOut", (v) => (v ? `${v} s` : "niente (serve sempre il tasto o la parola)"));
 bindOutput("speed", "speedOut", (v) => `×${v.toFixed(2)}`);
+bindOutput("pitch", "pitchOut", (v) => (v === 0 ? "naturale" : `${v > 0 ? "+" : "−"}${Math.abs(v).toLocaleString("it-IT")} ${Math.abs(v) === 1 ? "semitono" : "semitoni"}${v > 0 ? " (più acuta)" : " (più grave)"}`));
 bindOutput("volume", "volumeOut", (v) => `${Math.round(v * 100)}%`);
 bindOutput("wakeThreshold", "wakeThresholdOut", (v) => v.toFixed(2));
 bindOutput("captureFps", "captureFpsOut", (v) => String(v));

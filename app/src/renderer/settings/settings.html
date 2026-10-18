@@ -309,6 +309,11 @@
           <button id="pickVoice" type="button">Scegli un campione per clonare la voce…</button>
           <small class="hint">Usa solo la tua voce o voci per cui hai il consenso.</small>
         </div>
+        <label class="field">
+          <span>Tono <output id="pitchOut"></output></span>
+          <input id="pitch" type="range" min="-6" max="8" step="0.5" />
+          <small class="hint">Più acuta per una voce stile vtuber, più grave al contrario; la velocità non cambia. Vale anche per i suoni "mh", "sì?" e per Discord e il telefono, non per gli audiolibri.</small>
+        </label>
         <div class="grid3">
           <label class="field">
             <span>Velocità <output id="speedOut"></output></span>
@@ -396,6 +401,10 @@
 
       <section class="panel" data-panel="memory">
         <p class="note">Ciò che Lumi ricorda di te. Puoi cancellare i singoli ricordi, oppure chiedergli a voce di dimenticare qualcosa.</p>
+        <div class="row">
+          <button id="consolidate" type="button">Consolida la memoria adesso</button>
+          <small id="consolidateStatus" class="hint">Quello che Lumi fa da sola tra una frase e l'altra, ogni mezz'ora e quando il PC riposa: riassume le conversazioni vecchie (e ne estrae i fatti), scrive il diario dei giorni finiti e i riassunti di settimane e mesi, rivede le abitudini e fa il backup.</small>
+        </div>
         <h2>Ricordi</h2>
         <ul id="facts" class="list"></ul>
         <h2>Promemoria</h2>

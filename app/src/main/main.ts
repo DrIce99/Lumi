@@ -24,6 +24,7 @@ import { detectGpu } from "./gpu";
 import { readJson, writeJson } from "./jsonStore";
 import { initLog, log } from "./log";
 import { Mood } from "./mood";
+import { consolidationReport } from "./brain/consolidate";
 import { AvatarFiles, clipsDirIn } from "./avatar";
 import { BODY_GESTURES, EYE_GESTURE } from "../shared/gestures";
 import { DayMood, describeMood } from "./brain/dayMood";
@@ -65,6 +66,7 @@ import { PushToTalk } from "./voice/pushToTalk";
 import { SttClient } from "./voice/sttClient";
 import { isEcho, TurnManager, type SttBackend } from "./voice/turns";
 import { Voice, type AudioOut } from "./voice/voice";
+import { PitchStage } from "./voice/pitch";
 import { readWav, toFrames16k } from "./voice/wavInput";
 import { Vision } from "./vision";
 import { Mover } from "./motion/mover";
@@ -110,8 +112,14 @@ interface WindowState {
 }
 
 /** Settings whose change needs a new sidecar configuration. */
+/** The voice's settings that need the sidecar or the cached clips redone: the pitch is applied as the audio plays. */
+function voiceKey(s: Settings): string {
+  const { pitch: _pitch, ...synth } = s.tts;
+  return JSON.stringify(synth);
+}
+
 function engineKey(s: Settings): string {
-  return JSON.stringify([s.tts, s.stt.engine, s.stt.model, s.stt.device, s.perception.enabled, s.perception.ocr, s.perception.uia]);
+  return JSON.stringify([voiceKey(s), s.stt.engine, s.stt.model, s.stt.device, s.perception.enabled, s.perception.ocr, s.perception.uia]);
 }
 
 function start(): void {
@@ -280,28 +288,32 @@ function start(): void {
   /** Lumi's audio: to the face window, and to the Discord call while the bot is in it. */
   /** During a phone call the voice goes only to the phone (it wins over the speakers and Discord). */
   const onPhone = () => phone?.active() === true;
-  const audioOut: AudioOut = {
-    audioBegin: (msg) => {
-      if (onPhone()) return phone!.audioBegin(msg);
-      face.audioBegin(msg);
-      discordVoice.begin(msg);
+  // Every utterance goes through the pitch layer first, so the speakers, the phone and Discord hear the same voice
+  const audioOut: AudioOut = new PitchStage(
+    {
+      audioBegin: (msg) => {
+        if (onPhone()) return phone!.audioBegin(msg);
+        face.audioBegin(msg);
+        discordVoice.begin(msg);
+      },
+      audioChunk: (msg) => {
+        if (onPhone()) return phone!.audioChunk(msg);
+        face.audioChunk(msg);
+        discordVoice.chunk(msg.id, new Uint8Array(msg.pcm), msg.sampleRate);
+      },
+      audioEnd: (id) => {
+        if (onPhone()) return phone!.audioEnd(id);
+        face.audioEnd(id);
+        discordVoice.end(id);
+      },
+      audioStop: (fadeMs) => {
+        phone?.audioStop(fadeMs);
+        face.audioStop(fadeMs);
+        discordVoice.cut();
+      },
     },
-    audioChunk: (msg) => {
-      if (onPhone()) return phone!.audioChunk(msg);
-      face.audioChunk(msg);
-      discordVoice.chunk(msg.id, new Uint8Array(msg.pcm), msg.sampleRate);
-    },
-    audioEnd: (id) => {
-      if (onPhone()) return phone!.audioEnd(id);
-      face.audioEnd(id);
-      discordVoice.end(id);
-    },
-    audioStop: (fadeMs) => {
-      phone?.audioStop(fadeMs);
-      face.audioStop(fadeMs);
-      discordVoice.cut();
-    },
-  };
+    () => settings().tts.pitch,
+  );
 
   const voice = new Voice(sidecar, audioOut, settings, {
     sentenceStart: (sentence) => {
@@ -1562,6 +1574,19 @@ function start(): void {
         services.invalidate();
         return snapshot();
       },
+      consolidateMemory: async () => {
+        log.info("Memory consolidation started from the settings");
+        try {
+          const done = await brain.consolidate();
+          const habitsDone = settings().habits.enabled ? await habits.reflect() : null;
+          await memory.backup();
+          log.info(`Memory consolidation: ${done.episodes} episodes, ${done.facts} facts, ${done.days} diary days, ${done.periods} periods${habitsDone ? `, habits +${habitsDone.added} -${habitsDone.faded}` : ""}`);
+          return { ok: true, message: consolidationReport(done, habitsDone, services.chosen("idle") !== null), snapshot: snapshot() };
+        } catch (err) {
+          log.warn("Memory consolidation failed", err);
+          return { ok: false, message: `Non è andata: ${err instanceof Error ? err.message : String(err)}`, snapshot: snapshot() };
+        }
+      },
       pickModelFile: async (win: BrowserWindow) => {
         const result = await dialog.showOpenDialog(win, {
           title: "Modello 3D di Lumi",
@@ -1659,7 +1684,7 @@ function start(): void {
     if (next.listen.mode !== prev.listen.mode || next.doNotDisturb !== prev.doNotDisturb) updateWake();
     if (next.launchAtLogin !== prev.launchAtLogin) applyLoginItem();
     if (engineKey(next) !== engineKey(prev)) void voice.configure();
-    if (JSON.stringify(next.tts) !== JSON.stringify(prev.tts)) prepareClips();
+    if (voiceKey(next) !== voiceKey(prev)) prepareClips();
     if (next.muted && !prev.muted) voice.stopAll();
     if (JSON.stringify(next.perception) !== JSON.stringify(prev.perception)) updateUia();
     if (JSON.stringify(next.discord) !== JSON.stringify(prev.discord)) updateDiscord();

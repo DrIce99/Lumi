@@ -313,6 +313,7 @@ microfono ─► AEC del browser ─► VAD (Silero) ─► STT in streaming ─
 - **Riempitivi**: se la prima frase non è pronta entro circa 1,2 s, Lumi dice un "allora…" o un "vediamo…" (da clip in cache) e intanto gli occhi mostrano l'espressione di pensiero.
 - **Emozioni**: il modello parla tramite il tool `say({ text, emotion, intensity, look? })`, come in Pixel Pet. L'emozione arriva al TTS (istruzione di stile) e al volto.
 - **Stile di risposta**: il prompt chiede frasi brevi e parlate, niente elenchi, niente markdown, niente "Certo! Ecco…", e una domanda per volta.
+- **Tono della voce** (Impostazioni → Voce → «Tono», da −6 a +8 semitoni): più acuta per una voce stile vtuber, più grave al contrario, senza cambiare la velocità. Si applica mentre la voce suona, nel processo principale, sul punto da cui l'audio va a finestra, telefono e Discord (`voice/pitch.ts`): ogni frase passa da un pitch shifter in streaming (allungamento WSOLA di fotogrammi da 30 ms seguito da ricampionamento), quindi aggiunge solo circa 50 ms alla prima parola e circa 5 ms di calcolo per secondo di voce. Vale anche per le clip "mh"/"sì?" (senza rigenerarle) ma non per gli audiolibri, che il sidecar scrive direttamente su file. Insieme al tono si spostano un po' anche le formanti, il che a pochi semitoni in su rende la voce più giovane.
 - **Normalizzazione del testo** prima del TTS: numeri, date, ore, valute, sigle, URL ed emoji vengono convertiti in parole italiane (`num2words` con `lang="it"` e regole proprie).
 
 ### Modalità di ascolto
@@ -496,6 +497,8 @@ summaries(id, period, start, end, text, source_ids)               -- livello 4
    - **Nel prompt** (`<memory>`, circa 3.000 caratteri): le note di oggi, i fatti con importanza ≥ 8, quelli collegati al messaggio (dalla stessa ricerca che riempie `<recalled>`) e quelli degli ultimi 3 giorni; il prompt dice quanti ne restano fuori, e `search_memory` con `kind: "fact"` li trova.
    - **Import**: al primo avvio i fatti di `memory.json` passano nel database con i loro id (`f12` resta `f12`) e l'importanza predefinita del loro tipo; da lì in poi vale il database, e `memory.json` ne tiene una copia.
 3. **Settimane e mesi** (fatto, passo 10.4): quando una settimana (da lunedì a domenica) o un mese è finito, il modello dei momenti autonomi ne scrive il riassunto a partire dai giorni del diario (per un mese ogni giorno è accorciato, così ci sta anche nei modelli piccoli). Succede insieme al diario, al massimo quattro periodi alla volta, così una storia lunga si recupera un po' per volta. Senza un modello disponibile si riprova più tardi. I riassunti hanno un vettore e si trovano come gli altri; `search_memory` su un periodo ("cosa abbiamo fatto a marzo?") li mette per primi. La riflessione notturna delle [abitudini](#abitudini-e-proattività) (fase 11) lavorerà sopra a questi.
+
+4. **A mano**: in Impostazioni → Memoria il pulsante «Consolida la memoria adesso» fa subito quello che di solito succede tra una frase e l'altra, ogni mezz'ora e quando il PC riposa: riassume in un episodio le righe uscite dalla finestra recente (estraendo i fatti), scrive il diario dei giorni finiti, i riassunti di settimane e mesi dovuti, rivede le abitudini (la riflessione notturna) e aggiorna il backup di oggi. Alla fine dice cosa ha fatto ("1 episodio riassunto (2 fatti nuovi), 3 giorni nel diario…"). Il giorno in corso entra nel diario solo quando è finito.
 
 ### Ricerca
 
@@ -1033,7 +1036,7 @@ Il sidecar ascolta solo su `127.0.0.1`, con una porta casuale e un token generat
   "profile": "bilanciato",
   "brain":   { "chat": { "provider": "groq", "model": "..." }, "idle": { "provider": "ollama", "model": "qwen3" } },
   "stt":     { "engine": "faster-whisper", "model": "large-v3-turbo", "vocabulary": ["Sme.UP", "RPG"] },
-  "tts":     { "engine": "qwen3", "model": "1.7B-Base", "voice": "", "speed": 1.0, "pronunciations": ["VS Code = vi es code"] },
+  "tts":     { "engine": "qwen3", "model": "1.7B-Base", "voice": "", "speed": 1.0, "pitch": 0, "pronunciations": ["VS Code = vi es code"] },
   "vision":  { "provider": "ollama", "model": "qwen3-vl:8b", "keepAlive": "2m", "maxSide": 1344 },
   "listen":  { "mode": "push-to-talk", "hotkey": "Ctrl+Alt+Space", "wakeWord": "ehi lumi", "wakeThreshold": 0.5, "followUpSeconds": 8 },
   "chatHotkey": "Control+Alt+L",

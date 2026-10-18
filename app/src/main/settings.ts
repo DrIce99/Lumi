@@ -155,6 +155,7 @@ export function sanitizeSettings(input: unknown): Settings {
       volume: Math.round(num(tts.volume, d.tts.volume, 0.1, 1) * 100) / 100,
       seed: Math.round(num(tts.seed, d.tts.seed, 0, 2 ** 31 - 1)),
       pronunciations: strings(tts.pronunciations, d.tts.pronunciations, 300, 210).filter((line) => /^[^=]+=[^=]*\S/.test(line)),
+      pitch: Math.round(num(tts.pitch, d.tts.pitch, -6, 8) * 2) / 2,
     },
     listen: {
       mode: oneOf(listen.mode, LISTEN_MODES, d.listen.mode),

@@ -24,6 +24,7 @@ const bridge: SettingsBridge = {
   habit: (id, action) => ipcRenderer.invoke(IPC.settingsHabit, id, action),
   rerollMood: () => ipcRenderer.invoke(IPC.settingsRerollMood),
   pickModelFile: () => ipcRenderer.invoke(IPC.settingsPickModel),
+  consolidateMemory: () => ipcRenderer.invoke(IPC.settingsConsolidate),
   phonePair: () => ipcRenderer.invoke(IPC.settingsPhonePair),
   phoneRevoke: (id) => ipcRenderer.invoke(IPC.settingsPhoneRevoke, id),
   onRefresh: (cb) => {

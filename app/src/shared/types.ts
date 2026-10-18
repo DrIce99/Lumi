@@ -67,8 +67,11 @@ export interface Settings {
     maxSide: number;
   };
   stt: { engine: SttEngine; model: string; device: Device; vocabulary: string[] };
-  /** `pronunciations`: "parola = pronuncia" lines, respelled before synthesis (sidecar/text/lexicon_it.py). */
-  tts: { engine: TtsEngine; model: string; voice: string; speed: number; volume: number; seed: number; pronunciations: string[] };
+  /**
+   * `pronunciations`: "parola = pronuncia" lines, respelled before synthesis (sidecar/text/lexicon_it.py).
+   * `pitch`: semitones up or down, applied to the voice as it plays (voice/pitch.ts), speed unchanged.
+   */
+  tts: { engine: TtsEngine; model: string; voice: string; speed: number; volume: number; seed: number; pronunciations: string[]; pitch: number };
   listen: {
     mode: ListenMode;
     /** Push-to-talk, held down (Electron accelerator syntax). */
@@ -187,7 +190,7 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   vision: { provider: "ollama", model: "qwen3-vl:8b", keepAlive: "2m", maxSide: 1344 },
   stt: { engine: "faster-whisper", model: "large-v3-turbo", device: "auto", vocabulary: [] },
-  tts: { engine: "qwen3", model: "1.7B-Base", voice: "", speed: 1, volume: 1, seed: 7, pronunciations: [] },
+  tts: { engine: "qwen3", model: "1.7B-Base", voice: "", speed: 1, volume: 1, seed: 7, pronunciations: [], pitch: 0 },
   movement: { enabled: true, initiative: true, pranks: true, dodge: true },
   mood: { enabled: true, weights: DEFAULT_MOOD_WEIGHTS },
   habits: { enabled: true, proposalCooldownMinutes: 20, minOccurrences: 5, minFrequency: 0.7 },
@@ -652,6 +655,8 @@ export interface SettingsBridge {
   rerollMood(): Promise<SettingsSnapshot>;
   /** A VRM file for the 3D avatar, or null when cancelled. */
   pickModelFile(): Promise<string | null>;
+  /** Runs the memory's consolidation now (episodes, diary, weeks and months, habits, backup). */
+  consolidateMemory(): Promise<{ ok: boolean; message: string; snapshot: SettingsSnapshot }>;
   /** Something changed outside the window (a phone was paired): reload. */
   onRefresh(cb: () => void): void;
   /** Lumi asked to forget something: the Memory tab opens on it. */

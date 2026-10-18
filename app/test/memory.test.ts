@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { consolidationReport } from "../src/main/brain/consolidate";
 import { Brain, parseEpisodeReply, type BrainHost } from "../src/main/brain/brain";
 import { describeHit, Memory } from "../src/main/brain/memory";
 import { MemoryDb, SESSION_GAP_MS, type LineInput } from "../src/main/brain/memory/db";
@@ -181,6 +182,27 @@ test("every line goes to memory.db, and recall finds what left the recent window
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("consolidating by hand summarizes the whole backlog at once and says what it did", async () => {
+  const db = new MemoryDb(":memory:");
+  const memory = new Memory(null, MemoryStore.local(db), ticking());
+  for (let i = 0; i < 96; i++) memory.addMessage(i % 2 ? "lumi" : "user", `chiacchiera numero ${i}`);
+  let n = 0;
+  const provider = {
+    id: "ollama",
+    start: () => {
+      throw new Error("not used");
+    },
+    complete: async () => ({ text: JSON.stringify({ summary: `Episodio ${++n}.`, facts: n === 1 ? [{ fact: "Gli piace il caffè amaro.", kind: "preference" }] : [] }), usage: null, model: "m" }),
+  } as unknown as ChatProvider;
+  const host = { settings: () => DEFAULT_SETTINGS, memory, provider: () => ({ provider, model: "m" }) } as unknown as BrainHost;
+  const done = await new Brain(host).consolidate();
+  assert.equal(done.episodes, 1, "the 72 lines older than the recent window, in one episode");
+  assert.equal(done.facts, 1);
+  assert.equal(memory.pendingEpisode(), null);
+  assert.equal(consolidationReport(done, { added: 1, faded: 0 }, true), "Fatto: 1 episodio riassunto (1 fatto nuovo), abitudini: 1 nuove, 0 meno sicure. Backup di oggi aggiornato.");
+  assert.equal(consolidationReport({ episodes: 0, facts: 0, days: 0, periods: 0 }, null, false), "Era già tutto in ordine: niente di nuovo da riassumere. Senza un modello per i momenti autonomi (scheda Cervello) i riassunti sono solo le frasi dette. Backup di oggi aggiornato.");
 });
 
 test("older lines become an episode, with the new facts saved; the recent window stays verbatim", async () => {

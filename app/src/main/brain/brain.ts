@@ -145,6 +145,8 @@ export class Brain {
   private readonly queue: Trigger[] = [];
   private authFailed = false;
   private compacting = false;
+  /** Facts the episode writer found so far (consolidate() reports the new ones). */
+  private factsFound = 0;
 
   constructor(private readonly host: BrainHost) {}
 
@@ -204,11 +206,11 @@ export class Brain {
    * episode, picking out durable facts on the way. Runs between moments,
    * with the model for autonomous moments (usually the local one).
    */
-  async writeEpisode(): Promise<void> {
-    if (this.compacting) return;
+  async writeEpisode(): Promise<boolean> {
+    if (this.compacting) return false;
     const memory = this.host.memory;
     const entries = memory.pendingEpisode();
-    if (!entries) return;
+    if (!entries) return false;
     this.compacting = true;
     try {
       const user = this.host.settings().userName || "Utente";
@@ -227,7 +229,7 @@ export class Brain {
           ({ summary, facts } = parseEpisodeReply(result.text));
         } catch (err) {
           log.warn("Episode summary failed", err);
-          return;
+          return false;
         }
       } else {
         // No model available: keep at least what was said to Lumi, so the window can move on
@@ -241,9 +243,26 @@ export class Brain {
       const source = { from: entries[0].at, to: entries[entries.length - 1].at };
       for (const f of facts) memory.remember(f.fact, f.kind, { importance: f.importance, replaces: f.replaces, source });
       if (episode) log.info(`Episode ${episode.id}: ${entries.length} lines summarized, ${facts.length} new facts`);
+      this.factsFound += facts.length;
+      return episode !== null;
     } finally {
       this.compacting = false;
     }
+  }
+
+  /**
+   * Everything that consolidates the memory, now, instead of between
+   * moments and every half hour (the settings' button): the conversation
+   * that left the recent window into episodes (and their facts), finished
+   * days into the diary, finished weeks and months into their summaries.
+   */
+  async consolidate(): Promise<{ episodes: number; facts: number; days: number; periods: number }> {
+    const facts = this.factsFound;
+    let episodes = 0;
+    // A long backlog is summarized a window at a time
+    for (let i = 0; i < 50 && (await this.writeEpisode()); i++) episodes++;
+    const { days, periods } = await this.writeDiary();
+    return { episodes, facts: this.factsFound - facts, days, periods };
   }
 
   /** Whether the running moment answers the user (not an autonomous one). */
@@ -293,8 +312,9 @@ export class Brain {
   }
 
   /** Turns finished days of conversation into diary entries. */
-  async writeDiary(): Promise<void> {
+  async writeDiary(): Promise<{ days: number; periods: number }> {
     const settings = this.host.settings();
+    let days = 0;
     for (const day of await this.host.memory.pendingDiaryDays()) {
       let summary = day.episodes.map((e) => e.summary).join(" ") || `Abbiamo scambiato ${day.entries.length} messaggi.`;
       const chosen = this.authFailed ? null : this.host.provider("idle");
@@ -315,15 +335,17 @@ export class Brain {
         }
       }
       this.host.memory.addDiary(day.date, summary);
+      days++;
     }
-    await this.writePeriods();
+    return { days, periods: await this.writePeriods() };
   }
 
   /** Weeks and months that are over get their summary, from their days (a few at a time). */
-  async writePeriods(): Promise<void> {
+  async writePeriods(): Promise<number> {
     const memory = this.host.memory;
     const chosen = this.authFailed ? null : this.host.provider("idle");
-    if (!chosen) return;
+    if (!chosen) return 0;
+    let written = 0;
     for (const span of await memory.duePeriods()) {
       const days = await memory.daysIn(span.start, span.end);
       if (!days.length) continue;
@@ -335,12 +357,14 @@ export class Brain {
         if (result.text.trim()) {
           memory.addPeriodSummary(span, result.text);
           log.info(`Summary of ${span.label} written`);
+          written++;
         }
       } catch (err) {
         log.warn(`Summary of ${span.label} failed`, err);
-        return;
+        return written;
       }
     }
+    return written;
   }
 
   /**
