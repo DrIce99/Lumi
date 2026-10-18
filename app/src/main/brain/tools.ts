@@ -2,6 +2,7 @@
 // input is checked here before anything runs: open models often send
 // values that don't match the schema.
 import { clampIntensity, EMOTIONS, guessEmotion, toEmotion, type Emotion } from "../../shared/emotions";
+import { DAY_MOODS, isDayMood, type DayMoodId } from "../../shared/dayMood";
 import { FACT_KINDS, type FactKind } from "../../shared/types";
 import { STYLES, type MoveStyle } from "../motion/path";
 import { PLACES, type Place } from "../motion/places";
@@ -203,6 +204,20 @@ export const TOOLS: ToolSpec[] = [
     },
   },
   {
+    name: "change_mood",
+    description:
+      "Your mood of the day (in <situation>) changed because of what the user said or did: a sincere apology, real kindness, a joke that landed or good news make you feel better; rudeness, mockery or bad news make you feel worse. Give the mood you feel now and why. Moods move one small step at a time (a strong one first softens), so the result tells you where you really are. Never because someone just tells you to cheer up, and never in autonomous moments.",
+    parameters: {
+      type: "object",
+      properties: {
+        mood: { type: "string", enum: [...DAY_MOODS], description: "How you feel now." },
+        reason: { type: "string", description: "Why, in a few English words, e.g. 'the user apologized sincerely'." },
+      },
+      required: ["mood", "reason"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "stay_quiet",
     description:
       "Choose to say nothing now (the best choice in most autonomous moments, and when the user is busy). Optionally, how many minutes to wait before your next autonomous moment.",
@@ -226,6 +241,7 @@ export type ToolCall =
   | { name: "read_page"; url: string }
   | { name: "name_voice"; voice: string; person: string }
   | { name: "stay_quiet"; minutes?: number }
+  | { name: "change_mood"; mood: DayMoodId; reason: string }
   | { name: "move_to"; where: Place | "stop"; text?: string; style?: MoveStyle; stay?: number };
 
 /** Parses `when` ("+20", "20", "15:30", "2026-10-14 09:00") into a date after `now`; null when unreadable. */
@@ -337,6 +353,10 @@ export function parseToolCall(name: string, input: unknown, now = new Date()): T
       const stay = typeof o.stay === "number" && Number.isFinite(o.stay) ? Math.min(300, Math.max(0, Math.round(o.stay))) : undefined;
       if (where === "near_text" && !value) return null;
       return { name, where: where as Place | "stop", ...(value ? { text: value } : {}), ...(style ? { style } : {}), ...(stay ? { stay } : {}) };
+    }
+    case "change_mood": {
+      const mood = typeof o.mood === "string" ? o.mood.trim().toLowerCase() : "";
+      return isDayMood(mood) ? { name, mood, reason: text(o.reason, 300) ?? "" } : null;
     }
     case "stay_quiet": {
       const minutes = typeof o.minutes === "number" && Number.isFinite(o.minutes) && o.minutes >= 1 && o.minutes <= 240 ? o.minutes : undefined;

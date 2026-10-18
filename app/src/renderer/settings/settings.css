@@ -267,6 +267,13 @@ button.danger.armed {
   margin-top: 4px;
 }
 
+#runtimeProgress {
+  width: 100%;
+  height: 8px;
+  margin: 4px 0 10px;
+  accent-color: var(--ok);
+}
+
 .profiles {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

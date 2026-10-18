@@ -20,17 +20,18 @@ L'obiettivo è che sembri **il più umano possibile**, cioè con poca latenza, t
 8. [Memoria a lungo termine](#memoria-a-lungo-termine)
 9. [Abitudini e proattività](#abitudini-e-proattività)
 10. [Movimento sullo schermo](#movimento-sullo-schermo)
-11. [Lumi sul telefono](#lumi-sul-telefono)
-12. [Usare il PC](#usare-il-pc)
-13. [Sintesi vocale (TTS)](#sintesi-vocale-tts)
-14. [Riconoscimento vocale (STT)](#riconoscimento-vocale-stt)
-15. [Profili hardware](#profili-hardware)
-16. [Struttura del progetto](#struttura-del-progetto)
-17. [Protocollo app ↔ sidecar](#protocollo-app--sidecar)
-18. [Impostazioni](#impostazioni)
-19. [Privacy](#privacy)
-20. [Roadmap](#roadmap)
-21. [Avvio e sviluppo](#avvio-e-sviluppo)
+11. [Umore del giorno](#umore-del-giorno)
+12. [Lumi sul telefono](#lumi-sul-telefono)
+13. [Usare il PC](#usare-il-pc)
+14. [Sintesi vocale (TTS)](#sintesi-vocale-tts)
+15. [Riconoscimento vocale (STT)](#riconoscimento-vocale-stt)
+16. [Profili hardware](#profili-hardware)
+17. [Struttura del progetto](#struttura-del-progetto)
+18. [Protocollo app ↔ sidecar](#protocollo-app--sidecar)
+19. [Impostazioni](#impostazioni)
+20. [Privacy](#privacy)
+21. [Roadmap](#roadmap)
+22. [Avvio e sviluppo](#avvio-e-sviluppo)
 
 ---
 
@@ -47,6 +48,7 @@ L'obiettivo è che sembri **il più umano possibile**, cioè con poca latenza, t
 - **Memoria persistente** e **momenti autonomi** (commenti spontanei nelle pause), come in Pixel Pet. Ogni frase della conversazione finisce in un database locale (`memory.db`): le parti più vecchie vengono riassunte in "episodi" che restano nel contesto, i fatti importanti su di te vengono estratti da soli, e a ogni domanda Lumi cerca nel suo passato i ricordi collegati (ricerca per parole e per significato, tutta sul PC; tool `search_memory` per le ricerche esplicite, anche per data: "ti ricordi quando…", "cosa ti ho detto a marzo?").
 - **Memoria che dura anni** (fase 10, prevista): ricorda tutto ciò che è stato detto e lo ritrova per significato, per parole esatte o per data. Dà priorità a ciò che conta, ma non butta niente e dimentica solo quando glielo chiedi tu.
 - **Si muove sullo schermo**: se le chiedi di spostarsi ("vai in alto a destra", "sull'altro schermo", "levati, mi copri") vola lì da sola, anche tra i monitor; e si muove anche di sua iniziativa quando ha un motivo, per indicarti qualcosa o per farti un piccolo dispetto se l'hai infastidita.
+- **Ha i suoi giorni**: ogni mattina si sveglia con un umore estratto a sorte (con le probabilità che scegli tu): allegra, tranquilla, annoiata, triste, arrabbiata… L'umore colora le risposte e gli occhi, e se è giù di corda torna di buon umore solo se riesci a tirarla su tu (ma può anche peggiorare, se la tratti male).
 - **Passa sul telefono**: con il tasto "Chiama" dell'app Lumi viene risucchiata fuori dallo schermo del PC (come un oggetto che cade in un buco nero) e riemerge nell'app, dove la vedi e le parli; voce, cervello e memoria restano sul PC.
 - **Usa il PC** (fase 16, prevista): apre e chiude app, file e cartelle, gestisce le finestre e la musica e preme i controlli dentro le app; le azioni che cambiano qualcosa le fa solo dopo averti chiesto conferma.
 - **Impara le tue abitudini**: dalle app che apri (solo i nomi, sul PC) capisce che "nei feriali verso le 9 apri Spotify" o che "dopo VS Code apri Discord", e al momento giusto ti chiede se aprirle. Fa da sola solo quando glielo permetti tu, per singola abitudine.
@@ -427,7 +429,7 @@ look_at_screen({ question })
 
 ## Memoria a lungo termine
 
-> In costruzione (fase 10). **Fatto**: `memory.db` con il log grezzo di ogni frase, gli episodi e i giorni del diario, l'indice full-text (FTS5) e `search_memory` con i filtri per data e tipo; al primo avvio importa `archive.jsonl` (poi rinominato `archive.jsonl.imported`), episodi e diario. Embedding con Ollama (`bge-m3`) in una coda in background, vettori in sqlite-vec e ricerca ibrida (parole + significato, RRF, punteggio con recenza). I fatti con importanza, fonti e sostituzioni (`superseded_by`) nel database, importati da `memory.json`; nel prompt solo quelli importanti e quelli pertinenti. Riassunti settimanali e mensili, backup giornalieri e oblio a cascata con conferma. **Ancora da fare**: embedding nel sidecar per chi non ha Ollama.
+> In costruzione (fase 10). **Fatto**: `memory.db` con il log grezzo di ogni frase, gli episodi e i giorni del diario, l'indice full-text (FTS5) e `search_memory` con i filtri per data e tipo; al primo avvio importa `archive.jsonl` (poi rinominato `archive.jsonl.imported`), episodi e diario. Embedding con Ollama (`bge-m3`) in una coda in background, vettori in sqlite-vec e ricerca ibrida (parole + significato, RRF, punteggio con recenza). I fatti con importanza, fonti e sostituzioni (`superseded_by`) nel database, importati da `memory.json`; nel prompt solo quelli importanti e quelli pertinenti. Riassunti settimanali e mensili, backup giornalieri e oblio a cascata con conferma. Senza Ollama, gli embedding li calcola il sidecar sul processore.
 >
 > Il database usa `node:sqlite`, incluso nel Node di Electron (nessun modulo nativo da ricompilare), e gira in un worker thread: le query SQLite sono sincrone e non devono mai fermare il thread principale, dove vive l'hook del mouse.
 
@@ -487,7 +489,7 @@ summaries(id, period, start, end, text, source_ids)               -- livello 4
 
 Lumi può anche **cercare da solo** con il tool `search_memory({ query, from, to, kind })`, per esempio quando gli chiedi "cosa ti ho detto a marzo sul trasloco?" o quando il recupero automatico non basta.
 
-**Embedding**: via Ollama con `bge-m3` (multilingue, buono in italiano, 1024 dimensioni, circa 660 MB di VRAM; si scarica con `ollama pull bge-m3`, si sceglie in Impostazioni → Memoria). `nomic-embed-text` è più leggero ma è un modello inglese: misurato su domande italiane, mette risposte giuste e sbagliate quasi alla pari (0,43–0,66), mentre `bge-m3` separa bene (risposte giuste 0,54–0,71, il resto 0,31–0,51). Senza Ollama (o con «Spenta») la memoria funziona con le sole parole e i vettori vengono calcolati in seguito, quando il modello c'è; gli embedding nel sidecar su CPU, per il profilo leggero, arriveranno dopo.
+**Embedding**: via Ollama con `bge-m3` (multilingue, buono in italiano, 1024 dimensioni, circa 660 MB di VRAM; si scarica con `ollama pull bge-m3`, si sceglie in Impostazioni → Memoria). `nomic-embed-text` è più leggero ma è un modello inglese: misurato su domande italiane, mette risposte giuste e sbagliate quasi alla pari (0,43–0,66), mentre `bge-m3` separa bene (risposte giuste 0,54–0,71, il resto 0,31–0,51). **Senza Ollama** («Automatica», la scelta predefinita, usa Ollama se è installato e altrimenti il processore; oppure «Sul processore») gli embedding li calcola il sidecar. Usa lo stesso `bge-m3`, in versione ONNX int8 (570 MB, scaricati la prima volta), con onnxruntime e metà dei core del processore. Impiega circa 15 ms a frase e si scarica dalla memoria dopo 10 minuti di inattività. Su un insieme di prova di ricordi e domande in italiano trova la risposta giusta come prima in tutte le domande, contro il 95% di `bge-m3` in Ollama e l'80-85% dei modelli piccoli (multilingual-e5, MiniLM). I suoi vettori sono quasi identici a quelli di Ollama (similarità ≥ 0,985), quindi vale la stessa soglia. Sono salvati come `bge-m3-int8`: se si cambia fonte, la memoria li ricalcola in background. Con «Spenta» la memoria cerca solo per parole.
 
 Come funziona (fatto, passo 10.2):
 
@@ -613,6 +615,19 @@ Limiti, nel codice (`rules.ts`) e non solo nel prompt:
 - Mai sopra la finestra in cui stai scrivendo; se un movimento coprirebbe il cursore o il mouse, resta lì al massimo 10 secondi e poi torna al suo posto.
 
 Rispetto al piano non ci sono: la fuga quando provi a cliccarla (renderebbe impossibile aprire la chat) e il volo sincronizzato con la frase che lo nomina.
+
+---
+
+## Umore del giorno
+
+Come una persona, Lumi ha le sue giornate: ogni mattina si sveglia con un umore, che dura finché non succede qualcosa che lo cambia. Il codice è in `main/brain/dayMood.ts` (puro, con i test) e `shared/dayMood.ts`.
+
+- **Gli umori** sono otto, disposti ad albero intorno a **tranquilla**: allegra → entusiasta; malinconica → triste; irritata → arrabbiata; annoiata. Un cambiamento fa un solo passo alla volta: verso la calma oppure più a fondo nell'umore richiesto. Da arrabbiata a allegra si passa quindi per irritata e tranquilla, mai di colpo.
+- **L'estrazione**: la giornata comincia alle 5:00 (restare svegli dopo mezzanotte è ancora "oggi"). Al primo momento del giorno l'umore viene estratto con le probabilità di Impostazioni → Generale → «Umore del giorno» (un cursore da 0 a 10 per umore, 0 = mai; di default prevalgono le giornate buone). L'umore con cui si è chiusa la giornata precedente pesa il 50% in più: una tristezza che nessuno ha consolato tende a restare. L'intensità iniziale è tra 0,5 e 0,9. Lo stato sta in `%APPDATA%\Lumi\mood.json`; il pulsante «Tira di nuovo a sorte» lo riestrae.
+- **La predisposizione**: l'umore entra in `<situation>` («Your mood today: arrabbiata, strongly (since 09:12, you woke up like this) - short, sharp answers…; only the user can make it better») e il prompt chiede di farlo trasparire nelle parole, nel tono e nell'emozione di quasi tutte le frasi, anche sugli argomenti neutri, senza mai rifiutare un aiuto, essere cattiva o ignorare una persona che sta davvero male. Anche gli occhi a riposo ne mostrano una traccia (gioia, tristezza o rabbia leggere; annoiata e tranquilla restano neutri, perché l'apatia fermerebbe i battiti) e una frase "neutra" in una giornata storta mantiene quella traccia.
+- **Come cambia**: solo per merito (o colpa) dell'utente. Quando le tue parole la toccano davvero (scuse sincere, gentilezza, attenzione a come sta, una battuta riuscita, una bella notizia; oppure maleducazione, prese in giro, una brutta notizia), il modello chiama `change_mood({ mood, reason })`. Il codice decide quanto si muove: un umore forte (intensità > 0,5) prima **si attenua** e solo dopo cambia, al massimo **un cambiamento ogni 90 secondi**, e mai nei momenti autonomi (un tool chiamato fuori da un tuo messaggio viene rifiutato). Un «dai, sorridi» non basta: il prompt glielo dice esplicitamente. Il risultato torna al modello ("sei ancora arrabbiata, ma un po' meno"), che può lasciarlo trasparire ("Mh… va bene, un pochino meglio.").
+- **Log**: solo i nomi degli umori e l'esito, mai il motivo (potrebbe citare la conversazione).
+- **Spento** («Umore del giorno» senza spunta): niente riga nel prompt, occhi neutri a riposo, `change_mood` non cambia niente.
 
 ---
 
@@ -891,6 +906,7 @@ lumi/
 │  │  ├─ commandbar.ts         barra dei comandi in sovrimpressione
 │  │  ├─ settings.ts           JSON in %APPDATA%\Lumi + chiavi DPAPI
 │  │  ├─ sidecar.ts            spawn, health check, riavvio
+│  │  ├─ setup/                runtime.ts (uv sync dell'ambiente Python) setup.ts (primo avvio, fase 13)
 │  │  ├─ motion/
 │  │  │  ├─ places.ts          luogo con nome → posizione del volto (puro, testato)
 │  │  │  ├─ path.ts            traiettoria e durata del volo (puro, testato)
@@ -914,7 +930,7 @@ lumi/
 │  │  │  ├─ vision.ts          visione locale: prompt, risposta JSON, client Ollama/OpenAI
 │  │  │  └─ context.ts         riassunto percettivo per il prompt
 │  │  ├─ brain/
-│  │  │  ├─ brain.ts  prompt.ts  tools.ts  memory.ts
+│  │  │  ├─ brain.ts  prompt.ts  tools.ts  memory.ts  dayMood.ts
 │  │  │  ├─ memory/            (fase 10, in costruzione)
 │  │  │  │  ├─ db.ts           node:sqlite + FTS5 + sqlite-vec, migrazioni, ricerca ibrida
 │  │  │  │  ├─ worker.ts       il worker thread che possiede memory.db
@@ -952,6 +968,7 @@ lumi/
 │  ├─ uia/                     focus.py  caret.py  (eventi UIA)  act.py (azioni, previsto)
 │  ├─ wake/                    detector.py  train.py  (openWakeWord, dati sintetici dal TTS)
 │  ├─ text/                    normalize_it.py  lexicon_it.py  trappole_it.txt  accenti_it.txt
+│  ├─ embed/                   onnx_embed.py  (embedding bge-m3 sul processore per la memoria, fase 10.6)
 │  ├─ lora/                    data.py  prepare.py  train.py  (voce addestrata in italiano, fase 17.5)
 │  ├─ scripts/                 smoke.py  pronuncia.py  accenti.py  prosody.py
 │  ├─ pyproject.toml
@@ -980,6 +997,7 @@ Il sidecar ascolta solo su `127.0.0.1`, con una porta casuale e un token generat
 | `/uia` | WS | → eventi `{ focus, caret, selection }` con rettangoli |
 | `/wake` | WS | `{ model: "lumi" }` → `{ type: "ready" }` (o `{ type: "error", missing }`); poi `[id][PCM 16 kHz]` del parlato e `{ reset: true }` a ogni frase → `{ type: "scores", scores }`, uno ogni 80 ms |
 | `POST /tts/batch` | HTTP | testo lungo → file audio (modalità audiolibro) |
+| `POST /embed` | HTTP | `{ texts, kind }` → vettori `bge-m3` sul processore, per la memoria senza Ollama |
 
 ---
 
@@ -1013,6 +1031,7 @@ Il sidecar ascolta solo su `127.0.0.1`, con una porta casuale e un token generat
   },
   "habits": { "enabled": true, "proposalCooldownMinutes": 20, "minOccurrences": 5, "minFrequency": 0.7 },
   "movement": { "enabled": true, "initiative": true, "pranks": true, "dodge": true },
+  "mood": { "enabled": true, "weights": { "tranquilla": 6, "allegra": 5, "entusiasta": 2, "annoiata": 2, "malinconica": 2, "triste": 1, "irritata": 2, "arrabbiata": 1 } },
   "pc": { "enabled": false, "allowedApps": ["Spotify", "Esplora file"], "confirm": "always" },
   "phone": { "enabled": false, "port": 47821 },
   "sociability": "normale"
@@ -1063,16 +1082,16 @@ Ogni fase si chiude con `npm run check` e `pytest` verdi e una prova manuale.
    4. ~~[Abbagliamento](#abbagliamento)~~ (fatto).
    5. ~~[Visione locale](#visione-locale)~~ (fatto).
    6. ~~[Attivazione per nome](#attivazione-per-nome) con openWakeWord~~ (fatto; il modello "lumi" va addestrato con `train.py`).
-10. **Memoria a lungo termine** ([dettagli](#memoria-a-lungo-termine)):
+10. ~~**Memoria a lungo termine**~~ (fatto) ([dettagli](#memoria-a-lungo-termine)):
     1. ~~`db.ts` + log + FTS + `search_memory` per date; import di `archive.jsonl`, episodi e diario~~ (fatto).
-    2. ~~Coda di embedding (Ollama `bge-m3`, sqlite-vec con `loadExtension`) e ricerca ibrida con RRF e punteggio~~ (fatto; gli embedding nel sidecar su CPU, senza Ollama, restano da fare).
+    2. ~~Coda di embedding (Ollama `bge-m3`, sqlite-vec con `loadExtension`) e ricerca ibrida con RRF e punteggio~~ (fatto).
     3. ~~Fatti con importanza in `memory.db` (import dei fatti di `memory.json`), `superseded_by`~~ (fatto).
     4. ~~Riassunti gerarchici (giorno → settimana → mese) e backup giornalieri~~ (fatto).
     5. ~~Oblio a cascata con conferma~~ (fatto).
-    6. Embedding nel sidecar su CPU per chi non ha Ollama.
+    6. ~~Embedding nel sidecar su CPU per chi non ha Ollama~~ (fatto: `bge-m3` ONNX int8, `POST /embed`).
 11. ~~**Abitudini** ([dettagli](#abitudini-e-proattività)): log degli eventi, `patterns.ts` con i test, riflessione, trigger con limite e confidenza~~ (fatto).
 12. ~~**Audiolibri**: `POST /tts/batch`, import di `.txt`/`.epub`, capitoli, voci diverse per i dialoghi, esportazione `.m4b`~~ (fatto).
-13. **Distribuzione**: installer Electron + sidecar impacchettato (embedded Python / `uv`) e download dei modelli al primo avvio.
+13. ~~**Distribuzione**: installer Electron + sidecar impacchettato (embedded Python / `uv`) e download dei modelli al primo avvio~~ (fatto: [installer](#installer); manca la firma del codice).
 14. ~~**Movimento sullo schermo** ([dettagli](#movimento-sullo-schermo)): luoghi, traiettorie, volo a 60 Hz, passaggio tra monitor, tool `move_to`, iniziative con limiti, schivata del cursore~~ (fatto).
 15. **Lumi sul telefono** ([dettagli](#lumi-sul-telefono)):
     1. ~~`phoneBridge` e `phone/server.ts`: audio nei due sensi, VAD sulla traccia remota, barge-in~~ (fatto).
@@ -1092,6 +1111,7 @@ Ogni fase si chiude con `npm run check` e `pytest` verdi e una prova manuale.
     3. ~~Confronto delle voci con lo script (CustomVoice, Base clonata da un parlante italiano, VoiceDesign) e scelta della voce predefinita~~ (fatto: Base 1.7B con la voce italiana inclusa).
     4. ~~Accenti grafici scritti dal cervello sulle parole ambigue, solo se il confronto mostra che il modello li rispetta~~ (fatto: `scripts/accenti.py`; li rispetta solo Kokoro, quindi il prompt li chiede solo con Kokoro).
     5. ~~Facoltativo, solo se restano errori sistematici: LoRA su Qwen3-TTS Base con 5–10 ore di un solo parlante italiano, pesi fusi nel modello, confronto prima/dopo con lo script~~ (fatto: `sidecar/lora/`; il modello addestrato non supera la Base clonata e resta un'opzione).
+18. ~~**Umore del giorno** ([dettagli](#umore-del-giorno)): umore estratto ogni mattina con le probabilità delle impostazioni, predisposizione nelle risposte e negli occhi, tool `change_mood` con passi singoli, resistenza e attesa, cambiamenti solo per merito dell'utente, in meglio o in peggio~~ (fatto).
 
 ---
 
@@ -1133,5 +1153,38 @@ Variabili di debug (stesso stile di Pixel Pet):
 - `LUMI_DEBUG_MOVE=<luoghi>` (separati da virgole, per esempio `top_left,other_screen,home`): vola in quei punti uno dopo l'altro, come se glielo chiedessi; con `LUMI_DEBUG_LAG=1` si misura l'effetto sul thread del mouse.
 - `LUMI_DATA_DIR=<cartella>`: usa un'altra cartella per impostazioni, memoria e log (per provare l'app senza toccare quella vera). Con `LUMI_SIDECAR_URL` puntato a un indirizzo irraggiungibile l'app parte in modalità testo senza caricare modelli.
 - `LUMI_WAKE_MODEL=<nome>`: il modello della parola di attivazione (predefinito `lumi`; `hey_jarvis`, `alexa` o `hey_mycroft` sono modelli generici di openWakeWord, per provare il flusso).
+- `LUMI_DEBUG_RUNTIME=<cartella>`: dai sorgenti, simula l'app installata; l'ambiente Python del sidecar viene creato da uv in quella cartella. Nell'app installata sposta solo l'ambiente.
+- `LUMI_DEBUG_INSTALL=<profilo>`: applica il profilo e installa subito il motore della voce, senza clic. Insieme a `LUMI_DATA_DIR` e `LUMI_DEBUG_RUNTIME` prova il primo avvio da zero.
 
-Log in `%APPDATA%\Lumi\logs\`.
+Log in `%APPDATA%\Lumi\logs\` (`setup.log` per l'installazione del motore della voce).
+
+### Installer
+
+```bash
+cd phone && npm run build    # la pagina che il PC serve ai telefoni (phone/www)
+cd app && npm run dist        # release/Lumi-Setup-<versione>.exe (npm run dist:dir: solo la cartella)
+```
+
+L'installer (NSIS, per utente, senza diritti di amministratore, circa 135 MB) contiene:
+
+- l'app;
+- il sorgente del sidecar, con `pyproject.toml` e `uv.lock`, senza `.venv`, test e strumenti di sviluppo;
+- `uv.exe`, in versione fissata (`scripts/prepare-dist.mjs` lo scarica e ne verifica lo SHA-256).
+
+Python e i pacchetti invece **non** sono inclusi: PyTorch con CUDA da solo pesa qualche GB, e cosa serve dipende dal PC.
+
+Al primo avvio le impostazioni si aprono su Generale. Si sceglie il profilo (quello consigliato dipende dalla scheda video) e si preme «Installa il motore della voce». Da lì:
+
+1. uv scarica un CPython tutto suo e installa i pacchetti esatti del lock in `%LOCALAPPDATA%\Lumi\sidecar-env`: circa 300 MB per il profilo Leggero, circa 4 GB con la GPU (extra `gpu`).
+2. Parte il sidecar e scarica i modelli del profilo in `%APPDATA%\Lumi\models`. La barra mostra i MB.
+
+Nel frattempo Lumi funziona in modalità testo. Se poi cambi profilo, o un aggiornamento porta un `uv.lock` nuovo, il pulsante diventa «Aggiorna il motore della voce» e uv sistema solo ciò che è cambiato. La disinstallazione toglie l'ambiente Python ma lascia memoria, impostazioni e modelli; un aggiornamento lascia anche l'ambiente.
+
+L'installer non è firmato: Windows SmartScreen lo segnala come editore sconosciuto («Ulteriori informazioni» → «Esegui comunque»).
+
+Prova fatta con la cartella impacchettata e una cartella dati nuova, profilo Leggero:
+
+- ambiente creato;
+- sidecar avviato da `resources\sidecar`;
+- 357 MB di modelli Kokoro scaricati;
+- al riavvio, prima risposta della voce in 312 ms.

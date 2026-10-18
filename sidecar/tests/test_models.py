@@ -168,3 +168,16 @@ def test_windows_ocr_reads_rendered_text():
     print(f"\nOCR ({engine.name}): {text!r}")
     assert "Errore" in text and "42" in text
     assert lines[0].rect.x < 30 and lines[0].words
+
+
+@pytest.mark.model
+def test_bge_m3_on_the_cpu_finds_by_meaning():
+    """The memory's embeddings without Ollama (roadmap 10.6)."""
+    from embed.onnx_embed import OnnxEmbedder
+
+    embedder = OnnxEmbedder()
+    docs = embedder.embed(["Il mio gatto si chiama Briciola", "Domani ho il dentista", "Sto migrando un programma RPG"], "document")
+    query = embedder.embed(["che animale ho?"], "query")[0]
+    sims = docs @ query
+    assert docs.shape == (3, 1024)
+    assert int(np.argmax(sims)) == 0 and sims[0] > 0.5

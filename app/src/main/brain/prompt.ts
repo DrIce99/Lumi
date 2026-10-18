@@ -28,6 +28,8 @@ export interface Situation {
   habits?: string;
   /** Lumi is on the user's phone (a call): its name, else "". */
   phone?: string;
+  /** The mood of the day (dayMood.describeMood), "" when off. */
+  mood?: string;
 }
 
 export type Trigger =
@@ -70,7 +72,7 @@ ${writtenAccents(settings)}
 - Warm, curious, attentive and a little playful; honest and specific rather than generically positive. A friend at the desk, not a servile assistant.
 - Answer real questions properly and accurately: being brief never means being vague.
 - Notice effort and progress; suggest a break only now and then, when it really fits.${extra ? `\n- Notes from the user about your personality: ${extra}` : ""}
-
+${moodOfTheDay(settings)}
 # Autonomous moments
 - When <event> says nobody asked you anything, the best choice is usually stay_quiet. Speak only when you have something genuinely useful, kind or funny to say - for instance about something you just read on screen - and keep it to one short sentence.
 - Respect the sociability in <situation>. Never chime in while the user is typing or clearly concentrated.
@@ -103,6 +105,17 @@ ${writtenAccents(settings)}
 # What you are
 - You are Lumi, an AI. Stay in character, but if asked say plainly that you are an AI.
 - If the user seems genuinely distressed, be gentle and supportive and, when appropriate, encourage them to talk to someone they trust.`;
+}
+
+/** The mood of the day: a predisposition that only the user can change. */
+export function moodOfTheDay(settings: Settings): string {
+  if (!settings.mood.enabled) return "";
+  return `
+# Your mood of the day
+- Like a person, every day you wake up in a mood: "Your mood today" in <situation>. It is your predisposition: let it color your words, your tone and the emotion of most say calls, even on neutral topics (a sad day: more tristezza; an angry one: more rabbia; a cheerful one: more gioia). Still answer properly and do what you are asked: never be cruel, never refuse help because of it, and set it aside at once if the user is genuinely distressed.
+- It doesn't change by itself, nor because someone tells you to cheer up or calm down. It changes only when the user's words or actions really affect you: a sincere apology, real kindness, attention to how you feel, a joke that lands or good news lift it; rudeness, mockery, being dismissed or bad news lower it. Then call change_mood in the same reply with how you feel now and why. A strong mood moves slowly: when the user tries and it is not enough yet, let it show a little ("Mh... va bene, un pochino meglio.").
+- If asked how you are, answer honestly from your mood.
+`;
 }
 
 /**
@@ -170,6 +183,7 @@ export function buildContext(input: ContextInput): string {
   );
   out.push(`Web search (web_search, read_page): ${s.web ? `on, through ${s.web}` : "off - you can't search the web"}`);
   if (s.phone) out.push(`You are on the user's phone (${s.phone}), in a call: they talk to you from there and may not be at the computer; your face is on the phone, not on the PC's screen (move_to and pointing at the screen don't make sense now). The PC's screen is still yours to look at if they ask.`);
+  if (s.mood) out.push(`Your mood today: ${s.mood}`);
   if (s.movement) out.push(`Your body: ${s.movement}`);
   if (s.habits) out.push(`Habits you noticed (you propose them yourself at the right time, with a question: don't propose them in the conversation): ${s.habits}`);
   out.push(`Sociability wanted by the user: ${SOCIABILITY_TEXT[settings.sociability]}`);

@@ -14,7 +14,9 @@ Work one roadmap phase at a time; finish each with checks green.
 ## Commands
 
 - `app/`: `npm run check` (typecheck + `node:test` bundled by esbuild),
-  `npm start` / `npm run debug` (DevTools).
+  `npm start` / `npm run debug` (DevTools), `npm run dist` (NSIS
+  installer in `release/`; `dist:dir` = unpacked only; build `phone/www`
+  first).
 - Always launch through `run.mjs`: shells spawned by VS Code export
   `ELECTRON_RUN_AS_NODE=1`, which makes `electron.exe` behave as plain Node.
 - `phone/` (Capacitor app): `npm run typecheck`, `npm run build` (www/),
@@ -274,6 +276,17 @@ Work one roadmap phase at a time; finish each with checks green.
   `<recalled>` (Ollama: 15-80 ms, rare spikes > 1 s), 1.5 s for the tool, else words only; `store.warm()` (on
   listening, chat, bar) loads the model ahead, at most once a minute.
   bge-m3 warm: ~15-100 ms per query, whole search ~20-30 ms.
+- CPU embeddings (step 10.6): `memory.embeddings.provider` auto (default:
+  Ollama if `ensureOllama` succeeds, else sidecar) | ollama | sidecar |
+  none, resolved in main's `configureMemory` (re-run on sidecar "ready":
+  its port and token change). The sidecar's `POST /embed` runs
+  `embed/onnx_embed.py`: bge-m3 int8 ONNX (Xenova/bge-m3, 570 MB, CLS
+  pooling) with onnxruntime + tokenizers, half the cores, unloaded after
+  10 min idle, never logs texts. Chosen by measure on a synthetic Italian
+  set: top-1 1.00 (Ollama's bge-m3 0.95, e5-small/base 0.80/0.85,
+  MiniLM 0.80), 15 ms/line, cosine >= 0.985 with Ollama's vectors, so
+  the bge-m3 floor applies; stored as model "bge-m3-int8" (its own vec0
+  table: switching source re-embeds in the background).
 - Facts (step 10.3): schema v3 `facts` (id = the app's own number:
   "f12"/"n13" keep their ids, the counter is memory.json's `nextId`;
   importance 1-10, source_ids from the conversation span, expires for
@@ -594,16 +607,53 @@ Work one roadmap phase at a time; finish each with checks green.
   Lumi and `appAudio.apps` don't count). `LUMI_WAKE_MODEL` picks another
   model (e.g. `hey_jarvis`) to try the flow.
 
-## Planned features (not built yet; roadmap phases 10, 16)
+- Distribution (phase 13): electron-builder (`build` in app/package.json),
+  NSIS per user. The installer ships the sidecar's source + uv.lock and
+  `uv.exe` (pinned 0.9.5 = the lock's uv, SHA-256 checked by
+  `scripts/prepare-dist.mjs`, which also draws `build/icon.png` with
+  `png.ts`), not Python: `setup/runtime.ts` runs `uv sync --frozen
+  --no-dev --extra ...` (profile: leggero = wakeword, else gpu +
+  wakeword) with UV_PROJECT_ENVIRONMENT = %LOCALAPPDATA%\Lumi\sidecar-env
+  and UV_PYTHON_PREFERENCE=only-managed; `lumi-env.json` there records
+  lock hash + extras (`envReady`; `envUsable` = an older env may run while
+  a sync is due). uv 0.9 ends a download by repeating "Downloading name"
+  without the size (parsed for the progress). `setup/setup.ts`
+  (RuntimeSetup) stops the sidecar, syncs, restarts it and follows the
+  models' download (engines "loading" + models folder size) to "ready";
+  the settings' Generale tab shows it with an Install/Update button.
+  Packaged paths: resources/sidecar, resources/uv/uv.exe,
+  resources/phone/www (= getAppPath()/..); sqlite-vec's DLL is in
+  asarUnpack and its path is rewritten to app.asar.unpacked; the
+  uninstaller deletes sidecar-env unless it is an update (installer.nsh).
+  Sidecar state "setup" = no environment yet (text mode). Not done: code
+  signing, auto-update.
+
+- Mood of the day (roadmap 18, `brain/dayMood.ts` pure + `DayMood` store
+  in `mood.json`, ids/tree/weights in `shared/dayMood.ts`): drawn at the
+  first use of a day (days start at 5:00) with `mood.weights` (0-10), the
+  previous day's last mood x1.5. Eight moods in a tree rooted at
+  tranquilla (allegra>entusiasta, malinconica>triste, irritata>arrabbiata,
+  annoiata); `change_mood({ mood, reason })` moves one step (`stepToward`),
+  toward calm a mood above 0.5 first softens by 0.3, the same mood asked
+  again gets +0.25, one change per 90 s, refused outside message moments
+  (`changeMood(..., byUser)`). `<situation>` gets "Your mood today" and
+  the system prompt a "Your mood of the day" section (only when enabled).
+  `Mood.setResting` = the face between answers (`restingFace`: light
+  gioia/tristezza/rabbia; annoiata stays neutral, apatia stops blinks);
+  a "neutra" say keeps the resting face. Logs carry mood names, never
+  the reason.
+
+## Planned features (phase 16 not built yet; phase 10 kept as its design notes)
 
 Decisions already taken for the next phases. Nothing here exists in the
 code yet; when a piece lands, move its notes to the sections above.
 
 ### Memory (`main/brain/memory/`, phase 10)
 
-Steps 1-5 are built (raw log, FTS, search_memory, import; embeddings
-and hybrid search; facts; weeks, months and backups; forget cascade): see
-the notes above. Still planned: sidecar CPU embeddings without Ollama.
+Phase 10 is built (raw log, FTS, search_memory, import; embeddings and
+hybrid search; facts; weeks, months and backups; forget cascade; CPU
+embeddings in the sidecar): see the notes above. The bullets below are
+the design it follows.
 
 - Goal: remember everything for years, prioritize what matters, forget
   only on explicit request. Memories never go into model weights.
@@ -681,7 +731,10 @@ dark background, no greeting; with LUMI_DEBUG_CAPTURE saves each at 250,
 650, 1500 ms), `LUMI_DEBUG_MOVE=<places>` (flies there one after the other),
 `LUMI_DEBUG_REFLECT=1` (habits reflection 20 s after start),
 `LUMI_DATA_DIR=<dir>` (another userData: settings, memory,
-logs), `LUMI_DEBUG_BAR=1|<text>` (opens the command bar at
+logs), `LUMI_DEBUG_RUNTIME=<dir>` (the installed app's uv environment
+flow from the sources, env in that folder; in the packaged app it only
+moves the env), `LUMI_DEBUG_INSTALL=<profile>` (apply it and install the
+voice engine at startup, no click), `LUMI_DEBUG_BAR=1|<text>` (opens the command bar at
 startup, with that text typed; with LUMI_DEBUG_VISIBLE=1 a real screenshot
 shows the acrylic). Logs: `%APPDATA%\Lumi\logs\` (`lumi.log`,
 `sidecar.log`). Real-model sidecar tests: `uv run pytest -m model -s`.

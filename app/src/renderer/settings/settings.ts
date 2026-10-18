@@ -1,6 +1,7 @@
 // Settings window: profile, brain services and keys, voice, screen
 // perception, memory and the status of the voice engines.
 import { BUNDLED_VOICES, DEFAULT_VOICE_DESCRIPTION, STT_MODELS, TTS_MODELS, TTS_VOICES, defaultVoice, voiceKind } from "../../shared/catalog";
+import { DAY_MOODS, MOOD_LABEL, type DayMoodId, type MoodWeights } from "../../shared/dayMood";
 import { PROFILE_INFO, suggestProfile } from "../../shared/profiles";
 import { PROVIDER_IDS, PROVIDERS, type ProviderId } from "../../shared/providers";
 import {
@@ -8,6 +9,7 @@ import {
   type BrainChoice,
   type EngineStatus,
   type ForgetCandidate,
+  type RuntimeSetupState,
   type Settings,
   type SettingsBridge,
   type SettingsSnapshot,
@@ -73,6 +75,46 @@ function bindOutput(input: string, output: string, format: (v: number) => string
 }
 
 // ---------------- profile ----------------
+
+// ---------------- voice engine installation (installed app) ----------------
+
+const GB = 1024 ** 3;
+
+function size(bytes: number): string {
+  return bytes >= GB ? `${(bytes / GB).toFixed(1).replace(".", ",")} GB` : `${Math.round(bytes / 1024 ** 2)} MB`;
+}
+
+/** What to install, by profile: no GPU means no torch. */
+function installSize(extras: string[]): string {
+  return extras.includes("gpu") ? "circa 4 GB da scaricare (PyTorch con CUDA), più i modelli della voce" : "circa 300 MB da scaricare, più i modelli della voce";
+}
+
+function renderSetup(state: RuntimeSetupState): void {
+  const card = $<HTMLElement>("runtimeCard");
+  card.hidden = state.phase === "dev";
+  if (card.hidden) return;
+  const progress = $<HTMLProgressElement>("runtimeProgress");
+  const button = $<HTMLButtonElement>("runtimeInstall");
+  const busy = state.phase === "installing" || state.phase === "starting" || state.phase === "models";
+  button.disabled = busy;
+  button.hidden = busy || state.phase === "ready";
+  button.textContent = state.phase === "outdated" ? "Aggiorna il motore della voce" : state.phase === "error" ? "Riprova" : "Installa il motore della voce";
+  progress.hidden = !busy;
+  if (state.phase === "installing" && state.total > 0) progress.value = state.downloaded / state.total;
+  else progress.removeAttribute("value");
+  const text: Record<RuntimeSetupState["phase"], string> = {
+    dev: "",
+    missing: `Per parlare e ascoltare Lumi ha bisogno del suo motore della voce: ${installSize(state.extras)}. Intanto funziona in modalità testo.`,
+    outdated: `Il profilo scelto (o un aggiornamento di Lumi) richiede di aggiornare il motore della voce: ${installSize(state.extras)}, ma solo ciò che manca.`,
+    installing: state.total ? `Installazione: ${size(state.downloaded)} di ${size(state.total)} scaricati.` : "Installazione in corso…",
+    starting: "Installato. Avvio i motori…",
+    models: `Primo avvio: scarico i modelli della voce (${state.modelsMb} MB finora). La prima volta può volerci qualche minuto.`,
+    ready: "Il motore della voce è installato e pronto.",
+    error: `Installazione non riuscita: ${state.detail} I dettagli sono in logs\\setup.log.`,
+  };
+  $<HTMLElement>("runtimeText").textContent = text[state.phase];
+  $<HTMLElement>("runtimeDetail").textContent = busy ? state.detail : "";
+}
 
 function renderProfiles(next: SettingsSnapshot): void {
   const gpu = next.gpu;
@@ -293,6 +335,7 @@ const ENGINE_STATE: Record<EngineStatus["state"], string> = {
 function renderStatus(status: SidecarStatus): void {
   const state = {
     off: "spenti: Lumi funziona in modalità testo",
+    setup: "da installare: intanto Lumi funziona in modalità testo",
     starting: "in avvio…",
     ready: "attivi",
     error: "non disponibili",
@@ -364,6 +407,54 @@ $<HTMLButtonElement>("phonePair").addEventListener("click", async () => {
   setStatus(r.message);
 });
 
+/** One slider per mood; the output shows its chance with the current weights. */
+function buildMoodWeights(): void {
+  $("moodWeights").replaceChildren(
+    ...DAY_MOODS.map((m) => {
+      const label = Object.assign(document.createElement("label"), { className: "field" });
+      const span = document.createElement("span");
+      span.append(`${MOOD_LABEL[m]} `, Object.assign(document.createElement("output"), { id: `moodOut-${m}` }));
+      const input = Object.assign(document.createElement("input"), { id: `mood-${m}`, type: "range", min: "0", max: "10", step: "1" });
+      input.addEventListener("input", moodChances);
+      label.append(span, input);
+      return label;
+    }),
+  );
+}
+buildMoodWeights();
+
+function moodWeights(): MoodWeights {
+  return Object.fromEntries(DAY_MOODS.map((m) => [m, Number($(`mood-${m}`).value) || 0])) as MoodWeights;
+}
+
+function moodChances(): void {
+  const w = moodWeights();
+  const total = DAY_MOODS.reduce((sum, m) => sum + w[m], 0);
+  for (const m of DAY_MOODS) $<HTMLOutputElement>(`moodOut-${m}`).textContent = total ? `${Math.round((w[m] / total) * 100)}%` : "-";
+}
+
+const moodName = (m: DayMoodId) => MOOD_LABEL[m].toLowerCase();
+
+function renderDayMood(next: SettingsSnapshot): void {
+  const m = next.dayMood;
+  const time = (iso: string) => new Date(iso).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
+  if (!m) {
+    $<HTMLElement>("moodToday").textContent = "Spento: Lumi è sempre del suo umore tranquillo.";
+    return;
+  }
+  const strength = (i: number) => (i >= 0.75 ? "molto" : i > 0.5 ? "abbastanza" : "un po'");
+  const story = m.changes.length
+    ? ` Si è svegliata ${moodName(m.rolled)}, poi: ${m.changes.map((c) => `${time(c.at)} ${strength(c.intensity)} ${moodName(c.to)}`).join(", ")}.`
+    : "";
+  $<HTMLElement>("moodToday").textContent = `Oggi è ${strength(m.intensity)} ${moodName(m.mood)} (dalle ${time(m.since)}).${story}`;
+}
+
+$<HTMLButtonElement>("moodReroll").addEventListener("click", async () => {
+  await save(false);
+  fill(await api.rerollMood());
+  setStatus("Nuovo umore estratto ✓");
+});
+
 /** The habits found, each with its buttons: do it yourself / ask first, forget. */
 function renderHabits(next: SettingsSnapshot): void {
   const list = $<HTMLUListElement>("habits");
@@ -404,6 +495,16 @@ function appAudioText(app: string, state: string): string {
   }
 }
 
+/** The model field is Ollama's: the CPU one is fixed (bge-m3 int8). */
+function embeddingModelField(): void {
+  const provider = $<HTMLSelectElement>("embeddingProvider").value;
+  $("embeddingModel").disabled = provider === "sidecar" || provider === "none";
+}
+
+function where(status: NonNullable<SettingsSnapshot["memoryIndex"]>): string {
+  return status.source === "sidecar" ? " sul processore" : status.source === "ollama" ? " in Ollama" : "";
+}
+
 function memoryIndexText(status: SettingsSnapshot["memoryIndex"], model: string): string {
   if (!status) return "";
   const count = `${status.done} ricordi su ${status.total} hanno il loro indice.`;
@@ -415,14 +516,16 @@ function memoryIndexText(status: SettingsSnapshot["memoryIndex"], model: string)
     case "missing":
       return `Ollama non ha il modello ${model}: scaricalo con "ollama pull ${model}". Intanto la ricerca usa le parole.`;
     case "offline":
-      return "Ollama non risponde: la ricerca usa le parole finché non torna.";
+      return status.source === "sidecar"
+        ? "Il motore vocale non è avviato: la ricerca usa le parole finché non torna."
+        : "Ollama non risponde: la ricerca usa le parole finché non torna.";
     case "error":
       return `Problema con gli embedding: ${status.detail ?? "dettagli nel log"}.`;
     case "indexing":
     case "waiting":
-      return `Sto indicizzando i ricordi con ${status.model} (quando Lumi non parla). ${count}`;
+      return `Sto indicizzando i ricordi con ${status.model}${where(status)} (quando Lumi non parla). ${count}`;
     default:
-      return `Ricerca per significato attiva con ${status.model}. ${count}`;
+      return `Ricerca per significato attiva con ${status.model}${where(status)}. ${count}`;
   }
 }
 
@@ -470,6 +573,7 @@ function fill(next: SettingsSnapshot): void {
   snapshot = next;
   const s = next.settings;
   renderProfiles(next);
+  renderSetup(next.setup);
   $("userName").value = s.userName;
   $<HTMLTextAreaElement>("personality").value = s.personality;
   $<HTMLSelectElement>("sociability").value = s.sociability;
@@ -482,6 +586,10 @@ function fill(next: SettingsSnapshot): void {
   $("moveInitiative").checked = s.movement.initiative;
   $("movePranks").checked = s.movement.pranks;
   $("moveDodge").checked = s.movement.dodge;
+  $("moodEnabled").checked = s.mood.enabled;
+  for (const m of DAY_MOODS) $(`mood-${m}`).value = String(s.mood.weights[m]);
+  moodChances();
+  renderDayMood(next);
   $("showInCaptures").checked = s.face.showInCaptures;
   $("voicesEnabled").checked = s.voices.enabled;
   $("onlyMe").checked = s.voices.onlyMe;
@@ -546,6 +654,7 @@ function fill(next: SettingsSnapshot): void {
   renderHabits(next);
   $<HTMLSelectElement>("embeddingProvider").value = s.memory.embeddings.provider;
   $("embeddingModel").value = s.memory.embeddings.model;
+  embeddingModelField();
   $<HTMLElement>("memoryIndex").textContent = memoryIndexText(next.memoryIndex, s.memory.embeddings.model);
 
   $("perceptionEnabled").checked = s.perception.enabled;
@@ -615,6 +724,7 @@ function collect(): Settings {
     voices: { enabled: $("voicesEnabled").checked, onlyMe: $("onlyMe").checked },
     habits: { ...s.habits, enabled: $("habitsEnabled").checked },
     phone: { enabled: $("phoneEnabled").checked, port: num("phonePort", s.phone.port) },
+    mood: { enabled: $("moodEnabled").checked, weights: moodWeights() },
     movement: { enabled: $("moveEnabled").checked, initiative: $("moveInitiative").checked, pranks: $("movePranks").checked, dodge: $("moveDodge").checked },
     web: { provider: $<HTMLSelectElement>("webProvider").value as Settings["web"]["provider"], searxngUrl: $("searxngUrl").value.trim() },
     memory: {
@@ -751,6 +861,7 @@ $<HTMLButtonElement>("localVisionDetect").addEventListener("click", async () => 
 $<HTMLSelectElement>("sttEngine").addEventListener("change", onSttEngineChange);
 $<HTMLSelectElement>("ttsEngine").addEventListener("change", onTtsEngineChange);
 $<HTMLSelectElement>("ttsModel").addEventListener("change", onTtsModelChange);
+$<HTMLSelectElement>("embeddingProvider").addEventListener("change", embeddingModelField);
 $<HTMLButtonElement>("pickVoice").addEventListener("click", async () => {
   const path = await api.pickVoiceFile();
   if (path) $("ttsVoice").value = path;
@@ -888,6 +999,16 @@ api.onRefresh(() => {
 api.onForgetQuery((query) => {
   showTab("memory");
   void searchForget(query);
+});
+
+$<HTMLButtonElement>("runtimeInstall").addEventListener("click", async () => {
+  $<HTMLButtonElement>("runtimeInstall").disabled = true;
+  fill(await api.installRuntime());
+});
+
+api.onSetup((state) => {
+  if (snapshot) snapshot = { ...snapshot, setup: state };
+  renderSetup(state);
 });
 
 api.onStatus((status) => {

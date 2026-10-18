@@ -1,6 +1,7 @@
 // Text helpers shared by the providers: partial JSON reading, thinking
 // removal, and the JSON reply format for models without tool support.
 import { EMOTIONS } from "../../../shared/emotions";
+import { DAY_MOODS } from "../../../shared/dayMood";
 import { FACT_KINDS } from "../../../shared/types";
 import type { LiveSay, ToolCallOut } from "./types";
 
@@ -86,6 +87,7 @@ In this conversation you cannot call tools. Reply ONLY with one JSON object, wit
  "search_memory": "words to look for in your memory",
  "web_search": "words to search on the web",
  "read_page": "https://...",
+ "mood": {"mood": "${DAY_MOODS.join("|")}", "reason": "why your mood of the day changed"},
  "quiet_minutes": 30}
 "look_at_screen", "search_memory", "web_search" and "read_page" bring something back: you will receive it and reply again.
 Example: {"emotion": "gioia", "say": "Ciao! Come va oggi?"}`;
@@ -137,6 +139,7 @@ export function parseJsonReply(raw: string): ToolCallOut[] {
   if (typeof o.search_memory === "string" && o.search_memory.trim()) add("search_memory", { query: o.search_memory });
   if (typeof o.web_search === "string" && o.web_search.trim()) add("web_search", { query: o.web_search });
   if (typeof o.read_page === "string" && o.read_page.trim()) add("read_page", { url: o.read_page });
+  if (o.mood && typeof o.mood === "object") add("change_mood", o.mood);
   if (typeof o.quiet_minutes === "number") add("stay_quiet", { minutes: o.quiet_minutes });
   return calls;
 }

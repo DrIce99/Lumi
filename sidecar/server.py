@@ -86,6 +86,8 @@ class State:
     uia_enabled = False
     turn = SmartTurn()
     turn_state = "idle"
+    embedder = None  # embed.onnx_embed.OnnxEmbedder, created on the first /embed
+    embed_error = ""
     wake_state = "idle"
     wake_model = ""
     wake_error = ""
@@ -153,6 +155,9 @@ def health(_: None = Depends(http_auth)) -> dict:
         engines.append({"kind": "uia", "name": "UI Automation", "state": "error" if state.uia.error else "ready", **({"detail": state.uia.error} if state.uia.error else {})})
     if state.turn_state != "idle":
         engines.append({"kind": "turn", "name": "Smart Turn v3.2", "state": state.turn_state, "device": "cpu", **({"detail": state.turn.error} if state.turn.error else {})})
+    if state.embedder is not None:
+        embed_state = "error" if state.embed_error else "ready" if state.embedder.loaded else "idle"
+        engines.append({"kind": "embed", "name": f"Embedding ({state.embedder.name})", "state": embed_state, "device": "cpu", **({"detail": state.embed_error} if state.embed_error else {})})
     if state.wake_state != "idle":
         engines.append({"kind": "wake", "name": f"openWakeWord ({state.wake_model})", "state": state.wake_state, "device": "cpu", **({"detail": state.wake_error} if state.wake_error else {})})
     return {
@@ -612,6 +617,42 @@ def tts_batch_status(job_id: str, _: None = Depends(http_auth)) -> dict:
 @app.delete("/tts/batch/{job_id}")
 def tts_batch_cancel(job_id: str, _: None = Depends(http_auth)) -> dict:
     return {"ok": state.books.cancel(job_id)}
+
+
+# ---------------- embeddings for the memory (CPU) ----------------
+
+
+class EmbedRequest(BaseModel):
+    texts: list[str]
+    kind: str = "document"  # "query" | "document"
+    model: str = ""
+
+
+def _embed(req: EmbedRequest) -> dict:
+    from embed.onnx_embed import DEFAULT_MODEL, OnnxEmbedder
+
+    name = req.model or DEFAULT_MODEL
+    if state.embedder is None or state.embedder.name != name:
+        state.embedder = OnnxEmbedder(name)
+    try:
+        vectors = state.embedder.embed(req.texts, "query" if req.kind == "query" else "document")
+    except Exception as err:
+        state.embed_error = f"{type(err).__name__}: {err}"[:300]
+        raise
+    state.embed_error = ""
+    return {"model": name, "vectors": [[round(float(x), 6) for x in v] for v in vectors]}
+
+
+@app.post("/embed")
+async def embed(req: EmbedRequest, _: None = Depends(http_auth)) -> dict:
+    """Embeddings for the memory's search by meaning, when Ollama isn't there (roadmap 10.6).
+    Never logs the texts: they are the user's conversations."""
+    if len(req.texts) > 64:
+        raise HTTPException(status_code=413, detail="at most 64 texts per request")
+    try:
+        return await asyncio.to_thread(_embed, req)
+    except Exception as err:
+        raise HTTPException(status_code=503, detail=str(err)) from err
 
 
 # ---------------- end of turn ----------------

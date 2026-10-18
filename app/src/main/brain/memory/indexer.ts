@@ -13,6 +13,8 @@ export interface IndexStatus {
   /** off: no embeddings configured; unavailable: sqlite-vec didn't load. */
   state: "off" | "unavailable" | "idle" | "indexing" | "waiting" | "missing" | "offline" | "error";
   model: string;
+  /** Where the vectors come from. */
+  source?: "ollama" | "sidecar";
   done: number;
   total: number;
   detail?: string;
@@ -58,7 +60,7 @@ export class Indexer {
   configure(embedder: Embedder | null): void {
     this.embedder = embedder;
     if (!this.db.vectors) return;
-    this.status = embedder ? { state: "idle", model: embedder.model, ...this.db.embeddingCoverage(embedder.model) } : { state: "off", model: "", done: 0, total: 0 };
+    this.status = embedder ? { state: "idle", model: embedder.model, source: embedder.source, ...this.db.embeddingCoverage(embedder.model) } : { state: "off", model: "", done: 0, total: 0 };
     this.schedule(0);
   }
 
@@ -125,7 +127,7 @@ export class Indexer {
     }
     const coverage = this.db.embeddingCoverage(embedder.model);
     const complete = coverage.done >= coverage.total;
-    this.status = { state: complete ? "idle" : "indexing", model: embedder.model, ...coverage };
+    this.status = { state: complete ? "idle" : "indexing", model: embedder.model, source: embedder.source, ...coverage };
     // Everything has vectors of the current model: older models' vectors are of no use
     if (complete) this.db.dropOtherModels(embedder.model);
     return !complete && items.length > 0;

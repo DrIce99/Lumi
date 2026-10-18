@@ -65,9 +65,12 @@ export type StoreMethod = (typeof STORE_METHODS)[number];
 
 /** Where the memory's embeddings come from, and how search results are ordered. */
 export interface EmbeddingConfig {
-  provider: "ollama" | "none";
-  /** Ollama's address. */
-  url: string;
+  /** Already resolved: "auto" becomes ollama or sidecar in main. */
+  provider: "ollama" | "sidecar" | "none";
+  /** Ollama's or the sidecar's address (null: the sidecar is down). */
+  url: string | null;
+  /** The sidecar's token. */
+  token?: string;
   model: string;
   keepAlive: string;
   weights?: ScoreWeights;

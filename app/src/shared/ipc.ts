@@ -50,6 +50,7 @@ export const IPC = {
   settingsFindForget: "settings:find-forget",
   settingsForgetItems: "settings:forget-items",
   settingsHabit: "settings:habit",
+  settingsRerollMood: "settings:reroll-mood",
   settingsPhonePair: "settings:phone-pair",
   settingsPhoneRevoke: "settings:phone-revoke",
   // command bar
@@ -73,4 +74,6 @@ export const IPC = {
   bridgeLog: "bridge:log",
   settingsForgetQuery: "settings:forget-query",
   settingsRefresh: "settings:refresh",
+  settingsInstall: "settings:install",
+  settingsSetup: "settings:setup",
 } as const;

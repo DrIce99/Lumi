@@ -24,6 +24,7 @@ const manualClock: Clock = { now: () => 0, setTimeout: () => null, clearTimeout:
 
 /** Every fact shares one dimension with "lavoro" queries, nothing else: enough to check vectors are filtered. */
 const embedder = {
+  source: "ollama" as const,
   model: "fake",
   embed: async (texts: string[]) => texts.map((t) => (/lavor|ufficio|Torino|Milano/i.test(t) ? [1, 0, 0] : [0, 1, 0])),
 };

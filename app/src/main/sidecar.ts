@@ -11,6 +11,7 @@ import { join } from "node:path";
 import type { EngineStatus, GpuInfo, SidecarStatus } from "../shared/types";
 import { bindToLumi } from "./jobObject";
 import { log } from "./log";
+import { envPython, envUsable, type RuntimePaths } from "./setup/runtime";
 
 export interface SidecarEndpoint {
   url: string;
@@ -25,6 +26,8 @@ export interface SidecarOptions {
   /** LUMI_SIDECAR_URL: use a sidecar started by hand. */
   externalUrl?: string;
   externalToken?: string;
+  /** The installed app: Python comes from the environment uv builds (setup/runtime.ts), never from PATH. */
+  runtime?: RuntimePaths;
 }
 
 interface Health {
@@ -95,7 +98,8 @@ export class Sidecar extends EventEmitter<{ status: [SidecarStatus]; ready: [Sid
     }
     const command = this.command();
     if (!command) {
-      this.setState("error", "manca l'ambiente Python del sidecar: esegui `uv sync --extra gpu` nella cartella sidecar");
+      if (this.options.runtime) this.setState("setup", "il motore della voce va installato (Impostazioni → Voce)");
+      else this.setState("error", "manca l'ambiente Python del sidecar: esegui `uv sync --extra gpu` nella cartella sidecar");
       return;
     }
     const port = await freePort();
@@ -202,6 +206,8 @@ export class Sidecar extends EventEmitter<{ status: [SidecarStatus]; ready: [Sid
   }
 
   private command(): { exe: string; args: string[] } | null {
+    const runtime = this.options.runtime;
+    if (runtime) return envUsable(runtime) ? { exe: envPython(runtime.envDir), args: [] } : null;
     const venvPython = join(this.options.dir, ".venv", "Scripts", "python.exe");
     if (existsSync(venvPython)) return { exe: venvPython, args: [] };
     if (!existsSync(join(this.options.dir, "server.py"))) return null;

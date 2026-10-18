@@ -19,6 +19,7 @@ import {
   type BrainChoice,
   type Settings,
 } from "../shared/types";
+import { DAY_MOODS, type MoodWeights } from "../shared/dayMood";
 import { readJson, writeJson } from "./jsonStore";
 
 type Listener = (next: Settings, prev: Settings) => void;
@@ -115,6 +116,8 @@ export function sanitizeSettings(input: unknown): Settings {
   const vision = obj(raw.vision);
   const web = obj(raw.web);
   const movement = obj(raw.movement);
+  const mood = obj(raw.mood);
+  const moodWeights = obj(mood.weights);
   const habits = obj(raw.habits);
   const phone = obj(raw.phone);
   const memory = obj(raw.memory);
@@ -170,6 +173,10 @@ export function sanitizeSettings(input: unknown): Settings {
       initiative: bool(movement.initiative, d.movement.initiative),
       pranks: bool(movement.pranks, d.movement.pranks),
       dodge: bool(movement.dodge, d.movement.dodge),
+    },
+    mood: {
+      enabled: bool(mood.enabled, d.mood.enabled),
+      weights: Object.fromEntries(DAY_MOODS.map((m) => [m, Math.round(num(moodWeights[m], d.mood.weights[m], 0, 10))])) as MoodWeights,
     },
     phone: {
       enabled: bool(phone.enabled, d.phone.enabled),

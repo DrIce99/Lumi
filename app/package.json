@@ -12,7 +12,9 @@
     "test": "node build.mjs --tests && node --test \"dist/test/*.test.js\"",
     "check": "npm run typecheck && npm test",
     "start": "node build.mjs && node run.mjs",
-    "debug": "node build.mjs && node run.mjs --debug"
+    "debug": "node build.mjs && node run.mjs --debug",
+    "dist": "node build.mjs && node scripts/prepare-dist.mjs && electron-builder --win nsis --x64",
+    "dist:dir": "node build.mjs && node scripts/prepare-dist.mjs && electron-builder --win dir --x64"
   },
   "dependencies": {
     "@discordjs/voice": "^0.19.2",
@@ -29,7 +31,75 @@
     "@types/qrcode": "1.5.6",
     "@types/ws": "8.18.2",
     "electron": "^44.7.0",
+    "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2"
-  }
+  },
+  "build": {
+    "appId": "app.lumi.desktop",
+    "productName": "Lumi",
+    "copyright": "Lumi",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "!dist/test/**",
+      "!dist/**/*.map",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/sqlite-vec*/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../sidecar",
+        "to": "sidecar",
+        "filter": [
+          "**/*",
+          "!.venv/**",
+          "!**/__pycache__/**",
+          "!tests/**",
+          "!.pytest_cache/**",
+          "!scripts/**",
+          "!lora/**",
+          "!*.egg-info/**"
+        ]
+      },
+      {
+        "from": "build/uv",
+        "to": "uv",
+        "filter": [
+          "uv.exe"
+        ]
+      },
+      {
+        "from": "../phone/www",
+        "to": "phone/www"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.png",
+      "artifactName": "Lumi-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Lumi",
+      "uninstallDisplayName": "Lumi",
+      "installerLanguages": [
+        "it_IT"
+      ],
+      "language": "1040",
+      "include": "build/installer.nsh"
+    }
+  },
+  "author": "DrIce99"
 }

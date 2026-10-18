@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MemoryDb, type LineInput } from "../src/main/brain/memory/db";
-import { EmbedError, OllamaEmbedder, type Embedder } from "../src/main/brain/memory/embed";
+import { EmbedError, OllamaEmbedder, SIDECAR_EMBED_MODEL, SidecarEmbedder, type Embedder } from "../src/main/brain/memory/embed";
 import { Indexer, type Clock } from "../src/main/brain/memory/indexer";
 import { embeddingInput, keepSimilar, memoryScore, recency, rrf, similarityFloor, terms } from "../src/main/brain/memory/search";
 
@@ -30,6 +30,7 @@ function fakeVector(text: string): number[] {
 }
 
 class FakeEmbedder implements Embedder {
+  readonly source = "ollama";
   calls: string[][] = [];
   failWith: EmbedError | null = null;
   constructor(readonly model = "fake-embed") {}
@@ -96,11 +97,11 @@ test("the queue gives every line and summary a vector, newest first, with the li
   const embedder = new FakeEmbedder();
   const indexer = new Indexer(db, manualClock());
   indexer.configure(embedder);
-  assert.deepEqual(indexer.current(), { state: "idle", model: "fake-embed", done: 0, total: 3 }, '"ok" is too short for a vector');
+  assert.deepEqual(indexer.current(), { state: "idle", model: "fake-embed", source: "ollama", done: 0, total: 3 }, '"ok" is too short for a vector');
   await indexAll(indexer);
   assert.equal(embedder.calls[0][0], "Utente: Sai che ho preso un gatto?\nLumi: Che bello! Come si chiama?", "newest first, with the line before");
   assert.equal(embedder.calls[0][2], "Ha preso un gatto.");
-  assert.deepEqual(indexer.current(), { state: "idle", model: "fake-embed", done: 3, total: 3 });
+  assert.deepEqual(indexer.current(), { state: "idle", model: "fake-embed", source: "ollama", done: 3, total: 3 });
   assert.equal(await indexer.step(), false, "nothing left");
   assert.equal(embedder.calls.length, 1);
 });
@@ -149,7 +150,7 @@ test("the queue reports a missing model, retries later, and waits while Lumi is 
   assert.equal(indexer.current().state, "waiting", "and a few seconds after");
   now += 6000;
   await fire();
-  assert.deepEqual(indexer.current(), { state: "idle", model: "bge-m3", done: 1, total: 1 });
+  assert.deepEqual(indexer.current(), { state: "idle", model: "bge-m3", source: "ollama", done: 1, total: 1 });
   assert.equal(new Indexer(new MemoryDb(":memory:")).current().state, "unavailable", "without sqlite-vec");
 });
 
@@ -223,4 +224,24 @@ test("the Ollama client: task prefixes, missing model and server down", async ()
     throw new TypeError("fetch failed");
   });
   await assert.rejects(down.embed(["a"], "document", 1000), (err: unknown) => err instanceof EmbedError && err.kind === "offline");
+});
+
+test("the sidecar client (no Ollama): token, kind, errors, and bge-m3's floor", async () => {
+  const bodies: unknown[] = [];
+  const ok = new SidecarEmbedder("http://127.0.0.1:5000/", "tok", SIDECAR_EMBED_MODEL, async (url, init) => {
+    assert.equal(url, "http://127.0.0.1:5000/embed");
+    assert.equal((init.headers as Record<string, string>).Authorization, "Bearer tok");
+    bodies.push(JSON.parse(String(init.body)));
+    return new Response(JSON.stringify({ model: SIDECAR_EMBED_MODEL, vectors: [[0.6, 0.8]] }));
+  });
+  assert.equal(ok.source, "sidecar");
+  assert.deepEqual(await ok.embed(["gatto"], "query", 1000), [[0.6, 0.8]]);
+  assert.deepEqual(bodies[0], { texts: ["gatto"], kind: "query", model: SIDECAR_EMBED_MODEL });
+  // Same model as Ollama's default, int8: the floor measured for bge-m3 applies
+  assert.equal(similarityFloor(SIDECAR_EMBED_MODEL), similarityFloor("bge-m3"));
+  await assert.rejects(new SidecarEmbedder(null, "").embed(["a"], "document", 1000), (err: unknown) => err instanceof EmbedError && err.kind === "offline");
+  const loading = new SidecarEmbedder("http://x", "t", SIDECAR_EMBED_MODEL, async () => new Response("download failed", { status: 503 }));
+  await assert.rejects(loading.embed(["a"], "document", 1000), (err: unknown) => err instanceof EmbedError && err.kind === "failed");
+  const stale = new SidecarEmbedder("http://x", "old", SIDECAR_EMBED_MODEL, async () => new Response("token", { status: 401 }));
+  await assert.rejects(stale.embed(["a"], "document", 1000), (err: unknown) => err instanceof EmbedError && err.kind === "offline");
 });

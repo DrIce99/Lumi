@@ -8,6 +8,7 @@
 // look_at_screen, whose screenshot the model needs to see.
 import { guessEmotion, type Emotion } from "../../shared/emotions";
 import { PROVIDERS } from "../../shared/providers";
+import type { DayMoodId } from "../../shared/dayMood";
 import { FACT_KINDS, type FactKind, type Settings } from "../../shared/types";
 import { log } from "../log";
 import { ADDRESSING_SYSTEM, addressingPrompt, parseAddressingReply, THREAD_MAX_SECONDS, type Opened } from "../voice/addressing";
@@ -69,6 +70,8 @@ export interface BrainHost {
   readScreen?(): Promise<{ label: string; text: string } | null>;
   /** Opens the forget list for `query`: the user chooses and confirms there. Returns what happened, for the model. */
   openForget?(query: string): string;
+  /** change_mood: `byUser` = a message moment (autonomous moments can't change the mood). Returns what happened, for the model. */
+  changeMood?(mood: DayMoodId, reason: string, byUser: boolean): string;
   /** Web search and page reading; return what the model reads. */
   webSearch?(query: string): Promise<string>;
   readPage?(url: string): Promise<string>;
@@ -578,6 +581,8 @@ export class Brain {
       case "stay_quiet":
         this.host.quiet(call.minutes);
         return done("Staying quiet.");
+      case "change_mood":
+        return done(this.host.changeMood ? this.host.changeMood(call.mood, call.reason, requestedByUser) : "Your mood of the day is off.");
     }
   }
 

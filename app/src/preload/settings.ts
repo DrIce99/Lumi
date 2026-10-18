@@ -1,7 +1,7 @@
 // Exposes the settings window's IPC as `window.settingsApi`.
 import { contextBridge, ipcRenderer } from "electron";
 import { IPC } from "../shared/ipc";
-import type { SettingsBridge, SidecarStatus } from "../shared/types";
+import type { RuntimeSetupState, SettingsBridge, SidecarStatus } from "../shared/types";
 
 const bridge: SettingsBridge = {
   load: () => ipcRenderer.invoke(IPC.settingsLoad),
@@ -18,9 +18,11 @@ const bridge: SettingsBridge = {
   setDiscordToken: (token) => ipcRenderer.invoke(IPC.settingsDiscordToken, token),
   openDataFolder: () => ipcRenderer.invoke(IPC.settingsOpenData),
   restartSidecar: () => ipcRenderer.invoke(IPC.settingsRestartSidecar),
+  installRuntime: () => ipcRenderer.invoke(IPC.settingsInstall),
   findForget: (query) => ipcRenderer.invoke(IPC.settingsFindForget, query),
   forgetItems: (selection) => ipcRenderer.invoke(IPC.settingsForgetItems, selection),
   habit: (id, action) => ipcRenderer.invoke(IPC.settingsHabit, id, action),
+  rerollMood: () => ipcRenderer.invoke(IPC.settingsRerollMood),
   phonePair: () => ipcRenderer.invoke(IPC.settingsPhonePair),
   phoneRevoke: (id) => ipcRenderer.invoke(IPC.settingsPhoneRevoke, id),
   onRefresh: (cb) => {
@@ -31,6 +33,9 @@ const bridge: SettingsBridge = {
   },
   onStatus: (cb) => {
     ipcRenderer.on(IPC.settingsStatus, (_event, status: SidecarStatus) => cb(status));
+  },
+  onSetup: (cb) => {
+    ipcRenderer.on(IPC.settingsSetup, (_event, state: RuntimeSetupState) => cb(state));
   },
 };
 

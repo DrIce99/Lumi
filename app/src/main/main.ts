@@ -8,7 +8,7 @@ import type { Emotion } from "../shared/emotions";
 import { toEmotion } from "../shared/emotions";
 import { applyProfile } from "../shared/profiles";
 import { PROVIDER_IDS, type ProviderId } from "../shared/providers";
-import type { BarContext, GpuInfo, KeySource, MemoryIndexStatus, Settings, SettingsSnapshot, TtsEngine } from "../shared/types";
+import { PROFILES, type BarContext, type GpuInfo, type KeySource, type MemoryIndexStatus, type Profile, type Settings, type SettingsSnapshot, type TtsEngine } from "../shared/types";
 import { Activity } from "./activity";
 import { readAttachments, type Attachment } from "./attachments";
 import { Audiobooks } from "./audiobook";
@@ -16,6 +16,7 @@ import { GazeOverlay } from "./debugOverlay";
 import { Autonomy } from "./brain/autonomy";
 import { Brain, type BrainHost, type SpeechSink } from "./brain/brain";
 import { Memory } from "./brain/memory";
+import { SIDECAR_EMBED_MODEL } from "./brain/memory/embed";
 import { MemoryStore } from "./brain/memory/store";
 import type { Situation, Trigger } from "./brain/prompt";
 import { CommandBar } from "./commandbar";
@@ -23,7 +24,11 @@ import { detectGpu } from "./gpu";
 import { readJson, writeJson } from "./jsonStore";
 import { initLog, log } from "./log";
 import { Mood } from "./mood";
+import { DayMood, describeMood, restingFace } from "./brain/dayMood";
+import type { DayMoodId } from "../shared/dayMood";
 import { ensureOllama } from "./ollama";
+import type { RuntimePaths } from "./setup/runtime";
+import { RuntimeSetup } from "./setup/setup";
 import { Backdrop, besideWindow, meanLuminance, meanLuminanceOf, rectInFrame } from "./perception/backdrop";
 import { ChangeDetector } from "./perception/capture";
 import { appName } from "./perception/context";
@@ -213,6 +218,24 @@ function start(): void {
     face.state(state);
     phone?.faceState(state);
   });
+  // The mood of the day: drawn each morning, changed only by the user (change_mood)
+  const dayMood = new DayMood(join(dataDir, "mood.json"), () => settings().mood.weights);
+  let moodDay = "";
+  function refreshDayMood(): void {
+    if (!settings().mood.enabled) {
+      mood.setResting(null);
+      return;
+    }
+    const today = dayMood.current();
+    if (today.day !== moodDay) {
+      moodDay = today.day;
+      log.info(`Mood of the day ${today.day}: ${today.mood} (${today.intensity})`);
+    }
+    mood.setResting(restingFace(today));
+  }
+  refreshDayMood();
+  // A new day starts at 5:00: check once a minute
+  setInterval(refreshDayMood, 60_000).unref();
   const bubbles = new Bubbles(
     face,
     () => activity.snapshot().idleSec,
@@ -220,13 +243,17 @@ function start(): void {
   );
 
   // ---- the sidecar: voice, hearing and screen reading ----
+  const runtimePaths = runtimeFor(dataDir);
   const sidecar = new Sidecar({
-    dir: join(app.getAppPath(), "..", "sidecar"),
+    dir: runtimePaths?.sidecarDir ?? join(app.getAppPath(), "..", "sidecar"),
     modelsDir: join(dataDir, "models"),
     logDir: join(dataDir, "logs"),
     externalUrl: process.env.LUMI_SIDECAR_URL,
     externalToken: process.env.LUMI_SIDECAR_TOKEN,
+    runtime: runtimePaths ?? undefined,
   });
+  // The installed app installs its voice engine on first start (setup/setup.ts)
+  const runtimeSetup = new RuntimeSetup(runtimePaths, () => settings().profile, sidecar, join(dataDir, "models"), join(dataDir, "logs"));
   let lastSentenceAt = 0;
   // ---- Lumi's voice in Discord calls ----
   const discordToken = new DiscordToken(join(dataDir, "discord.bin"));
@@ -487,6 +514,7 @@ function start(): void {
   );
   sidecar.on("status", () => turns.refresh());
   let voices: Partial<Record<TtsEngine, string[]>> = {};
+  runtimeSetup.on("change", (state) => settingsWindow.setup(state));
   sidecar.on("status", (status) => {
     settingsWindow.status(status);
     tray.refresh();
@@ -839,6 +867,16 @@ function start(): void {
       settingsWindow.openForget(query);
       return `The forget list for "${query}" is open in the settings (tab Memoria): the user chooses what goes and confirms there. Nothing is forgotten yet: say so briefly.`;
     },
+    changeMood: (to: DayMoodId, reason: string, byUser: boolean) => {
+      if (!settings().mood.enabled) return "Your mood of the day is off in the settings: nothing changed.";
+      if (!byUser) return "Your mood changes only because of the user, not in autonomous moments: nothing changed.";
+      const r = dayMood.shift(to, reason);
+      // Mood names only: the reason may quote the conversation
+      log.info(`Mood: ${r.before.mood} (${r.before.intensity}) -> ${r.after.mood} (${r.after.intensity}), asked ${to}: ${r.outcome}`);
+      refreshDayMood();
+      if (r.outcome !== "cooldown" && r.outcome !== "same") settingsWindow.refresh();
+      return r.text;
+    },
     nameVoice: (which, name) => {
       if (!settings().voices.enabled) return "Voice recognition is off in the settings.";
       if (which.trim().toLowerCase() === "tu" || which.trim().toLowerCase() === "user") return "That is the user's own voice: it needs no name.";
@@ -1006,11 +1044,28 @@ function start(): void {
 
   // ---- memory: embeddings for search by meaning, in the background ----
   let memoryIndex: MemoryIndexStatus | null = null;
-  const configureMemory = () => {
+  let memoryConfig = "";
+  /** auto = Ollama when it is installed (started if needed), else the sidecar on the CPU (roadmap 10.6). */
+  const configureMemory = async () => {
     const s = settings();
-    memoryStore.configure({ provider: s.memory.embeddings.provider, url: s.brain.ollamaUrl, model: s.memory.embeddings.model, keepAlive: "10m", weights: s.memory.weights });
+    const { provider: chosen, model } = s.memory.embeddings;
+    const provider = chosen === "auto" ? ((await ensureOllama(s.brain.ollamaUrl)) ? "ollama" : "sidecar") : chosen;
+    const endpoint = sidecar.endpoint();
+    const config =
+      provider === "sidecar"
+        ? { provider, url: endpoint?.url ?? null, token: endpoint?.token ?? "", model: SIDECAR_EMBED_MODEL, keepAlive: "10m", weights: s.memory.weights }
+        : { provider, url: s.brain.ollamaUrl, model, keepAlive: "10m", weights: s.memory.weights };
+    // The sidecar's token changes at every restart; anything else unchanged means nothing to do
+    const key = JSON.stringify(config);
+    if (key === memoryConfig) return;
+    memoryConfig = key;
+    log.info(`Memory embeddings: ${provider}${provider === "none" ? "" : ` (${config.model})`}${chosen === "auto" ? " [auto]" : ""}`);
+    memoryStore.configure(config);
+    // First use downloads the model (~570 MB): start it now rather than on the first search
+    if (provider === "sidecar" && endpoint) void sidecar.request("/embed", { texts: ["ok"], kind: "query", model: SIDECAR_EMBED_MODEL }, 30 * 60_000).catch(() => undefined);
   };
-  configureMemory();
+  void configureMemory();
+  sidecar.on("ready", () => void configureMemory());
   // The embedding queue waits while Lumi answers or speaks: the GPU is shared with the voice
   let memoryBusy = false;
   setInterval(() => {
@@ -1081,6 +1136,7 @@ function start(): void {
       movement: mover.status(),
       phone: onPhone() ? phone!.phoneName() : "",
       habits: habits.summary(),
+      mood: settings().mood.enabled ? describeMood(dayMood.current()) : "",
     };
   }
 
@@ -1278,7 +1334,9 @@ function start(): void {
       : s.state !== "ready"
         ? s.state === "starting"
           ? "voce in avvio"
-          : "modalità testo"
+          : s.state === "setup"
+            ? "voce da installare"
+            : "modalità testo"
         : engine?.state === "ready"
           ? `voce ${settings().tts.engine}`
           : engine?.state === "loading"
@@ -1390,6 +1448,7 @@ function start(): void {
   function snapshot(): SettingsSnapshot {
     return {
       settings: settings(),
+      setup: runtimeSetup.state(),
       keys: Object.fromEntries(PROVIDER_IDS.map((id) => [id, apiKeys.source(id)])) as Record<ProviderId, KeySource>,
       facts: memory.facts(),
       reminders: memory.reminders(),
@@ -1398,6 +1457,9 @@ function start(): void {
       discord: { ...discordVoice.status(), token: discordToken.source() },
       memoryIndex,
       habits: habits.infos(),
+      dayMood: settings().mood.enabled
+        ? ((m) => ({ mood: m.mood, rolled: m.rolled, intensity: m.intensity, since: m.since, changes: m.changes.map(({ at, from, to, intensity }) => ({ at, from, to, intensity })) }))(dayMood.current())
+        : null,
       phone: {
         listening: phone?.listening() ?? false,
         devices: phoneDevices.list().map(({ key: _key, ...d }) => d),
@@ -1522,9 +1584,19 @@ function start(): void {
         phoneDevices.revoke(id);
         return snapshot();
       },
+      rerollMood: () => {
+        const m = dayMood.reroll();
+        log.info(`Mood of the day drawn again: ${m.mood} (${m.intensity})`);
+        refreshDayMood();
+        return snapshot();
+      },
       habit: async (id, action) => {
         if (action === "forget") await habits.forget(id);
         else await habits.setAuto(id, action === "auto");
+        return snapshot();
+      },
+      installRuntime: async () => {
+        await runtimeSetup.install();
         return snapshot();
       },
       restartSidecar: async () => {
@@ -1536,6 +1608,7 @@ function start(): void {
   );
 
   settingsStore.onChange((next, prev) => {
+    if (next.mood.enabled !== prev.mood.enabled) refreshDayMood();
     if (next.face.scale !== prev.face.scale || next.face.color !== prev.face.color) face.setAppearance(next.face.scale, next.face.color);
     if (next.face.showInCaptures !== prev.face.showInCaptures) applyCaptureVisibility();
     if (next.chatHotkey !== prev.chatHotkey || next.listen.hotkey !== prev.listen.hotkey || next.listen.mode !== prev.listen.mode) registerHotkeys();
@@ -1593,7 +1666,7 @@ function start(): void {
   };
   settingsStore.onChange((next, prev) => {
     if (JSON.stringify(next.brain) !== JSON.stringify(prev.brain) || JSON.stringify(next.vision) !== JSON.stringify(prev.vision) || JSON.stringify(next.memory) !== JSON.stringify(prev.memory)) startOllamaIfUsed();
-    if (JSON.stringify(next.memory) !== JSON.stringify(prev.memory) || next.brain.ollamaUrl !== prev.brain.ollamaUrl) configureMemory();
+    if (JSON.stringify(next.memory) !== JSON.stringify(prev.memory) || next.brain.ollamaUrl !== prev.brain.ollamaUrl) void configureMemory();
   });
 
   startOllamaIfUsed();
@@ -1610,6 +1683,13 @@ function start(): void {
     if (!brain.isBusy()) void brain.writeDiary();
   }, 30 * 60_000);
   setInterval(() => tray.refresh(), 30_000);
+  // Development aid: the installed app's first start (with LUMI_DEBUG_RUNTIME), profile chosen, no click
+  const debugInstall = process.env.LUMI_DEBUG_INSTALL as Profile | undefined;
+  if (debugInstall && (PROFILES as readonly string[]).includes(debugInstall)) {
+    settingsStore.replace({ ...applyProfile(settings(), debugInstall), setupDone: true });
+    void runtimeSetup.install().then(() => log.info(`Debug install: ${JSON.stringify(runtimeSetup.state())}`));
+    runtimeSetup.on("change", (state) => log.info(`Setup: ${state.phase} ${state.detail} ${state.downloaded}/${state.total} models ${state.modelsMb} MB`));
+  }
   // First run: open the settings on the profile so the user can pick the brain and the voice
   if (!settings().setupDone) {
     setTimeout(() => settingsWindow.open("general"), 2500);
@@ -1622,10 +1702,26 @@ function start(): void {
   log.info(`Ready: chat ${brainInfo("chat")}, moments ${brainInfo("idle")}; face at ${JSON.stringify(face.win.getBounds())}`);
 }
 
+/**
+ * Where the installed app keeps the sidecar and builds its Python (null in
+ * development: the sidecar's own .venv). LUMI_DEBUG_RUNTIME=<folder> tries
+ * the installed app's flow from the sources, with uv from PATH (in the
+ * installed app it only moves the environment, for tests).
+ */
+function runtimeFor(dataDir: string): RuntimePaths | null {
+  const local = process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, "Lumi") : join(dataDir, "local");
+  const debugEnv = process.env.LUMI_DEBUG_RUNTIME;
+  if (app.isPackaged) {
+    return { sidecarDir: join(process.resourcesPath, "sidecar"), uv: join(process.resourcesPath, "uv", "uv.exe"), envDir: debugEnv || join(local, "sidecar-env") };
+  }
+  return debugEnv ? { sidecarDir: join(app.getAppPath(), "..", "sidecar"), uv: "uv", envDir: debugEnv } : null;
+}
+
 /** sqlite-vec's loadable library (vec0.dll), or null: the memory then searches by words only. */
 function vecExtensionPath(): string | null {
   try {
-    return (require("sqlite-vec") as { getLoadablePath(): string }).getLoadablePath();
+    // In the installed app the DLL is unpacked next to app.asar: SQLite can't load it from inside the archive
+    return (require("sqlite-vec") as { getLoadablePath(): string }).getLoadablePath().replace(/app\.asar([\\/])/, "app.asar.unpacked$1");
   } catch (err) {
     log.warn("sqlite-vec not found: the memory will search by words only", err);
     return null;

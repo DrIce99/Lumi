@@ -35,6 +35,15 @@
           <p id="gpuText" class="hint"></p>
           <div id="profiles" class="profiles"></div>
         </div>
+        <div id="runtimeCard" class="card" hidden>
+          <h2>Motore della voce</h2>
+          <p id="runtimeText" class="hint"></p>
+          <progress id="runtimeProgress" max="1" hidden></progress>
+          <div class="row">
+            <button id="runtimeInstall" type="button">Installa il motore della voce</button>
+            <small id="runtimeDetail" class="hint"></small>
+          </div>
+        </div>
         <label class="field">
           <span>Come ti chiami?</span>
           <input id="userName" type="text" maxlength="50" placeholder="Facoltativo: Lumi lo scoprirà anche parlando con te" />
@@ -52,6 +61,16 @@
             <option value="chiacchierone">Chiacchierone</option>
           </select>
         </label>
+        <div class="card">
+          <h2>Umore del giorno</h2>
+          <label class="check"><input id="moodEnabled" type="checkbox" /> Ogni mattina si sveglia con un umore suo, che colora le risposte e gli occhi. Se è giù di corda può tornare di buon umore solo grazie a te (e può anche peggiorare)</label>
+          <p id="moodToday" class="hint"></p>
+          <p class="hint">Quanto è probabile ogni umore (0 = mai). L'umore con cui ha chiuso la giornata precedente pesa un po' di più.</p>
+          <div id="moodWeights" class="grid2"></div>
+          <div class="row">
+            <button id="moodReroll" type="button">Tira di nuovo a sorte l'umore di oggi</button>
+          </div>
+        </div>
         <label class="check"><input id="doNotDisturb" type="checkbox" /> Non disturbare (niente commenti spontanei, percezione in pausa)</label>
         <label class="check"><input id="muted" type="checkbox" /> Voce disattivata: risponde solo con il testo</label>
         <label class="check"><input id="subtitles" type="checkbox" /> Mostra anche il testo di quello che dice (sottotitoli)</label>
@@ -369,17 +388,19 @@
         <h2>Diario</h2>
         <ul id="diary" class="list"></ul>
         <h2>Ricerca nei ricordi</h2>
-        <p class="hint">Lumi ritrova i ricordi per parole e, con un modello di embedding in Ollama, anche per significato ("il mio animale" trova "il gatto"). Tutto resta sul PC.</p>
+        <p class="hint">Lumi ritrova i ricordi per parole e, con un modello di embedding, anche per significato ("il mio animale" trova "il gatto"): in Ollama, oppure senza Ollama nel motore vocale di Lumi, sul processore (bge-m3, 570 MB scaricati la prima volta). Tutto resta sul PC.</p>
         <div class="grid2">
           <label class="field">
             <span>Ricerca per significato</span>
             <select id="embeddingProvider">
+              <option value="auto">Automatica (Ollama se c'è, altrimenti sul processore)</option>
               <option value="ollama">Ollama (sul PC)</option>
+              <option value="sidecar">Sul processore, senza Ollama</option>
               <option value="none">Spenta (solo parole)</option>
             </select>
           </label>
           <label class="field">
-            <span>Modello di embedding</span>
+            <span>Modello di embedding in Ollama</span>
             <input id="embeddingModel" type="text" placeholder="bge-m3" />
           </label>
         </div>

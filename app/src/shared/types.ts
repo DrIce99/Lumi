@@ -1,5 +1,6 @@
 // Types and constants shared by the main process, preloads and renderers.
 import type { Emotion, Expression } from "./emotions";
+import { DEFAULT_MOOD_WEIGHTS, type DayMoodId, type MoodWeights } from "./dayMood";
 import { DEFAULT_OLLAMA_URL, type ProviderId } from "./providers";
 
 // ---------------- settings ----------------
@@ -93,6 +94,11 @@ export interface Settings {
    */
   movement: { enabled: boolean; initiative: boolean; pranks: boolean; dodge: boolean };
   /**
+   * The mood of the day (main/brain/dayMood.ts): drawn every morning with
+   * these weights (0-10 each), changed only by what the user does.
+   */
+  mood: { enabled: boolean; weights: MoodWeights };
+  /**
    * Habits (phase 11): logging the apps the user opens (names only, on this
    * PC), finding patterns, proposing them at the right time.
    */
@@ -103,7 +109,7 @@ export interface Settings {
   web: { provider: WebProvider; searxngUrl: string };
   /** Long-term memory (memory.db): where the embeddings come from, and how results are ordered. */
   memory: {
-    /** Ollama (local) or none (search by words only). */
+    /** auto, Ollama, the sidecar on the CPU or none (search by words only); `model` is Ollama's. */
     embeddings: { provider: EmbeddingProvider; model: string };
     /** Generative Agents score: relevance + recency + importance (to tune). */
     weights: { relevance: number; recency: number; importance: number };
@@ -179,10 +185,11 @@ export const DEFAULT_SETTINGS: Settings = {
   stt: { engine: "faster-whisper", model: "large-v3-turbo", device: "auto", vocabulary: [] },
   tts: { engine: "qwen3", model: "1.7B-Base", voice: "", speed: 1, volume: 1, seed: 7, pronunciations: [] },
   movement: { enabled: true, initiative: true, pranks: true, dodge: true },
+  mood: { enabled: true, weights: DEFAULT_MOOD_WEIGHTS },
   habits: { enabled: true, proposalCooldownMinutes: 20, minOccurrences: 5, minFrequency: 0.7 },
   phone: { enabled: false, port: 47821 },
   web: { provider: "auto", searxngUrl: "" },
-  memory: { embeddings: { provider: "ollama", model: "bge-m3" }, weights: { relevance: 1, recency: 0.5, importance: 0.5 }, backupDays: 7 },
+  memory: { embeddings: { provider: "auto", model: "bge-m3" }, weights: { relevance: 1, recency: 0.5, importance: 0.5 }, backupDays: 7 },
   listen: {
     mode: "push-to-talk",
     hotkey: "Control+Alt+Space",
@@ -479,7 +486,8 @@ export interface GpuInfo {
 }
 
 export interface SidecarStatus {
-  state: "off" | "starting" | "ready" | "error";
+  /** setup: the installed app has no Python environment yet (setup/runtime.ts). */
+  state: "off" | "setup" | "starting" | "ready" | "error";
   message: string;
   engines: EngineStatus[];
   gpu: GpuInfo | null;
@@ -488,6 +496,19 @@ export interface SidecarStatus {
 }
 
 // ---------------- settings window ----------------
+
+/** The installed app's voice engine setup (main/setup): dev = development, nothing to install. */
+export interface RuntimeSetupState {
+  phase: "dev" | "missing" | "outdated" | "installing" | "starting" | "models" | "ready" | "error";
+  /** Extras of the sidecar the profile needs (gpu, wakeword). */
+  extras: string[];
+  /** Packages: bytes downloaded of those announced by uv. */
+  downloaded: number;
+  total: number;
+  detail: string;
+  /** Models downloaded since the engines started. */
+  modelsMb: number;
+}
 
 export interface SettingsSnapshot {
   settings: Settings;
@@ -499,6 +520,8 @@ export interface SettingsSnapshot {
   sidecar: SidecarStatus;
   /** Detected with nvidia-smi, for the profile wizard. */
   gpu: GpuInfo | null;
+  /** Installing the voice engine (installed app only). */
+  setup: RuntimeSetupState;
   voices: Partial<Record<TtsEngine, string[]>>;
   /** Voices Lumi recognizes (no voiceprints: they never leave the main process). */
   knownVoices: KnownVoice[];
@@ -509,6 +532,8 @@ export interface SettingsSnapshot {
   memoryIndex: MemoryIndexStatus | null;
   /** Habits found (phase 11), archived ones included. */
   habits: HabitInfo[];
+  /** Today's mood (null when the mood of the day is off). */
+  dayMood: { mood: DayMoodId; rolled: DayMoodId; intensity: number; since: string; changes: { at: string; from: DayMoodId; to: DayMoodId; intensity: number }[] } | null;
   /** The phone link: paired phones (no keys), the server and the call. */
   phone: { listening: boolean; devices: { id: string; name: string; paired: string; lastSeen?: string }[]; call: string; phoneName: string };
 }
@@ -538,6 +563,7 @@ export interface HabitInfo {
 export interface MemoryIndexStatus {
   state: "off" | "unavailable" | "idle" | "indexing" | "waiting" | "missing" | "offline" | "error";
   model: string;
+  source?: "ollama" | "sidecar";
   done: number;
   total: number;
   detail?: string;
@@ -547,7 +573,8 @@ export interface MemoryIndexStatus {
 export const WEB_PROVIDERS = ["auto", "ollama", "duckduckgo", "searxng", "none"] as const;
 export type WebProvider = (typeof WEB_PROVIDERS)[number];
 
-export const EMBEDDING_PROVIDERS = ["ollama", "none"] as const;
+/** auto: Ollama when it is installed, else the sidecar on the CPU (roadmap 10.6). */
+export const EMBEDDING_PROVIDERS = ["auto", "ollama", "sidecar", "none"] as const;
 export type EmbeddingProvider = (typeof EMBEDDING_PROVIDERS)[number];
 
 export interface KnownVoice {
@@ -584,16 +611,20 @@ export interface SettingsBridge {
   setDiscordToken(token: string): Promise<SettingsSnapshot>;
   openDataFolder(): Promise<void>;
   restartSidecar(): Promise<SettingsSnapshot>;
+  installRuntime(): Promise<SettingsSnapshot>;
   /** What Lumi remembers about `query`, to choose what to forget (nothing is deleted). */
   findForget(query: string): Promise<ForgetCandidate[]>;
   /** Forgets the chosen items, with everything that depends on them. */
   forgetItems(selection: { messages: number[]; summaries: number[]; facts: number[] }): Promise<{ ok: boolean; message: string; snapshot: SettingsSnapshot }>;
   onStatus(cb: (status: SidecarStatus) => void): void;
+  onSetup(cb: (state: RuntimeSetupState) => void): void;
   /** A new phone pairing: the link and its QR code (an image data URL), valid 5 minutes. */
   phonePair(): Promise<{ ok: boolean; url: string; qr: string; hosts: string[]; message: string }>;
   phoneRevoke(id: string): Promise<SettingsSnapshot>;
   /** A habit: let Lumi do it by itself, ask first again, or forget it. */
   habit(id: number, action: "auto" | "ask" | "forget"): Promise<SettingsSnapshot>;
+  /** Draws today's mood again. */
+  rerollMood(): Promise<SettingsSnapshot>;
   /** Something changed outside the window (a phone was paired): reload. */
   onRefresh(cb: () => void): void;
   /** Lumi asked to forget something: the Memory tab opens on it. */

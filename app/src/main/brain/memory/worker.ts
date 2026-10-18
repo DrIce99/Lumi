@@ -7,7 +7,7 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { makeBackup } from "./backup";
 import { MemoryDb, type SearchRequest, type SearchResult } from "./db";
-import { EmbedError, OllamaEmbedder, type Embedder } from "./embed";
+import { EmbedError, OllamaEmbedder, SidecarEmbedder, type Embedder } from "./embed";
 import { Indexer } from "./indexer";
 import { DEFAULT_WEIGHTS, type ScoreWeights } from "./search";
 import { STORE_METHODS, type EmbeddingConfig, type StoreReply, type StoreRequest } from "./store";
@@ -33,7 +33,12 @@ const WARM_EVERY_MS = 60_000;
 /** Calls that are not plain MemoryDb methods. */
 const special: Record<string, (...args: never[]) => unknown> = {
   configure: (config: EmbeddingConfig) => {
-    embedder = config.provider === "ollama" && config.model ? new OllamaEmbedder(config.url, config.model, config.keepAlive) : null;
+    embedder =
+      config.provider === "ollama" && config.model && config.url
+        ? new OllamaEmbedder(config.url, config.model, config.keepAlive)
+        : config.provider === "sidecar"
+          ? new SidecarEmbedder(config.url, config.token ?? "")
+          : null;
     weights = config.weights ?? DEFAULT_WEIGHTS;
     indexer!.configure(embedder);
     return indexer!.current();
