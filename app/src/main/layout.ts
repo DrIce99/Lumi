@@ -18,24 +18,30 @@ export interface Rect {
 export const OVERLAY_HEIGHT = 300;
 export const MIN_WINDOW_WIDTH = 400;
 
+/** Room around the face: the bubble's, and for the avatar also the arms' (raised above the head, spread wide). */
+export function roomFor(mode: FaceMode, faceW: number, faceH: number): { width: number; above: number } {
+  if (mode === "3d") return { width: Math.max(Math.round(faceW * 2.3), MIN_WINDOW_WIDTH), above: Math.max(OVERLAY_HEIGHT, Math.round(faceH * 0.85)) };
+  return { width: Math.max(faceW + 40, MIN_WINDOW_WIDTH), above: OVERLAY_HEIGHT };
+}
+
 /** Window bounds and face layout for a face whose top-left corner is at `anchor` (screen DIP). */
 export function computeLayout(anchor: Point, scale: number, color: string, workArea: Rect, mode: FaceMode = "minimal"): { bounds: Rect; layout: FaceLayout } {
   const faceW = Math.round(FACE_BOX[mode].width * scale);
   const faceH = Math.round(FACE_BOX[mode].height * scale);
-  const width = Math.max(faceW + 40, MIN_WINDOW_WIDTH);
-  const height = faceH + OVERLAY_HEIGHT;
+  const { width, above } = roomFor(mode, faceW, faceH);
+  const height = faceH + above;
   // Bubbles go above the eyes, or below them when the face is near the top of the screen
-  const overlay = anchor.y - OVERLAY_HEIGHT >= workArea.y ? "above" : "below";
+  const overlay = anchor.y - above >= workArea.y ? "above" : "below";
   // Keep the whole window on screen horizontally when possible; the face moves inside it
   const x = Math.round(Math.min(Math.max(anchor.x - (width - faceW) / 2, workArea.x), workArea.x + workArea.width - width));
-  const y = Math.round(overlay === "above" ? anchor.y - OVERLAY_HEIGHT : anchor.y);
+  const y = Math.round(overlay === "above" ? anchor.y - above : anchor.y);
   return {
     bounds: { x, y, width, height },
     layout: {
       mode,
       scale,
       color,
-      face: { x: Math.round(anchor.x - x), y: overlay === "above" ? OVERLAY_HEIGHT : 0, width: faceW, height: faceH },
+      face: { x: Math.round(anchor.x - x), y: overlay === "above" ? above : 0, width: faceW, height: faceH },
       windowWidth: width,
       windowHeight: height,
       overlay,

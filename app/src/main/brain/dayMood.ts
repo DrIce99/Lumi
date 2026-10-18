@@ -1,14 +1,13 @@
 // The mood of the day. Every morning (days start at 5:00) a mood is drawn
 // with the user's weights; the mood the previous day ended in weighs 50%
 // more, so a sadness nobody lifted tends to linger. It colors every answer
-// (a line in <situation>, a resting expression on the face) and changes only
+// (a line in <situation>; the face at rest stays neutral) and changes only
 // through change_mood, called by the model when the user's words really
 // affected it, one step at a time along the tree in shared/dayMood.ts. A
 // strong mood resists: it first softens, then moves.
 //
 // The pure functions are exported for the tests; DayMood keeps the state in
 // mood.json.
-import type { Emotion } from "../../shared/emotions";
 import { DAY_MOODS, isDayMood, MOOD_PARENT, MOOD_VALENCE, type DayMoodId, type MoodWeights } from "../../shared/dayMood";
 import { readJson, writeJson } from "../jsonStore";
 
@@ -167,20 +166,6 @@ export function describeMood(state: DayMoodState): string {
   if (state.rolled !== state.mood) parts.push(`you woke up ${state.rolled} today`);
   if (MOOD_VALENCE[state.mood] < 0) parts.push("only the user can make it better");
   return parts.join("; ");
-}
-
-/** The face at rest shows a trace of the mood (null: neutral). Annoiata stays neutral: apatia stops the blinks. */
-export function restingFace(state: DayMoodState): { emotion: Emotion; intensity: number } | null {
-  const base: Partial<Record<DayMoodId, [Emotion, number]>> = {
-    allegra: ["gioia", 0.3],
-    entusiasta: ["gioia", 0.55],
-    malinconica: ["tristezza", 0.3],
-    triste: ["tristezza", 0.55],
-    irritata: ["rabbia", 0.3],
-    arrabbiata: ["rabbia", 0.55],
-  };
-  const b = base[state.mood];
-  return b ? { emotion: b[0], intensity: round(b[1] * (0.5 + 0.5 * state.intensity)) } : null;
 }
 
 function round(x: number): number {

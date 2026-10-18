@@ -54,8 +54,8 @@ export const AVATAR_EXPRESSIONS: Record<Expression, AvatarExpression> = {
 /** The expression at an intensity (0..1): faces and posture scale, a strong one up to full. */
 export function avatarExpression(expression: Expression, intensity: number): AvatarExpression {
   const def = AVATAR_EXPRESSIONS[expression] ?? AVATAR_EXPRESSIONS.neutra;
-  // 0.6 is the usual intensity: it gives about 80% of the full look
-  const k = Math.min(1, Math.max(0.15, 0.35 + 0.75 * intensity));
+  // 0.6 is the usual intensity (about 75% of the full look); a faint one stays faint
+  const k = Math.min(1, Math.max(0.05, 1.3 * intensity - 0.05));
   const faces: AvatarExpression["faces"] = {};
   for (const [name, w] of Object.entries(def.faces) as [VrmEmotion, number][]) faces[name] = Math.min(1, w * k);
   return {

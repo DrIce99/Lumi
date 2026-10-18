@@ -8,14 +8,14 @@ import test from "node:test";
 import { liveSayFrom } from "../src/main/brain/providers/text";
 import { buildSystemPrompt } from "../src/main/brain/prompt";
 import { parseToolCall } from "../src/main/brain/tools";
-import { clampAnchor, computeLayout } from "../src/main/layout";
+import { clampAnchor, computeLayout, roomFor } from "../src/main/layout";
 import { muteConsole } from "../src/main/log";
 import { resolveAppPath } from "../src/main/protocol";
 import { sanitizeSettings } from "../src/main/settings";
 import { VoiceSpeech, type VoiceOutput } from "../src/main/voice/speechOut";
 import { avatarExpression, visemes } from "../src/renderer/avatar/expressions3d";
 import { bustSpan } from "../src/renderer/avatar/framing";
-import { arm, fromEuler, fromUnitVectors, GESTURES, idlePose, mirrorPose, qmul, rotate, sampleGesture, toEuler, type Euler } from "../src/renderer/avatar/pose";
+import { arm, hand, thumb, fromEuler, fromUnitVectors, GESTURES, idlePose, mirrorPose, qmul, rotate, sampleGesture, toEuler, type Euler } from "../src/renderer/avatar/pose";
 import { BODY_GESTURES, clipName, EYE_GESTURE, gestureId, GESTURE_HINT } from "../src/shared/gestures";
 import { DEFAULT_SETTINGS, FACE_BOX } from "../src/shared/types";
 
@@ -46,6 +46,19 @@ test("an arm posed by directions points its upper arm and forearm where asked", 
   assert.ok(close(rotate(qmul(qu, ql), [-1, 0, 0]), unit(lower)), "forearm");
   const left = arm("left", [0.3, -0.9, 0.1], [0.1, -0.9, 0.4]);
   assert.ok(close(rotate(fromEuler(left.leftUpperArm!), [1, 0, 0]), unit([0.3, -0.9, 0.1])));
+});
+
+test("the forearm's twist turns the palm: a raised right hand shows it to the viewer; thumbs fold toward the palm", () => {
+  const plain = arm("right", [-0.9, 0.2, 0.35], [-0.2, 0.95, 0.2]);
+  const twisted = arm("right", [-0.9, 0.2, 0.35], [-0.2, 0.95, 0.2], undefined, 90);
+  const palm = (bones: typeof plain) => rotate(qmul(fromEuler(bones.rightUpperArm!), fromEuler(bones.rightLowerArm!)), [0, -1, 0]);
+  assert.ok(palm(plain)[2] < 0.5, "without the twist the palm faces sideways");
+  assert.ok(palm(twisted)[2] > 0.8, `with it, toward the viewer: ${palm(twisted)}`);
+  // The twist doesn't move where the forearm points
+  const dir = (bones: typeof plain) => rotate(qmul(fromEuler(bones.rightUpperArm!), fromEuler(bones.rightLowerArm!)), [-1, 0, 0]);
+  assert.ok(close(dir(plain), dir(twisted)));
+  assert.ok(thumb("right", 30).rightThumbProximal![1] < 0 && thumb("left", 30).leftThumbProximal![1] > 0, "mirrored");
+  assert.equal(Object.keys(hand("left", 20, 10)).length, 15, "four fingers x three joints, plus the thumb's three");
 });
 
 test("the resting pose breathes and keeps the arms down; flying leans the body", () => {
@@ -143,6 +156,8 @@ test("the face box: the eyes are wide, the avatar's bust taller; changing mode k
   const body = computeLayout({ x: 1700, y: 700 }, 1.5, "#FFFFFF", work, "3d");
   assert.equal(body.layout.mode, "3d");
   assert.deepEqual([body.layout.face.width, body.layout.face.height], [270, 330]);
+  assert.ok(roomFor("3d", 270, 330).width >= 600 && roomFor("3d", 270, 330).above >= 300, "room for the arms raised and spread");
+  assert.equal(body.layout.windowHeight, 330 + roomFor("3d", 270, 330).above);
   const anchor = clampAnchor({ x: 1800, y: 1000 }, 1, work, "3d");
   assert.ok(anchor.y + FACE_BOX["3d"].height * 0.7 <= 1040, "most of the avatar stays on screen");
 });

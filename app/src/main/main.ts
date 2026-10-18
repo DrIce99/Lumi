@@ -26,7 +26,7 @@ import { initLog, log } from "./log";
 import { Mood } from "./mood";
 import { AvatarFiles, clipsDirIn } from "./avatar";
 import { BODY_GESTURES, EYE_GESTURE } from "../shared/gestures";
-import { DayMood, describeMood, restingFace } from "./brain/dayMood";
+import { DayMood, describeMood } from "./brain/dayMood";
 import type { DayMoodId } from "../shared/dayMood";
 import { ensureOllama } from "./ollama";
 import type { RuntimePaths } from "./setup/runtime";
@@ -234,17 +234,14 @@ function start(): void {
   // The mood of the day: drawn each morning, changed only by the user (change_mood)
   const dayMood = new DayMood(join(dataDir, "mood.json"), () => settings().mood.weights);
   let moodDay = "";
+  // The mood colors the words, not the face at rest: after an answer the face goes back to neutral
   function refreshDayMood(): void {
-    if (!settings().mood.enabled) {
-      mood.setResting(null);
-      return;
-    }
+    if (!settings().mood.enabled) return;
     const today = dayMood.current();
     if (today.day !== moodDay) {
       moodDay = today.day;
       log.info(`Mood of the day ${today.day}: ${today.mood} (${today.intensity})`);
     }
-    mood.setResting(restingFace(today));
   }
   refreshDayMood();
   // A new day starts at 5:00: check once a minute
@@ -1107,7 +1104,8 @@ function start(): void {
       new BubbleSpeech(
         bubbles,
         {
-          emotion: (e, i) => (react ? mood.setEmotion(e, i) : undefined),
+          // A written answer has no end of speech to fade on: its emotion lasts a few seconds
+          emotion: (e, i) => (react ? mood.setEmotion(e, i, 6000) : undefined),
           look: (text) => (react && perception.watching() ? void perception.lookAtText(text) : undefined),
           gesture: (g) => (react ? act(g) : undefined),
         },

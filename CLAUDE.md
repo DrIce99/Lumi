@@ -638,10 +638,9 @@ Work one roadmap phase at a time; finish each with checks green.
   again gets +0.25, one change per 90 s, refused outside message moments
   (`changeMood(..., byUser)`). `<situation>` gets "Your mood today" and
   the system prompt a "Your mood of the day" section (only when enabled).
-  `Mood.setResting` = the face between answers (`restingFace`: light
-  gioia/tristezza/rabbia; annoiata stays neutral, apatia stops blinks);
-  a "neutra" say keeps the resting face. Logs carry mood names, never
-  the reason.
+  The face at rest stays neutral: a trace of the mood there (tried) kept
+  a smile, and in 3D an open mouth, after every answer. Logs carry mood
+  names, never the reason.
 
 - Lumi in 3D (roadmap 19, `face.mode` minimal|3d, `face.model` = a .vrm
   path, "" = `app/assets/avatar/Lumi.vrm`, copied to dist by build.mjs):
@@ -658,12 +657,21 @@ Work one roadmap phase at a time; finish each with checks green.
   pose (`pose.ts`, pure: Euler XYZ degrees on normalized bones, model
   faces +Z, left arm down = -Z, X+ = head down) -> gestures slerped over
   it with fade weights -> gaze (Blinker/GazeController reused; 40% on
-  head+neck, rest to `vrm.lookAt.yaw/pitch`, pitch + = up) -> expression
-  weights eased (`expressions3d.ts`) + blink + visemes (`visemes()`:
+  head+neck: 28%, 12% while reading/caret/text; the eyes get the full
+  range: yaw/pitch = gaze x the range map's inputMaxValue, 90 on VRoid,
+  which maps to only 8-12 degrees; on the eyes VRMLookAt's pitch + =
+  down, checked on the model: the head bone's X + is down too) -> expression weights
+  eased (`expressions3d.ts`; on VRoid models split into Fcl_BRW/EYE morphs
+  + Fcl_MTH at rest only, x0.5, happy = Fun mouth, gone while talking:
+  the Fcl_ALL presets open the mouth) + blink + visemes (`visemes()`:
   level opens, `Player.brightness()` = 3x energy share above 1.5 kHz picks
   e/i vs o/u vs a) -> `vrm.update()` (spring bones). Arm poses are given
   as directions (`arm()`/`arms()`: fromUnitVectors, forearm local =
-  conj(upper) * world) because Euler twists sent forearms the wrong way.
+  conj(upper) * world, `twist` = forearm roll for the palm: +90 on a
+  raised right arm faces the viewer) because Euler twists sent forearms
+  the wrong way. Fingers curl with Z (left -, right +); the thumb folds
+  across the palm with -Y on the right (`thumb()`, checked on the model).
+  The 3D window is wider/taller for the arms (`roomFor` in layout.ts).
   `say.gesture` (free id, `gestureId`) rides the first sentence of its say
   call, applied on lead with the emotion (`act()` in main: 3D -> face.act,
   eyes -> `EYE_GESTURE`); the prompt's "# Your body" exists only in 3D.

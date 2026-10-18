@@ -1,5 +1,5 @@
 // The mood of the day: the morning draw, one-step changes along the mood
-// tree, resistance and cooldown, the prompt line, the resting face, the tool
+// tree, resistance and cooldown, the prompt line, the neutral face, the tool
 // and the settings.
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -11,7 +11,6 @@ import {
   DayMood,
   describeMood,
   newDay,
-  restingFace,
   rollMood,
   shiftMood,
   SHIFT_COOLDOWN_MS,
@@ -135,28 +134,15 @@ test("the <situation> line says the mood, how strong, since when and why, and wh
   assert.doesNotMatch(line, /only the user/);
 });
 
-test("the resting face shows a trace of the mood; calm and bored stay neutral", () => {
-  assert.deepEqual(restingFace(state("arrabbiata", 1)), { emotion: "rabbia", intensity: 0.55 });
-  assert.deepEqual(restingFace(state("triste", 0.6)), { emotion: "tristezza", intensity: 0.44 });
-  assert.equal(restingFace(state("annoiata", 0.9)), null);
-  assert.equal(restingFace(state("tranquilla", 0.5)), null);
-
+test("the face goes back to neutral after an answer, whatever the mood of the day", () => {
   let now = 0;
   const mood = new Mood(() => undefined, () => now, () => 0.5);
   mood.dispose();
-  mood.setResting({ emotion: "tristezza", intensity: 0.4 });
-  assert.equal(mood.state().expression, "tristezza", "between answers");
+  mood.set({ speaking: true });
   mood.setEmotion("gioia", 0.8);
-  assert.equal(mood.state().expression, "gioia", "an answer's emotion wins");
-  now = 20_000;
+  mood.set({ speaking: false });
+  now = 3000;
   mood.tick();
-  assert.equal(mood.state().expression, "tristezza", "and fades back to the mood");
-  mood.setEmotion("neutra", 0.6);
-  assert.equal(mood.state().expression, "tristezza", "a neutral line keeps the mood");
-  mood.setEmotion("sorpresa", 0.7);
-  mood.clearEmotion();
-  assert.equal(mood.state().expression, "tristezza");
-  mood.setResting(null);
   assert.equal(mood.state().expression, "neutra");
 });
 

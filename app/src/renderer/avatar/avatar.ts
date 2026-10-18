@@ -25,6 +25,7 @@ import {
   WebGLRenderer,
   Box3,
   type Interpolant,
+  type Mesh,
   type Object3D,
 } from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
@@ -40,9 +41,12 @@ import { avatarExpression, VISEMES, visemes, VRM_EMOTIONS, type AvatarExpression
 import { clipWeight, GESTURES, HANDED, idlePose, mirrorGesture, sampleGesture, type BonePose, type Euler, type GestureDef } from "./pose";
 
 /** Eyes turn up to this far (degrees) at the gaze's full offset; the head takes a share of it. */
-const GAZE_YAW = 28;
-const GAZE_PITCH = 18;
-const HEAD_SHARE = 0.4;
+/** The head turns up to this far (degrees) at the gaze's full offset; the eyes use their own full range. */
+const HEAD_YAW = 28;
+const HEAD_PITCH = 18;
+/** How much of the gaze the head follows: less while reading or following the caret (the eyes do it). */
+const HEAD_SHARE = 0.28;
+const HEAD_SHARE_READING = 0.12;
 /** Expression weights ease with this time constant (ms). */
 const FACE_TAU = 110;
 const TRANSIT_OUT_MS = 1100;
@@ -86,6 +90,11 @@ export class Avatar implements FaceView {
   private readonly blinker: Blinker;
   private readonly gaze: GazeController;
   private lastGazeDx = 0;
+  private gazeKind: GazeCommand["kind"] = "idle";
+  /** VRoid's separate brow/eye/mouth morphs per emotion, when the model has them. */
+  private split: SplitFaces | null = null;
+  /** 0..1: how much Lumi is talking now (eased): the emotion's own mouth gives way to the vowels. */
+  private speech = 0;
   private plays: Play[] = [];
   private level = 0;
   private bright = 0.4;
@@ -162,6 +171,7 @@ export class Avatar implements FaceView {
     this.scene.add(vrm.scene);
     // The eyes are driven by yaw and pitch, not by a target object
     if (vrm.lookAt) vrm.lookAt.autoUpdate = false;
+    this.split = splitFaces(vrm.scene);
     this.nodeBone = new Map();
     for (const name of Object.keys(vrm.humanoid.humanBones) as VRMHumanBoneName[]) {
       const node = vrm.humanoid.getNormalizedBoneNode(name);
@@ -193,6 +203,7 @@ export class Avatar implements FaceView {
 
   setGaze(command: GazeCommand): void {
     if (command.target) this.lastGazeDx = command.target.dx;
+    this.gazeKind = command.kind;
     this.gaze.setCommand(command, performance.now());
   }
 
@@ -386,8 +397,9 @@ export class Avatar implements FaceView {
     const vrm = this.vrm;
     if (vrm) {
       this.pose(vrm, now);
-      this.expressions(vrm, now);
+      this.expressions(vrm, now, dt);
       vrm.update(dt / 1000);
+      this.splitFaces();
     }
     this.updateTransit(now);
     this.renderer.render(this.scene, this.camera);
@@ -475,15 +487,20 @@ export class Avatar implements FaceView {
     });
 
     // The gaze: part on the neck and head, the rest to the eyes
-    const yaw = gx * GAZE_YAW;
-    const pitch = -gy * GAZE_PITCH;
+    // The head follows part of the gaze (its pitch + = up); the eyes go all the way (VRMLookAt maps its input range,
+    // 90 degrees on VRoid models, onto the eyes' few degrees: the full input = the full eye range)
+    const share = this.gazeKind === "reading" || this.gazeKind === "caret" || this.gazeKind === "text" ? HEAD_SHARE_READING : HEAD_SHARE;
+    const yaw = gx * HEAD_YAW * share;
+    const pitch = -gy * HEAD_PITCH * share;
     const head = result.get("head");
     const neck = result.get("neck");
-    if (head) head.multiply(quat([-pitch * HEAD_SHARE * 0.6, yaw * HEAD_SHARE * 0.6, 0], tmpQ));
-    if (neck) neck.multiply(quat([-pitch * HEAD_SHARE * 0.4, yaw * HEAD_SHARE * 0.4, 0], tmpQ));
+    if (head) head.multiply(quat([-pitch * 0.6, yaw * 0.6, 0], tmpQ));
+    if (neck) neck.multiply(quat([-pitch * 0.4, yaw * 0.4, 0], tmpQ));
     if (vrm.lookAt) {
-      vrm.lookAt.yaw = yaw * (1 - HEAD_SHARE);
-      vrm.lookAt.pitch = pitch * (1 - HEAD_SHARE);
+      const range = eyeRange(vrm);
+      vrm.lookAt.yaw = gx * range.yaw;
+      // VRMLookAt's pitch grows downward on the eyes (checked on the model): gaze y is + down too
+      vrm.lookAt.pitch = gy * range.pitch;
     }
 
     for (const [name, q] of result) humanoid.getNormalizedBoneNode(name)?.quaternion.copy(q);
@@ -506,10 +523,18 @@ export class Avatar implements FaceView {
     }
   }
 
-  private expressions(vrm: VRM, now: number): void {
+  private expressions(vrm: VRM, now: number, dt: number): void {
     const em = vrm.expressionManager;
     if (!em) return;
-    for (const name of VRM_EMOTIONS) em.setValue(name, this.faces.get(name) ?? 0);
+    const talking = this.talking || this.state.speaking ? 1 : 0;
+    this.speech += (talking - this.speech) * (1 - Math.exp(-dt / 150));
+    if (this.split) {
+      // Brows and eyes carry the emotion (splitFaces, after vrm.update): the presets stay off
+      for (const name of VRM_EMOTIONS) em.setValue(name, 0);
+    } else {
+      // A whole-face preset also opens the mouth: it fades while talking
+      for (const name of VRM_EMOTIONS) em.setValue(name, (this.faces.get(name) ?? 0) * (1 - 0.7 * this.speech));
+    }
     const glare = now < this.glareUntil ? Math.sin(((this.glareUntil - now) / 1600) * Math.PI) : 0;
     // A happy face already narrows the eyes: the blink adds less on top of it
     const happy = this.faces.get("happy") ?? 0;
@@ -517,8 +542,19 @@ export class Avatar implements FaceView {
     em.setValue("blink", Math.min(1, blink * (1 - 0.5 * happy)));
     const mouth = visemes(this.level, this.bright, now);
     // Emotions with their own mouth (a wide smile) leave less room to the vowels
-    const room = 1 - 0.4 * Math.max(happy, this.faces.get("surprised") ?? 0);
-    for (const v of VISEMES) em.setValue(v, mouth[v] * room);
+    for (const v of VISEMES) em.setValue(v, mouth[v]);
+  }
+
+  /** The split emotion morphs, written after vrm.update() (no VRM expression binds them). Their mouth shows only at rest, softer. */
+  private splitFaces(): void {
+    const split = this.split;
+    if (!split) return;
+    const mouthShare = 0.5 * (1 - this.speech);
+    for (const name of VRM_EMOTIONS) {
+      const w = this.faces.get(name) ?? 0;
+      for (const t of split[name].upper) t.mesh.morphTargetInfluences![t.index] = w;
+      for (const t of split[name].mouth) t.mesh.morphTargetInfluences![t.index] = w * mouthShare;
+    }
   }
 
   private updateTransit(now: number): void {
@@ -578,6 +614,48 @@ const BUILTIN: Record<string, GestureDef> = {
   nod_small: { ...GESTURES.nod, ms: 600, keys: GESTURES.nod.keys.map((key) => ({ t: key.t, pose: { bones: Object.fromEntries(Object.entries(key.pose.bones).map(([n, e]) => [n, e!.map((x) => x * 0.5) as Euler])) } })) },
   shake_small: { ...GESTURES.shake_head, ms: 700, keys: GESTURES.shake_head.keys.map((key) => ({ t: key.t, pose: { bones: Object.fromEntries(Object.entries(key.pose.bones).map(([n, e]) => [n, e!.map((x) => x * 0.5) as Euler])) } })) },
 };
+
+type MorphRef = { mesh: Mesh; index: number };
+type SplitFaces = Record<(typeof VRM_EMOTIONS)[number], { upper: MorphRef[]; mouth: MorphRef[] }>;
+
+/** VRoid's morph names per emotion: Fcl_BRW_Joy, Fcl_EYE_Joy... */
+const VROID_NAMES: Record<(typeof VRM_EMOTIONS)[number], string> = { happy: "Joy", angry: "Angry", sad: "Sorrow", relaxed: "Fun", surprised: "Surprised" };
+/** ...and the mouth: a happy face smiles with the mouth closed ("Joy" opens it wide). */
+const VROID_MOUTH: Record<(typeof VRM_EMOTIONS)[number], string> = { ...VROID_NAMES, happy: "Fun" };
+
+/**
+ * The emotions split into brows+eyes and mouth, when the model has VRoid's
+ * separate morphs: its VRM presets use Fcl_ALL_*, which open the mouth too
+ * (a smile with the mouth open while talking). Null for other models.
+ */
+function splitFaces(root: Object3D): SplitFaces | null {
+  const out = Object.fromEntries(VRM_EMOTIONS.map((e) => [e, { upper: [] as MorphRef[], mouth: [] as MorphRef[] }])) as SplitFaces;
+  let found = 0;
+  root.traverse((o) => {
+    const mesh = o as Mesh;
+    const dict = mesh.isMesh ? mesh.morphTargetDictionary : undefined;
+    if (!dict || !mesh.morphTargetInfluences) return;
+    for (const e of VRM_EMOTIONS) {
+      const n = VROID_NAMES[e];
+      for (const part of ["BRW", "EYE"]) {
+        const index = dict[`Fcl_${part}_${n}`];
+        if (index !== undefined) {
+          out[e].upper.push({ mesh, index });
+          found++;
+        }
+      }
+      const mouth = dict[`Fcl_MTH_${VROID_MOUTH[e]}`];
+      if (mouth !== undefined) out[e].mouth.push({ mesh, index: mouth });
+    }
+  });
+  return found >= 5 ? out : null;
+}
+
+/** The input angles that move the eyes to the end of their range (VRMLookAt's range maps), default 90. */
+function eyeRange(vrm: VRM): { yaw: number; pitch: number } {
+  const applier = vrm.lookAt?.applier as unknown as { rangeMapHorizontalOuter?: { inputMaxValue: number }; rangeMapVerticalUp?: { inputMaxValue: number } } | undefined;
+  return { yaw: applier?.rangeMapHorizontalOuter?.inputMaxValue ?? 90, pitch: applier?.rangeMapVerticalUp?.inputMaxValue ?? 90 };
+}
 
 /** Registered for the face window, which loads this bundle only in 3D mode. */
 export interface AvatarModule {

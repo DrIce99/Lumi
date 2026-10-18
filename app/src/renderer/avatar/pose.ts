@@ -102,6 +102,13 @@ export function fromEuler(e: Euler): Quat {
   return [s1 * c2 * c3 + c1 * s2 * s3, c1 * s2 * c3 - s1 * c2 * s3, c1 * c2 * s3 + s1 * s2 * c3, c1 * c2 * c3 - s1 * s2 * s3];
 }
 
+/** A rotation of `deg` degrees about a unit axis. */
+export function axisAngle(axis: Vec, deg: number): Quat {
+  const h = (deg * Math.PI) / 360;
+  const s = Math.sin(h);
+  return [axis[0] * s, axis[1] * s, axis[2] * s, Math.cos(h)];
+}
+
 /** Rotates v by q. */
 export function rotate(q: Quat, v: Vec): Vec {
   const r = qmul(qmul(q, [v[0], v[1], v[2], 0]), conj(q));
@@ -111,12 +118,15 @@ export function rotate(q: Quat, v: Vec): Vec {
 /**
  * One arm posed by where its parts point (model space: +X the model's left =
  * the viewer's right, +Y up, +Z toward the viewer): the upper arm along
- * `upper`, the forearm along `lower`; `hand` adds a wrist rotation.
+ * `upper`, the forearm along `lower`; `twist` turns the forearm about its
+ * own axis (degrees, positive = the palm turns toward the viewer for the
+ * right arm raised, mirrored for the left), `hand` adds a wrist rotation.
  */
-export function arm(side: "left" | "right", upper: Vec, lower: Vec, hand?: Euler): Partial<Record<string, Euler>> {
+export function arm(side: "left" | "right", upper: Vec, lower: Vec, hand?: Euler, twist = 0): Partial<Record<string, Euler>> {
   const rest: Vec = side === "left" ? [1, 0, 0] : [-1, 0, 0];
   const qu = fromUnitVectors(rest, norm(upper));
-  const ql = fromUnitVectors(rest, norm(lower));
+  // The twist turns the forearm about its own axis before it swings into place
+  const ql = qmul(fromUnitVectors(rest, norm(lower)), axisAngle([1, 0, 0], side === "left" ? twist : -twist));
   const out: Partial<Record<string, Euler>> = {
     [`${side}UpperArm`]: toEuler(qu),
     // The forearm's rotation is relative to the upper arm
@@ -127,18 +137,18 @@ export function arm(side: "left" | "right", upper: Vec, lower: Vec, hand?: Euler
 }
 
 /** Both arms, the left one mirrored from the right one's directions. */
-export function arms(upper: Vec, lower: Vec, hand?: Euler): Partial<Record<string, Euler>> {
+export function arms(upper: Vec, lower: Vec, hand?: Euler, twist = 0): Partial<Record<string, Euler>> {
   return {
-    ...arm("right", upper, lower, hand),
-    ...arm("left", [-upper[0], upper[1], upper[2]], [-lower[0], lower[1], lower[2]], hand ? [hand[0], -hand[1], -hand[2]] : undefined),
+    ...arm("right", upper, lower, hand, twist),
+    ...arm("left", [-upper[0], upper[1], upper[2]], [-lower[0], lower[1], lower[2]], hand ? [hand[0], -hand[1], -hand[2]] : undefined, twist),
   };
 }
 
 /** Arms relaxed at the sides (an A-pose with the elbows a little bent), fingers softly curled. */
 export const REST_ARMS: Partial<Record<string, Euler>> = {
   ...arms([-0.27, -0.96, 0.06], [-0.14, -0.95, 0.27], [0, 0, 4]),
-  ...fingers("left", 14),
-  ...fingers("right", 14),
+  ...hand("left", 14, 20),
+  ...hand("right", 14, 20),
 };
 
 /** Curls the four fingers by `deg` at each joint (left fingers curl with -Z, right with +Z). */
@@ -149,6 +159,24 @@ export function fingers(side: "left" | "right", deg: number, only?: string[]): P
     for (const joint of ["Proximal", "Intermediate", "Distal"]) out[`${side}${f}${joint}`] = [0, 0, z];
   }
   return out;
+}
+
+/**
+ * Folds the thumb toward the palm by `deg` (checked on the model: the right
+ * thumb crosses the palm with -Y and bends with +X; the left one mirrors).
+ */
+export function thumb(side: "left" | "right", deg: number): Partial<Record<string, Euler>> {
+  const y = side === "left" ? 0.6 * deg : -0.6 * deg;
+  return {
+    [`${side}ThumbMetacarpal`]: [0.2 * deg, y * 0.6, 0],
+    [`${side}ThumbProximal`]: [0.4 * deg, y, 0],
+    [`${side}ThumbDistal`]: [0.5 * deg, y * 0.5, 0],
+  };
+}
+
+/** A hand: fingers curled by `curl`, the thumb folded by `fold`. */
+export function hand(side: "left" | "right", curl: number, fold: number): Partial<Record<string, Euler>> {
+  return { ...fingers(side, curl), ...thumb(side, fold) };
 }
 
 /** The resting pose at time t: breathing, a slow weight shift, the head drifting, plus the expression's posture. */
@@ -175,6 +203,15 @@ export function idlePose(p: IdleInput): BonePose {
     p.head[2] * 0.7 + drift(7, 0.3) * 2 * e + sway * 1.5,
   ];
   // The arms hang a little away from the body as it sways
+  // The fingers never stay perfectly still
+  for (const side of ["left", "right"] as const) {
+    const sign = side === "left" ? -1 : 1;
+    const f = 14 + 4 * drift(side === "left" ? 11 : 12, 0.25);
+    for (const name of ["Index", "Middle", "Ring", "Little"]) {
+      const curl = f + (name === "Index" ? -3 : name === "Little" ? 3 : 0);
+      for (const joint of ["Proximal", "Intermediate", "Distal"]) bones[`${side}${name}${joint}`] = [0, 0, sign * curl];
+    }
+  }
   const arm = REST_ARMS.leftUpperArm!;
   bones.leftUpperArm = [arm[0], arm[1], arm[2] - sway * 1.5 - p.travel.vx * 8 + tremble * 2];
   bones.rightUpperArm = [-arm[0], -arm[1], -arm[2] - sway * 1.5 - p.travel.vx * 8 - tremble * 2];
@@ -215,32 +252,39 @@ export function mirrorGesture(def: GestureDef): GestureDef {
 }
 
 // Right-handed gestures (the viewer sees them on the left); the one-handed ones are mirrored toward the screen's center
-const WAVE_ARM = { rightUpperArm: [0, 20, -25] as Euler, rightHand: [0, 0, 0] as Euler };
+const WAVE_UP = [-0.9, 0.2, 0.35] as const;
+const wave = (lower: [number, number, number]) => ({ ...arm("right", [...WAVE_UP], lower, [0, 0, 0], 90), ...hand("right", 4, 6) });
 const THINK = {
   ...arm("right", [-0.12, -0.72, 0.68], [0.42, 0.86, 0.28], [0, 0, -20]),
   ...arm("left", [0.15, -0.85, 0.5], [-0.82, -0.05, 0.56]),
   head: [-4, 4, 9] as Euler,
-  ...fingers("right", 35),
+  ...hand("right", 40, 15),
+  ...fingers("right", 25, ["Index"]),
+  ...hand("left", 20, 15),
 };
 const CROSS = {
   ...arm("right", [-0.2, -0.66, 0.72], [0.72, 0.3, 0.62]),
   ...arm("left", [0.2, -0.68, 0.7], [-0.72, 0.2, 0.66]),
-  ...fingers("left", 40),
-  ...fingers("right", 40),
+  ...hand("left", 40, 25),
+  ...hand("right", 40, 25),
   head: [-3, -6, 0] as Euler,
 };
 const SHRUG = {
   leftShoulder: [0, 0, 10] as Euler,
   rightShoulder: [0, 0, -10] as Euler,
-  ...arms([-0.33, -0.93, 0.12], [-0.6, -0.05, 0.8], [-70, 0, 0]),
+  ...arms([-0.33, -0.93, 0.12], [-0.6, -0.05, 0.8], undefined, 160),
+  ...hand("left", 8, 0),
+  ...hand("right", 8, 0),
   head: [-2, 0, 9] as Euler,
 };
-const CHEER_UP = { ...arms([-0.45, 0.86, 0.22], [-0.18, 0.97, 0.15]), head: [-8, 0, 0] as Euler, ...fingers("left", 70), ...fingers("right", 70) };
-const CHEER_PUMP = { ...CHEER_UP, ...arms([-0.62, 0.72, 0.3], [-0.3, 0.93, 0.2]) };
-const CLAP_OPEN = arms([-0.1, -0.66, 0.74], [0.3, 0.35, 0.89]);
-const CLAP_SHUT = arms([-0.1, -0.66, 0.74], [0.6, 0.35, 0.72]);
-const FACEPALM = { ...arm("right", [-0.08, -0.55, 0.83], [0.2, 0.95, 0.25], [0, 0, -15]), head: [14, -4, 0] as Euler, neck: [6, 0, 0] as Euler };
-const POINT = { ...arm("right", [-0.72, -0.1, 0.68], [-0.72, 0, 0.7]), ...fingers("right", 80, ["Middle", "Ring", "Little"]), ...fingers("right", 0, ["Index"]), head: [0, -12, 0] as Euler };
+const FISTS = { ...hand("left", 85, 75), ...hand("right", 85, 75) };
+const CHEER_UP = { ...arms([-0.45, 0.86, 0.22], [-0.18, 0.97, 0.15], undefined, 90), head: [-8, 0, 0] as Euler, ...FISTS };
+const CHEER_PUMP = { ...CHEER_UP, ...arms([-0.62, 0.72, 0.3], [-0.3, 0.93, 0.2], undefined, 90) };
+const OPEN_HANDS = { ...hand("left", 6, 5), ...hand("right", 6, 5) };
+const CLAP_OPEN = { ...arms([-0.1, -0.66, 0.74], [0.18, 0.35, 0.92], undefined, 90), ...OPEN_HANDS };
+const CLAP_SHUT = { ...arms([-0.1, -0.66, 0.74], [0.46, 0.35, 0.82], undefined, 90), ...OPEN_HANDS };
+const FACEPALM = { ...arm("right", [-0.08, -0.55, 0.83], [0.2, 0.95, 0.25], [0, 0, -15]), ...hand("right", 12, 10), head: [14, -4, 0] as Euler, neck: [6, 0, 0] as Euler };
+const POINT = { ...arm("right", [-0.72, -0.1, 0.68], [-0.72, 0, 0.7]), ...fingers("right", 80, ["Middle", "Ring", "Little"]), ...fingers("right", 0, ["Index"]), ...thumb("right", 40), head: [0, -12, 0] as Euler };
 
 export const GESTURES: Record<string, GestureDef> = {
   wave: {
@@ -248,12 +292,12 @@ export const GESTURES: Record<string, GestureDef> = {
     fadeIn: 300,
     fadeOut: 350,
     keys: [
-      k(0, { ...WAVE_ARM, rightLowerArm: [0, 0, -75] }),
-      k(0.22, { ...WAVE_ARM, rightLowerArm: [0, 0, -50] }),
-      k(0.42, { ...WAVE_ARM, rightLowerArm: [0, 0, -95] }),
-      k(0.62, { ...WAVE_ARM, rightLowerArm: [0, 0, -50] }),
-      k(0.82, { ...WAVE_ARM, rightLowerArm: [0, 0, -95] }),
-      k(1, { ...WAVE_ARM, rightLowerArm: [0, 0, -75] }),
+      k(0, wave([-0.15, 0.97, 0.2])),
+      k(0.22, wave([-0.5, 0.84, 0.2])),
+      k(0.42, wave([0.15, 0.97, 0.2])),
+      k(0.62, wave([-0.5, 0.84, 0.2])),
+      k(0.82, wave([0.15, 0.97, 0.2])),
+      k(1, wave([-0.15, 0.97, 0.2])),
     ],
   },
   nod: {
