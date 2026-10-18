@@ -657,7 +657,9 @@ Work one roadmap phase at a time; finish each with checks green.
   pose (`pose.ts`, pure: Euler XYZ degrees on normalized bones, model
   faces +Z, left arm down = -Z, X+ = head down) -> gestures slerped over
   it with fade weights -> gaze (Blinker/GazeController reused; 40% on
-  head+neck: 28%, 12% while reading/caret/text; the eyes get the full
+  head+neck: `headFollow` 28%, 12% while reading/caret/text, up to +50%
+  pitch / +30% yaw when the target is up, on an eased copy of the gaze
+  (HEAD_TAU 320 ms) while the eyes jump; the eyes get the full
   range: yaw/pitch = gaze x the range map's inputMaxValue, 90 on VRoid,
   which maps to only 8-12 degrees; on the eyes VRMLookAt's pitch + =
   down, checked on the model: the head bone's X + is down too) -> expression weights
@@ -667,9 +669,10 @@ Work one roadmap phase at a time; finish each with checks green.
   level opens, `Player.brightness()` = 3x energy share above 1.5 kHz picks
   e/i vs o/u vs a) -> `vrm.update()` (spring bones). Arm poses are given
   as directions (`arm()`/`arms()`: fromUnitVectors, forearm local =
-  conj(upper) * world, `twist` = forearm roll for the palm: +90 on a
-  raised right arm faces the viewer) because Euler twists sent forearms
-  the wrong way. Fingers curl with Z (left -, right +); the thumb folds
+  conj(upper) * world, `palm` = where the palm faces: `forearmFacing`
+  searches the forearm's roll in 5-degree steps, rest palms face -Y;
+  guessed twist signs left some palms backwards) because Euler twists
+  sent forearms the wrong way. Fingers curl with Z (left -, right +); the thumb folds
   across the palm with -Y on the right (`thumb()`, checked on the model).
   The 3D window is wider/taller for the arms (`roomFor` in layout.ts).
   `say.gesture` (free id, `gestureId`) rides the first sentence of its say
@@ -680,7 +683,14 @@ Work one roadmap phase at a time; finish each with checks green.
   `/user/animations/`, `resolveAppPath` refuses escapes); Mixamo FBX
   retargeted as in three-vrm's example; tracks sampled with their own
   interpolants, no AnimationMixer (its fades blend against the bind
-  pose, not the procedural one). Hit test = alpha of the last frame
+  pose, not the procedural one). No snaps (the user saw "spasms"): keys
+  are slerped (`qslerp`), a restarted/replaced gesture fades out
+  (`replacedWeight`, 220 ms), the head's share is eased like the head,
+  the talk nod uses a level smoothed at 220 ms, the idle motion runs on
+  its own clock (a shock pauses it), long frames are split for the
+  spring bones; a test samples every gesture at 16 ms over the rest pose
+  (< 14 degrees per frame: a big move needs a longer fadeIn). Hit test =
+  alpha of the last frame
   (`preserveDrawingBuffer`). Checked by eye with `LUMI_DEBUG_ACT`.
 
 ## Planned features (phase 16 not built yet; phase 10 kept as its design notes)

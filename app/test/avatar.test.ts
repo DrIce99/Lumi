@@ -15,7 +15,7 @@ import { sanitizeSettings } from "../src/main/settings";
 import { VoiceSpeech, type VoiceOutput } from "../src/main/voice/speechOut";
 import { avatarExpression, visemes } from "../src/renderer/avatar/expressions3d";
 import { bustSpan } from "../src/renderer/avatar/framing";
-import { arm, hand, thumb, fromEuler, fromUnitVectors, GESTURES, idlePose, mirrorPose, qmul, rotate, sampleGesture, toEuler, type Euler } from "../src/renderer/avatar/pose";
+import { arm, hand, headFollow, palmOf, qslerp, replacedWeight, REPLACED_FADE_MS, thumb, fromEuler, fromUnitVectors, GESTURES, idlePose, mirrorPose, qmul, rotate, sampleGesture, toEuler, type Euler } from "../src/renderer/avatar/pose";
 import { BODY_GESTURES, clipName, EYE_GESTURE, gestureId, GESTURE_HINT } from "../src/shared/gestures";
 import { DEFAULT_SETTINGS, FACE_BOX } from "../src/shared/types";
 
@@ -48,17 +48,40 @@ test("an arm posed by directions points its upper arm and forearm where asked", 
   assert.ok(close(rotate(fromEuler(left.leftUpperArm!), [1, 0, 0]), unit([0.3, -0.9, 0.1])));
 });
 
-test("the forearm's twist turns the palm: a raised right hand shows it to the viewer; thumbs fold toward the palm", () => {
+test("palms face where a pose asks: toward the viewer in the wave, on the chin in think, toward each other in the clap", () => {
+  const dot = (a: number[], b: number[]) => {
+    const l = Math.hypot(b[0], b[1], b[2]);
+    return (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / l;
+  };
+  const cases: [string, "left" | "right", [number, number, number]][] = [
+    ["wave", "right", [0, 0, 1]],
+    ["think", "right", [0.2, 0, -1]],
+    ["clap", "right", [1, 0, -0.1]],
+    ["clap", "left", [-1, 0, -0.1]],
+    ["shrug", "right", [-0.2, 1, 0.1]],
+    ["facepalm", "right", [0.15, -0.2, -1]],
+  ];
+  for (const [name, side, want] of cases) {
+    const key = GESTURES[name].keys[Math.floor(GESTURES[name].keys.length / 2)];
+    const palm = palmOf(side, key.pose.bones);
+    assert.ok(dot(palm, want) > 0.85, `${name} ${side}: palm ${palm.map((x) => x.toFixed(2))}`);
+  }
+  // The palm's turn doesn't move where the forearm points
   const plain = arm("right", [-0.9, 0.2, 0.35], [-0.2, 0.95, 0.2]);
-  const twisted = arm("right", [-0.9, 0.2, 0.35], [-0.2, 0.95, 0.2], undefined, 90);
-  const palm = (bones: typeof plain) => rotate(qmul(fromEuler(bones.rightUpperArm!), fromEuler(bones.rightLowerArm!)), [0, -1, 0]);
-  assert.ok(palm(plain)[2] < 0.5, "without the twist the palm faces sideways");
-  assert.ok(palm(twisted)[2] > 0.8, `with it, toward the viewer: ${palm(twisted)}`);
-  // The twist doesn't move where the forearm points
+  const turned = arm("right", [-0.9, 0.2, 0.35], [-0.2, 0.95, 0.2], undefined, [0, 0, 1]);
   const dir = (bones: typeof plain) => rotate(qmul(fromEuler(bones.rightUpperArm!), fromEuler(bones.rightLowerArm!)), [-1, 0, 0]);
-  assert.ok(close(dir(plain), dir(twisted)));
+  assert.ok(close(dir(plain), dir(turned)));
   assert.ok(thumb("right", 30).rightThumbProximal![1] < 0 && thumb("left", 30).leftThumbProximal![1] > 0, "mirrored");
   assert.equal(Object.keys(hand("left", 20, 10)).length, 15, "four fingers x three joints, plus the thumb's three");
+});
+
+test("the head follows the gaze more when it is up, and less while reading", () => {
+  const level = headFollow(0, false);
+  const up = headFollow(-1, false);
+  const down = headFollow(1, false);
+  assert.ok(up.pitch > level.pitch + 0.4 && up.yaw > level.yaw, "up, up-left, up-right: the face turns more");
+  assert.deepEqual(down, level, "down: as usual");
+  assert.ok(headFollow(0, true).pitch < level.pitch);
 });
 
 test("the resting pose breathes and keeps the arms down; flying leans the body", () => {
@@ -92,6 +115,42 @@ test("gestures: keys interpolated, a fade in and out, nothing after the end; eve
   assert.ok(sampleGesture(nod, nod.ms - 10)!.weight < 0.2, "fades out at the end");
   const hop = sampleGesture(GESTURES.hop, GESTURES.hop.ms * 0.45)!;
   assert.ok(hop.pose.hipsY! > 0.05, "in the air");
+});
+
+test("no jerks: every gesture moves each bone a little per frame over the resting pose; a replaced one fades", () => {
+  const angle = (a: Euler, b: Euler) => {
+    const qa = fromEuler(a);
+    const qb = fromEuler(b);
+    const d = Math.abs(qa[0] * qb[0] + qa[1] * qb[1] + qa[2] * qb[2] + qa[3] * qb[3]);
+    return (2 * Math.acos(Math.min(1, d)) * 180) / Math.PI;
+  };
+  // What the avatar shows: the resting pose with the gesture slerped over it by its weight
+  const rest = idlePose({ t: 0, energy: 1, head: [0, 0, 0], lean: 0, shoulders: 0, talk: 0, tremble: 0, travel: { vx: 0, vy: 0 }, seed: 1 }).bones;
+  const shown = (name: string, ms: number) => {
+    const s = sampleGesture(GESTURES[name], ms);
+    const out: Record<string, Euler> = {};
+    if (!s) return out;
+    for (const [bone, e] of Object.entries(s.pose.bones)) out[bone] = toEuler(qslerp(fromEuler(rest[bone] ?? [0, 0, 0]), fromEuler(e!), s.weight));
+    return out;
+  };
+  for (const [name, def] of Object.entries(GESTURES)) {
+    let prev = shown(name, 0);
+    for (let ms = 16; ms <= def.ms; ms += 16) {
+      const cur = shown(name, ms);
+      for (const [bone, e] of Object.entries(cur)) {
+        const before = prev[bone];
+        if (before) assert.ok(angle(before, e) < 14, `${name}: ${bone} turns ${angle(before, e).toFixed(1)} degrees in one frame at ${ms} ms`);
+      }
+      prev = cur;
+    }
+  }
+  assert.equal(replacedWeight(undefined, 1000), 1);
+  assert.equal(replacedWeight(1000, 1000), 1);
+  assert.ok(replacedWeight(1000, 1000 + REPLACED_FADE_MS / 2) > 0.3 && replacedWeight(1000, 1000 + REPLACED_FADE_MS / 2) < 0.7);
+  assert.equal(replacedWeight(1000, 1000 + REPLACED_FADE_MS), 0);
+  // The short way round
+  const half = qslerp(fromEuler([0, 0, 170]), fromEuler([0, 0, -170]), 0.5);
+  assert.ok(angle(toEuler(half), [0, 0, 180]) < 0.5);
 });
 
 test("mirroring swaps left and right and flips Y and Z rotations", () => {

@@ -38,15 +38,14 @@ import type { FaceView } from "../faceView";
 import { loadClip } from "./clipFiles";
 import { bustSpan } from "./framing";
 import { avatarExpression, VISEMES, visemes, VRM_EMOTIONS, type AvatarExpression } from "./expressions3d";
-import { clipWeight, GESTURES, HANDED, idlePose, mirrorGesture, sampleGesture, type BonePose, type Euler, type GestureDef } from "./pose";
+import { clipWeight, GESTURES, HANDED, headFollow, idlePose, replacedWeight, mirrorGesture, sampleGesture, type BonePose, type Euler, type GestureDef } from "./pose";
 
 /** Eyes turn up to this far (degrees) at the gaze's full offset; the head takes a share of it. */
-/** The head turns up to this far (degrees) at the gaze's full offset; the eyes use their own full range. */
+/** The head turns up to this far (degrees) at the gaze's full offset, times its share (headFollow); the eyes use their own full range. */
 const HEAD_YAW = 28;
-const HEAD_PITCH = 18;
-/** How much of the gaze the head follows: less while reading or following the caret (the eyes do it). */
-const HEAD_SHARE = 0.28;
-const HEAD_SHARE_READING = 0.12;
+const HEAD_PITCH = 22;
+/** The head catches up with where the eyes look with this time constant (ms): the eyes jump, the head turns. */
+const HEAD_TAU = 320;
 /** Expression weights ease with this time constant (ms). */
 const FACE_TAU = 110;
 const TRANSIT_OUT_MS = 1100;
@@ -55,6 +54,8 @@ const TRANSIT_IN_MS = 1200;
 interface Play {
   name: string;
   start: number;
+  /** Replaced by a newer gesture at this time: it fades out (replacedWeight). */
+  endAt?: number;
   /** Built-in keyframes, or a user clip. */
   def?: GestureDef;
   clip?: { duration: number; tracks: { bone: VRMHumanBoneName; kind: "q" | "p"; interpolant: Interpolant }[] };
@@ -91,6 +92,13 @@ export class Avatar implements FaceView {
   private readonly gaze: GazeController;
   private lastGazeDx = 0;
   private gazeKind: GazeCommand["kind"] = "idle";
+  /** The gaze the head follows (-1..1 each), eased toward the eyes'. */
+  private readonly headLook = { x: 0, y: 0 };
+  private readonly follow = { yaw: 0.28, pitch: 0.28 };
+  /** The speech level the head nods with: much slower than the mouth's. */
+  private headTalk = 0;
+  /** ms of resting motion so far (paused by a shock). */
+  private idleClock = 0;
   /** VRoid's separate brow/eye/mouth morphs per emotion, when the model has them. */
   private split: SplitFaces | null = null;
   /** 0..1: how much Lumi is talking now (eased): the emotion's own mouth gives way to the vowels. */
@@ -328,8 +336,13 @@ export class Avatar implements FaceView {
   }
 
   private start(play: Play): void {
-    // The same gesture restarts; at most two play at once (the old one fades under the new)
-    this.plays = [...this.plays.filter((p) => p.name !== play.name).slice(-1), play];
+    // A gesture that restarts, or the oldest of three, fades out under the new one: dropping it would snap the pose
+    const now = performance.now();
+    const live = this.plays.filter((p) => p.endAt === undefined);
+    for (const p of live) if (p.name === play.name) p.endAt = now;
+    const still = live.filter((p) => p.endAt === undefined);
+    if (still.length >= 2) still[0].endAt = now;
+    this.plays = [...this.plays.filter((p) => replacedWeight(p.endAt, now) > 0), play];
   }
 
   /** One-handed gestures use the hand on the side of the screen's center (where Lumi looks, roughly). */
@@ -396,9 +409,11 @@ export class Avatar implements FaceView {
     this.ease(dt);
     const vrm = this.vrm;
     if (vrm) {
-      this.pose(vrm, now);
+      this.pose(vrm, now, dt);
       this.expressions(vrm, now, dt);
-      vrm.update(dt / 1000);
+      // A long frame (the PC stalled) in one step makes the spring bones (hair, clothes) jump: split it
+      const steps = Math.ceil(dt / 34);
+      for (let i = 0; i < steps; i++) vrm.update(dt / steps / 1000);
       this.splitFaces();
     }
     this.updateTransit(now);
@@ -431,21 +446,24 @@ export class Avatar implements FaceView {
     }
   }
 
-  private pose(vrm: VRM, now: number): void {
+  private pose(vrm: VRM, now: number, dt: number): void {
     const humanoid = vrm.humanoid;
     const frozen = now < this.frozenUntil;
+    // The resting motion has its own clock: a shock pauses it, and it resumes where it stopped
+    if (!frozen) this.idleClock += dt;
+    this.headTalk += (this.level - this.headTalk) * (1 - Math.exp(-dt / 220));
     const look = this.gaze.output(now);
     const gx = Math.max(-1, Math.min(1, look.x / MAX_OFFSET_X));
     const gy = Math.max(-1, Math.min(1, look.y / MAX_OFFSET_Y));
     const glare = now < this.glareUntil ? Math.sin(((this.glareUntil - now) / 1600) * Math.PI) : 0;
     const p = this.posture;
     const idle = idlePose({
-      t: frozen ? this.frozenUntil : now,
+      t: this.idleClock,
       energy: p.energy,
       head: [p.head[0], p.head[1] - this.glareSide * 18 * glare, p.head[2]],
       lean: p.lean,
       shoulders: p.shoulders + (frozen ? 8 : 0),
-      talk: this.level,
+      talk: this.headTalk,
       tremble: p.tremble,
       travel: this.motion,
       seed: this.seed,
@@ -463,15 +481,17 @@ export class Avatar implements FaceView {
     // Gestures over it, oldest first
     this.plays = this.plays.filter((play) => {
       const ms = now - play.start;
+      const left = replacedWeight(play.endAt, now);
+      if (left <= 0) return false;
       if (play.def) {
         const s = sampleGesture(play.def, ms);
         if (!s) return false;
-        this.blend(result, s.pose, s.weight);
-        if (s.pose.hipsY !== undefined) hipsY += s.pose.hipsY * s.weight;
+        this.blend(result, s.pose, s.weight * left);
+        if (s.pose.hipsY !== undefined) hipsY += s.pose.hipsY * s.weight * left;
         return true;
       }
       const clip = play.clip!;
-      const w = clipWeight(clip.duration, ms);
+      const w = clipWeight(clip.duration, ms) * left;
       if (ms > clip.duration) return false;
       const time = Math.min(clip.duration, ms) / 1000;
       for (const track of clip.tracks) {
@@ -486,12 +506,20 @@ export class Avatar implements FaceView {
       return true;
     });
 
-    // The gaze: part on the neck and head, the rest to the eyes
-    // The head follows part of the gaze (its pitch + = up); the eyes go all the way (VRMLookAt maps its input range,
-    // 90 degrees on VRoid models, onto the eyes' few degrees: the full input = the full eye range)
-    const share = this.gazeKind === "reading" || this.gazeKind === "caret" || this.gazeKind === "text" ? HEAD_SHARE_READING : HEAD_SHARE;
-    const yaw = gx * HEAD_YAW * share;
-    const pitch = -gy * HEAD_PITCH * share;
+    // The gaze: the eyes go there at once and all the way (VRMLookAt maps its input range, 90 degrees
+    // on VRoid models, onto the eyes' few degrees); the head follows part of it, more slowly, and more
+    // when the target is up (headFollow). Its pitch + = up.
+    const ease = 1 - Math.exp(-dt / HEAD_TAU);
+    this.headLook.x += (gx - this.headLook.x) * ease;
+    this.headLook.y += (gy - this.headLook.y) * ease;
+    const reading = this.gazeKind === "reading" || this.gazeKind === "caret" || this.gazeKind === "text";
+    // The head's share changes smoothly too (reading -> mouse used to snap the head by a few degrees)
+    const target = headFollow(this.headLook.y, reading);
+    this.follow.yaw += (target.yaw - this.follow.yaw) * ease;
+    this.follow.pitch += (target.pitch - this.follow.pitch) * ease;
+    const follow = this.follow;
+    const yaw = this.headLook.x * HEAD_YAW * follow.yaw;
+    const pitch = -this.headLook.y * HEAD_PITCH * follow.pitch;
     const head = result.get("head");
     const neck = result.get("neck");
     if (head) head.multiply(quat([-pitch * 0.6, yaw * 0.6, 0], tmpQ));
@@ -500,7 +528,8 @@ export class Avatar implements FaceView {
       const range = eyeRange(vrm);
       vrm.lookAt.yaw = gx * range.yaw;
       // VRMLookAt's pitch grows downward on the eyes (checked on the model): gaze y is + down too
-      vrm.lookAt.pitch = gy * range.pitch;
+      // (a head raised toward a high target leaves the eyes less to do)
+      vrm.lookAt.pitch = gy * range.pitch * (gy < 0 ? 1 - 0.35 * Math.min(1, -this.headLook.y) : 1);
     }
 
     for (const [name, q] of result) humanoid.getNormalizedBoneNode(name)?.quaternion.copy(q);

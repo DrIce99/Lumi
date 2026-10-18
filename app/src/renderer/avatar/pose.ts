@@ -109,24 +109,77 @@ export function axisAngle(axis: Vec, deg: number): Quat {
   return [axis[0] * s, axis[1] * s, axis[2] * s, Math.cos(h)];
 }
 
+/** Spherical interpolation from a to b by t, the short way. */
+export function qslerp(a: Quat, b: Quat, t: number): Quat {
+  let [bx, by, bz, bw] = b;
+  let cos = a[0] * bx + a[1] * by + a[2] * bz + a[3] * bw;
+  if (cos < 0) {
+    cos = -cos;
+    bx = -bx;
+    by = -by;
+    bz = -bz;
+    bw = -bw;
+  }
+  let ka = 1 - t;
+  let kb = t;
+  if (cos < 0.9995) {
+    const angle = Math.acos(cos);
+    const sin = Math.sin(angle);
+    ka = Math.sin((1 - t) * angle) / sin;
+    kb = Math.sin(t * angle) / sin;
+  }
+  const q: Quat = [a[0] * ka + bx * kb, a[1] * ka + by * kb, a[2] * ka + bz * kb, a[3] * ka + bw * kb];
+  const l = Math.hypot(...q);
+  return [q[0] / l, q[1] / l, q[2] / l, q[3] / l];
+}
+
 /** Rotates v by q. */
 export function rotate(q: Quat, v: Vec): Vec {
   const r = qmul(qmul(q, [v[0], v[1], v[2], 0]), conj(q));
   return [r[0], r[1], r[2]];
 }
 
+/** In the T-pose (the bones' rest) both palms face down. */
+const REST_PALM: Vec = [0, -1, 0];
+
+/**
+ * The forearm's world rotation pointing it along `lower` and turned about
+ * its own axis so the palm faces `palm` as closely as it can (searched in
+ * 5 degree steps: an analytic twist got the sign wrong for some poses).
+ */
+export function forearmFacing(side: "left" | "right", lower: Vec, palm: Vec): Quat {
+  const rest: Vec = side === "left" ? [1, 0, 0] : [-1, 0, 0];
+  const swing = fromUnitVectors(rest, norm(lower));
+  const want = norm(palm);
+  let best = swing;
+  let score = -Infinity;
+  for (let deg = 0; deg < 360; deg += 5) {
+    const q = qmul(swing, axisAngle([1, 0, 0], deg));
+    const p = rotate(q, REST_PALM);
+    const d = p[0] * want[0] + p[1] * want[1] + p[2] * want[2];
+    if (d > score) {
+      score = d;
+      best = q;
+    }
+  }
+  return best;
+}
+
+/** Where the palm of a posed arm faces (model space), for the tests and for checking poses. */
+export function palmOf(side: "left" | "right", bones: Partial<Record<string, Euler>>): Vec {
+  return rotate(qmul(fromEuler(bones[`${side}UpperArm`]!), fromEuler(bones[`${side}LowerArm`]!)), REST_PALM);
+}
+
 /**
  * One arm posed by where its parts point (model space: +X the model's left =
  * the viewer's right, +Y up, +Z toward the viewer): the upper arm along
- * `upper`, the forearm along `lower`; `twist` turns the forearm about its
- * own axis (degrees, positive = the palm turns toward the viewer for the
- * right arm raised, mirrored for the left), `hand` adds a wrist rotation.
+ * `upper`, the forearm along `lower`, the palm facing `palm` when given
+ * (the forearm turns about its own axis for it); `hand` adds a wrist rotation.
  */
-export function arm(side: "left" | "right", upper: Vec, lower: Vec, hand?: Euler, twist = 0): Partial<Record<string, Euler>> {
+export function arm(side: "left" | "right", upper: Vec, lower: Vec, hand?: Euler, palm?: Vec): Partial<Record<string, Euler>> {
   const rest: Vec = side === "left" ? [1, 0, 0] : [-1, 0, 0];
   const qu = fromUnitVectors(rest, norm(upper));
-  // The twist turns the forearm about its own axis before it swings into place
-  const ql = qmul(fromUnitVectors(rest, norm(lower)), axisAngle([1, 0, 0], side === "left" ? twist : -twist));
+  const ql = palm ? forearmFacing(side, lower, palm) : fromUnitVectors(rest, norm(lower));
   const out: Partial<Record<string, Euler>> = {
     [`${side}UpperArm`]: toEuler(qu),
     // The forearm's rotation is relative to the upper arm
@@ -137,16 +190,17 @@ export function arm(side: "left" | "right", upper: Vec, lower: Vec, hand?: Euler
 }
 
 /** Both arms, the left one mirrored from the right one's directions. */
-export function arms(upper: Vec, lower: Vec, hand?: Euler, twist = 0): Partial<Record<string, Euler>> {
+export function arms(upper: Vec, lower: Vec, hand?: Euler, palm?: Vec): Partial<Record<string, Euler>> {
   return {
-    ...arm("right", upper, lower, hand, twist),
-    ...arm("left", [-upper[0], upper[1], upper[2]], [-lower[0], lower[1], lower[2]], hand ? [hand[0], -hand[1], -hand[2]] : undefined, twist),
+    ...arm("right", upper, lower, hand, palm),
+    ...arm("left", [-upper[0], upper[1], upper[2]], [-lower[0], lower[1], lower[2]], hand ? [hand[0], -hand[1], -hand[2]] : undefined, palm ? [-palm[0], palm[1], palm[2]] : undefined),
   };
 }
 
 /** Arms relaxed at the sides (an A-pose with the elbows a little bent), fingers softly curled. */
 export const REST_ARMS: Partial<Record<string, Euler>> = {
-  ...arms([-0.27, -0.96, 0.06], [-0.14, -0.95, 0.27], [0, 0, 4]),
+  // Palms toward the thighs
+  ...arms([-0.27, -0.96, 0.06], [-0.14, -0.95, 0.27], [0, 0, 4], [1, 0, 0.15]),
   ...hand("left", 14, 20),
   ...hand("right", 14, 20),
 };
@@ -188,7 +242,8 @@ export function idlePose(p: IdleInput): BonePose {
   const sway = wander(t, p.seed, 0.35 * e);
   const drift = (k: number, speed: number) => wander(t, p.seed + k, speed);
   const tremble = p.tremble ? p.tremble * Math.sin(t / 19) * Math.sin(t / 31) : 0;
-  const nod = p.talk * (0.6 + 0.4 * drift(9, 2.2));
+  // `talk` arrives smoothed (avatar.ts): the head follows the phrase, not each syllable
+  const nod = p.talk * (0.6 + 0.4 * drift(9, 1.2));
   const bones: Partial<Record<string, Euler>> = { ...REST_ARMS };
   bones.spine = [p.lean * 0.5 + breath * 0.6 + p.travel.vy * 4, sway * 1.2 * e, -sway * 1.5 * e - p.travel.vx * 6];
   bones.chest = [p.lean * 0.3 + breath * 0.9, 0, sway * 0.8 * e];
@@ -198,7 +253,7 @@ export function idlePose(p: IdleInput): BonePose {
   bones.rightShoulder = [0, 0, -sh];
   bones.neck = [p.head[0] * 0.3 + drift(3, 0.5) * 1.2, p.head[1] * 0.3 + drift(4, 0.4) * 2 * e, p.head[2] * 0.3];
   bones.head = [
-    p.head[0] * 0.7 + drift(5, 0.6) * 1.5 + nod * 4 + tremble * 2,
+    p.head[0] * 0.7 + drift(5, 0.6) * 1.5 + nod * 2.5 + tremble * 2,
     p.head[1] * 0.7 + drift(6, 0.45) * 3 * e,
     p.head[2] * 0.7 + drift(7, 0.3) * 2 * e + sway * 1.5,
   ];
@@ -216,6 +271,18 @@ export function idlePose(p: IdleInput): BonePose {
   bones.leftUpperArm = [arm[0], arm[1], arm[2] - sway * 1.5 - p.travel.vx * 8 + tremble * 2];
   bones.rightUpperArm = [-arm[0], -arm[1], -arm[2] - sway * 1.5 - p.travel.vx * 8 - tremble * 2];
   return { bones, hipsY: breath * 0.002 };
+}
+
+/**
+ * How much of the gaze the head follows, for yaw and pitch: about a quarter
+ * (less while reading or following the caret: the eyes scan the lines), and
+ * more when the target is up (`gy` < 0, the gaze's -1..1 with + down): up,
+ * up-left and up-right turn the face toward it.
+ */
+export function headFollow(gy: number, reading: boolean): { yaw: number; pitch: number } {
+  const base = reading ? 0.12 : 0.28;
+  const up = Math.min(1, Math.max(0, -gy));
+  return { yaw: base + 0.3 * up, pitch: base + 0.5 * up };
 }
 
 // ---------------- gestures ----------------
@@ -253,18 +320,20 @@ export function mirrorGesture(def: GestureDef): GestureDef {
 
 // Right-handed gestures (the viewer sees them on the left); the one-handed ones are mirrored toward the screen's center
 const WAVE_UP = [-0.9, 0.2, 0.35] as const;
-const wave = (lower: [number, number, number]) => ({ ...arm("right", [...WAVE_UP], lower, [0, 0, 0], 90), ...hand("right", 4, 6) });
+// Palms: wave toward the viewer, think on the chin, the other arm palm up under the elbow
+const wave = (lower: [number, number, number]) => ({ ...arm("right", [...WAVE_UP], lower, [0, 0, 0], [0, 0, 1]), ...hand("right", 4, 6) });
 const THINK = {
-  ...arm("right", [-0.12, -0.72, 0.68], [0.42, 0.86, 0.28], [0, 0, -20]),
-  ...arm("left", [0.15, -0.85, 0.5], [-0.82, -0.05, 0.56]),
+  ...arm("right", [-0.12, -0.72, 0.68], [0.42, 0.86, 0.28], [0, 0, -20], [0.2, 0, -1]),
+  ...arm("left", [0.15, -0.85, 0.5], [-0.82, -0.05, 0.56], undefined, [0, 1, 0]),
   head: [-4, 4, 9] as Euler,
   ...hand("right", 40, 15),
   ...fingers("right", 25, ["Index"]),
   ...hand("left", 20, 15),
 };
 const CROSS = {
-  ...arm("right", [-0.2, -0.66, 0.72], [0.72, 0.3, 0.62]),
-  ...arm("left", [0.2, -0.68, 0.7], [-0.72, 0.2, 0.66]),
+  // Hands on the other arm, palms toward the body
+  ...arm("right", [-0.2, -0.66, 0.72], [0.72, 0.3, 0.62], undefined, [0, -0.6, -0.8]),
+  ...arm("left", [0.2, -0.68, 0.7], [-0.72, 0.2, 0.66], undefined, [0, -0.6, -0.8]),
   ...hand("left", 40, 25),
   ...hand("right", 40, 25),
   head: [-3, -6, 0] as Euler,
@@ -272,19 +341,22 @@ const CROSS = {
 const SHRUG = {
   leftShoulder: [0, 0, 10] as Euler,
   rightShoulder: [0, 0, -10] as Euler,
-  ...arms([-0.33, -0.93, 0.12], [-0.6, -0.05, 0.8], undefined, 160),
+  ...arms([-0.33, -0.93, 0.12], [-0.6, -0.05, 0.8], undefined, [-0.2, 1, 0.1]),
   ...hand("left", 8, 0),
   ...hand("right", 8, 0),
   head: [-2, 0, 9] as Euler,
 };
 const FISTS = { ...hand("left", 85, 75), ...hand("right", 85, 75) };
-const CHEER_UP = { ...arms([-0.45, 0.86, 0.22], [-0.18, 0.97, 0.15], undefined, 90), head: [-8, 0, 0] as Euler, ...FISTS };
-const CHEER_PUMP = { ...CHEER_UP, ...arms([-0.62, 0.72, 0.3], [-0.3, 0.93, 0.2], undefined, 90) };
+// Fists with the palms toward the viewer and a little inward
+const CHEER_UP = { ...arms([-0.45, 0.86, 0.22], [-0.18, 0.97, 0.15], undefined, [0.4, 0, 1]), head: [-8, 0, 0] as Euler, ...FISTS };
+const CHEER_PUMP = { ...CHEER_UP, ...arms([-0.62, 0.72, 0.3], [-0.3, 0.93, 0.2], undefined, [0.4, 0, 1]) };
 const OPEN_HANDS = { ...hand("left", 6, 5), ...hand("right", 6, 5) };
-const CLAP_OPEN = { ...arms([-0.1, -0.66, 0.74], [0.18, 0.35, 0.92], undefined, 90), ...OPEN_HANDS };
-const CLAP_SHUT = { ...arms([-0.1, -0.66, 0.74], [0.46, 0.35, 0.82], undefined, 90), ...OPEN_HANDS };
-const FACEPALM = { ...arm("right", [-0.08, -0.55, 0.83], [0.2, 0.95, 0.25], [0, 0, -15]), ...hand("right", 12, 10), head: [14, -4, 0] as Euler, neck: [6, 0, 0] as Euler };
-const POINT = { ...arm("right", [-0.72, -0.1, 0.68], [-0.72, 0, 0.7]), ...fingers("right", 80, ["Middle", "Ring", "Little"]), ...fingers("right", 0, ["Index"]), ...thumb("right", 40), head: [0, -12, 0] as Euler };
+// Palms facing each other
+const CLAP_OPEN = { ...arms([-0.1, -0.66, 0.74], [0.18, 0.35, 0.92], undefined, [1, 0, -0.1]), ...OPEN_HANDS };
+const CLAP_SHUT = { ...arms([-0.1, -0.66, 0.74], [0.46, 0.35, 0.82], undefined, [1, 0, -0.1]), ...OPEN_HANDS };
+// The palm on the face
+const FACEPALM = { ...arm("right", [-0.08, -0.55, 0.83], [0.2, 0.95, 0.25], [0, 0, -15], [0.15, -0.2, -1]), ...hand("right", 12, 10), head: [14, -4, 0] as Euler, neck: [6, 0, 0] as Euler };
+const POINT = { ...arm("right", [-0.72, -0.1, 0.68], [-0.72, 0, 0.7], undefined, [0, -1, 0]), ...fingers("right", 80, ["Middle", "Ring", "Little"]), ...fingers("right", 0, ["Index"]), ...thumb("right", 40), head: [0, -12, 0] as Euler };
 
 export const GESTURES: Record<string, GestureDef> = {
   wave: {
@@ -326,7 +398,7 @@ export const GESTURES: Record<string, GestureDef> = {
       k(1, { spine: [0, 0, 0], chest: [0, 0, 0], head: [0, 0, 0] }),
     ],
   },
-  cheer: { ms: 1600, fadeIn: 200, fadeOut: 400, keys: [k(0, CHEER_UP), k(0.3, CHEER_PUMP), k(0.55, CHEER_UP), k(0.8, CHEER_PUMP), k(1, CHEER_UP)] },
+  cheer: { ms: 1800, fadeIn: 400, fadeOut: 450, keys: [k(0, CHEER_UP), k(0.3, CHEER_PUMP), k(0.55, CHEER_UP), k(0.8, CHEER_PUMP), k(1, CHEER_UP)] },
   clap: { ms: 1700, fadeIn: 250, fadeOut: 350, keys: [k(0, CLAP_OPEN), k(0.15, CLAP_SHUT), k(0.3, CLAP_OPEN), k(0.45, CLAP_SHUT), k(0.6, CLAP_OPEN), k(0.75, CLAP_SHUT), k(1, CLAP_OPEN)] },
   facepalm: { ms: 2000, fadeIn: 350, fadeOut: 450, keys: [k(0, FACEPALM), k(1, FACEPALM)] },
   cross_arms: { ms: 3500, fadeIn: 450, fadeOut: 550, keys: [k(0, CROSS), k(1, CROSS)] },
@@ -367,13 +439,23 @@ export function sampleGesture(def: GestureDef, ms: number): { pose: BonePose; we
   for (const name of new Set([...Object.keys(a.pose.bones), ...Object.keys(b.pose.bones)])) {
     const ea = a.pose.bones[name] ?? b.pose.bones[name]!;
     const eb = b.pose.bones[name] ?? ea;
-    bones[name] = [ea[0] + (eb[0] - ea[0]) * f, ea[1] + (eb[1] - ea[1]) * f, ea[2] + (eb[2] - ea[2]) * f];
+    // Between keys the rotation itself is interpolated, not its three angles (they can take a long way round)
+    bones[name] = toEuler(qslerp(fromEuler(ea), fromEuler(eb), f));
   }
   const ha = a.pose.hipsY;
   const hb = b.pose.hipsY ?? ha;
   const pose: BonePose = { bones, ...(ha !== undefined ? { hipsY: ha + ((hb ?? ha) - ha) * f } : {}) };
   const weight = Math.min(1, ms / Math.max(1, def.fadeIn), (def.ms - ms) / Math.max(1, def.fadeOut));
   return { pose, weight: smooth(Math.max(0, weight)) };
+}
+
+/** A gesture replaced by another fades out over this long instead of vanishing. */
+export const REPLACED_FADE_MS = 220;
+
+/** The weight left to a gesture replaced at `endAt` (1 while it isn't), 0 once its fade is over. */
+export function replacedWeight(endAt: number | undefined, now: number): number {
+  if (endAt === undefined) return 1;
+  return smooth(Math.max(0, 1 - (now - endAt) / REPLACED_FADE_MS));
 }
 
 /** Blend weight of a clip of `durationMs` at `ms` with the given fades (user clips). */
