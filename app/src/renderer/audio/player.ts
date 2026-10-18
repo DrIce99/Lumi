@@ -48,6 +48,7 @@ export class Player {
   private readonly queue: Utterance[] = [];
   private nextFree = 0;
   private readonly samples = new Float32Array(1024);
+  private readonly spectrum = new Float32Array(512);
 
   /** `destination`: where the voice goes instead of the speakers (the phone bridge's outgoing track). */
   constructor(
@@ -132,6 +133,25 @@ export class Player {
     if (!this.analyser || !this.active) return 0;
     this.analyser.getFloatTimeDomainData(this.samples);
     return rms(this.samples);
+  }
+
+  /**
+   * How bright the voice sounds now, 0..1, for the lip sync's vowels: the
+   * share of its energy above 1.5 kHz, times 3 (an "i" puts about a third of
+   * it up there through its second formant, an "a" a tenth, an "u" almost none).
+   */
+  brightness(): number {
+    if (!this.analyser || !this.ctx || !this.active) return 0.4;
+    this.analyser.getFloatFrequencyData(this.spectrum);
+    const hz = this.ctx.sampleRate / this.analyser.fftSize;
+    let low = 0;
+    let high = 0;
+    for (let i = Math.floor(150 / hz); i < Math.min(this.spectrum.length, Math.ceil(5000 / hz)); i++) {
+      const power = 10 ** (this.spectrum[i] / 10);
+      if (i * hz < 1500) low += power;
+      else high += power;
+    }
+    return low + high > 0 ? Math.min(1, (3 * high) / (low + high)) : 0.4;
   }
 
   private ensure(): AudioContext {

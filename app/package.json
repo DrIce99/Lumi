@@ -26,13 +26,17 @@
     "ws": "8.22.0"
   },
   "devDependencies": {
+    "@pixiv/three-vrm": "^3.5.5",
+    "@pixiv/three-vrm-animation": "^3.5.5",
     "@ricky0123/vad-web": "^0.0.31",
     "@types/node": "^24.0.0",
     "@types/qrcode": "1.5.6",
+    "@types/three": "^0.186.0",
     "@types/ws": "8.18.2",
     "electron": "^44.7.0",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",
+    "three": "^0.186.1",
     "typescript": "^7.0.2"
   },
   "build": {

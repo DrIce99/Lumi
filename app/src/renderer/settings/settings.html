@@ -62,6 +62,21 @@
           </select>
         </label>
         <div class="card">
+          <h2>Aspetto</h2>
+          <label class="check"><input id="face3d" type="checkbox" /> Lumi in 3D: un avatar a figura intera che respira, parla muovendo le labbra e fa gesti (spenta: i due occhi minimali)</label>
+          <div id="face3dOptions">
+            <label class="field">
+              <span>Modello 3D (facoltativo)</span>
+              <div class="row">
+                <input id="faceModel" type="text" maxlength="400" placeholder="Vuoto: la Lumi inclusa (Lumi.vrm)" />
+                <button id="pickModel" type="button">Scegli…</button>
+              </div>
+              <small class="hint">Un file <code>.vrm</code> (VRoid Studio e simili).</small>
+            </label>
+            <p id="avatarClips" class="hint"></p>
+          </div>
+        </div>
+        <div class="card">
           <h2>Umore del giorno</h2>
           <label class="check"><input id="moodEnabled" type="checkbox" /> Ogni mattina si sveglia con un umore suo, che colora le risposte e gli occhi. Se è giù di corda può tornare di buon umore solo grazie a te (e può anche peggiorare)</label>
           <p id="moodToday" class="hint"></p>

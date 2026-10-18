@@ -383,7 +383,7 @@ function faceLayout(): FaceLayout {
   const scale = Math.max(1.5, Math.min(3.2, (w * 0.8) / FACE_WIDTH, (h * 0.6) / FACE_HEIGHT));
   const fw = FACE_WIDTH * scale;
   const fh = FACE_HEIGHT * scale;
-  return { scale, color: faceColor, face: { x: (w - fw) / 2, y: (h - fh) / 2.3, width: fw, height: fh }, windowWidth: w, windowHeight: h, overlay: "below" };
+  return { mode: "minimal", scale, color: faceColor, face: { x: (w - fw) / 2, y: (h - fh) / 2.3, width: fw, height: fh }, windowWidth: w, windowHeight: h, overlay: "below" };
 }
 
 /** Where Lumi enters and leaves the phone: the top edge, above the eyes. */

@@ -29,6 +29,8 @@ export interface SayCall {
   emotion: Emotion;
   intensity: number;
   look?: string;
+  /** A body gesture with the first sentence (shared/gestures.ts). */
+  gesture?: string;
 }
 
 /** Where one moment's speech goes: the voice, or a bubble. */
@@ -636,5 +638,5 @@ export class Brain {
 }
 
 function toSay(call: Extract<ToolCall, { name: "say" }>): SayCall {
-  return { text: call.text, emotion: call.emotion, intensity: call.intensity, ...(call.look ? { look: call.look } : {}) };
+  return { text: call.text, emotion: call.emotion, intensity: call.intensity, ...(call.look ? { look: call.look } : {}), ...(call.gesture ? { gesture: call.gesture } : {}) };
 }

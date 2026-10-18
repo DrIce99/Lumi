@@ -3,6 +3,7 @@
 // values that don't match the schema.
 import { clampIntensity, EMOTIONS, guessEmotion, toEmotion, type Emotion } from "../../shared/emotions";
 import { DAY_MOODS, isDayMood, type DayMoodId } from "../../shared/dayMood";
+import { BODY_GESTURES, gestureId } from "../../shared/gestures";
 import { FACT_KINDS, type FactKind } from "../../shared/types";
 import { STYLES, type MoveStyle } from "../motion/path";
 import { PLACES, type Place } from "../motion/places";
@@ -36,6 +37,10 @@ export const TOOLS: ToolSpec[] = [
         look: {
           type: "string",
           description: "Optional: a short piece of text visible on the user's screen (a word, a line, a button label) that you are talking about. Your eyes will look at it while you speak.",
+        },
+        gesture: {
+          type: "string",
+          description: `Optional, only when your body is shown (see "Your body"): one gesture that goes with this sentence, e.g. ${BODY_GESTURES.slice(0, 6).join(", ")}. Leave it out most of the time.`,
         },
         text: {
           type: "string",
@@ -230,7 +235,7 @@ export const TOOLS: ToolSpec[] = [
 ];
 
 export type ToolCall =
-  | { name: "say"; text: string; emotion: Emotion; intensity: number; look?: string }
+  | { name: "say"; text: string; emotion: Emotion; intensity: number; look?: string; gesture?: string }
   | { name: "look_at"; text?: string; region?: LookRegion }
   | { name: "look_at_screen"; focus?: string }
   | { name: "remember"; fact: string; kind: FactKind; importance?: number; replaces?: string }
@@ -292,7 +297,8 @@ export function parseToolCall(name: string, input: unknown, now = new Date()): T
       const emotion = toEmotion(o.emotion);
       const guessed = emotion ? null : guessEmotion(value);
       const intensity = guessed && typeof o.intensity !== "number" ? guessed.intensity : clampIntensity(o.intensity);
-      return { name, text: value, emotion: emotion ?? guessed!.emotion, intensity, ...(look ? { look } : {}) };
+      const gesture = gestureId(o.gesture);
+      return { name, text: value, emotion: emotion ?? guessed!.emotion, intensity, ...(look ? { look } : {}), ...(gesture ? { gesture } : {}) };
     }
     case "look_at": {
       const value = text(o.text, 200);

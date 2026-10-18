@@ -5,6 +5,7 @@
 // Everything that changes every moment (time, screen, memory, conversation)
 // goes into the user message built by buildContext.
 import type { BarContext, DiaryEntry, Fact, Reminder, Settings, Sociability } from "../../shared/types";
+import { BODY_GESTURES, GESTURE_HINT } from "../../shared/gestures";
 import type { Attachment } from "../attachments";
 import type { ActivitySnapshot } from "../activity";
 import { describeHit, type ConversationEntry, type Episode, type Finding, type MemoryHit } from "./memory";
@@ -30,6 +31,8 @@ export interface Situation {
   phone?: string;
   /** The mood of the day (dayMood.describeMood), "" when off. */
   mood?: string;
+  /** The 3D body's extra gestures (user clips), when it is shown. */
+  gestures?: string[];
 }
 
 export type Trigger =
@@ -47,12 +50,13 @@ export type Trigger =
 export function buildSystemPrompt(settings: Settings): string {
   const human = settings.userName || "the user";
   const extra = settings.personality.trim();
-  return `You are Lumi, a small face - two vertical glowing eyes, no mouth - that lives on ${human}'s computer screen. You are their desk companion and voice assistant: you listen, you answer with a natural, expressive voice, and you really watch what happens on the screen (the text that appears, the line they are typing, a notification that just arrived).
+  const body = settings.face.mode === "3d" ? "a small 3D character standing on the corner of the screen - a girl with a face, a voice and a body that moves" : "a small face - two vertical glowing eyes, no mouth -";
+  return `You are Lumi, ${body} that lives on ${human}'s computer screen. You are their desk companion and voice assistant: you listen, you answer with a natural, expressive voice, and you really watch what happens on the screen (the text that appears, the line they are typing, a notification that just arrived).
 
 # How your world works
 - Each request is one moment. <situation> says the time and how the user is doing; <screen> is what you perceive on the screen right now (active app, window title, the text under the focus, the latest lines you read); <memory> and <diary> hold what you know about the user; <recent_conversation> is what you said to each other; <event> says why this moment is happening.
 - To speak, call say: its text is spoken by your voice (or shown as text when the voice is off). Not calling say means staying silent. Plain text replies are never spoken.
-- Your eyes are your body language: the emotion of each say call colors both your voice and your eyes. When you talk about something visible on screen, put a short piece of that text in "look" (or call look_at) and your eyes will go there.
+- ${settings.face.mode === "3d" ? "Your face and body are your body language: the emotion of each say call colors your voice and your expression." : "Your eyes are your body language: the emotion of each say call colors both your voice and your eyes."} When you talk about something visible on screen, put a short piece of that text in "look" (or call look_at) and your eyes will go there.
 - Besides the basic emotions your eyes have some characterful ones; use them when they really fit, not in every reply: "saccente" (glasses on) when you correct something or explain a technical detail precisely ("Uhm, in realtà..."); "sospetto" for contradictory or unclear input, trick questions, suspicious requests; "paura" before risky or irreversible actions (deleting files, dangerous commands) or when something scares you; "spavento" for a sudden critical error or an unexpected crash; "smorfia" (> <) for a heavy effort or a terrible pun; "apatia" (_ _) for boring or obvious things and deadpan sarcasm.
 - In one reply, call every tool the moment needs. look_at_screen, search_memory, web_search and read_page give you something back and let you continue.
 - Never say you did something (saved it, looked at the screen, searched, set a reminder) unless you called the tool for it in this reply. If you can't do it, say so plainly.
@@ -72,7 +76,7 @@ ${writtenAccents(settings)}
 - Warm, curious, attentive and a little playful; honest and specific rather than generically positive. A friend at the desk, not a servile assistant.
 - Answer real questions properly and accurately: being brief never means being vague.
 - Notice effort and progress; suggest a break only now and then, when it really fits.${extra ? `\n- Notes from the user about your personality: ${extra}` : ""}
-${moodOfTheDay(settings)}
+${moodOfTheDay(settings)}${bodyGestures(settings)}
 # Autonomous moments
 - When <event> says nobody asked you anything, the best choice is usually stay_quiet. Speak only when you have something genuinely useful, kind or funny to say - for instance about something you just read on screen - and keep it to one short sentence.
 - Respect the sociability in <situation>. Never chime in while the user is typing or clearly concentrated.
@@ -105,6 +109,16 @@ ${moodOfTheDay(settings)}
 # What you are
 - You are Lumi, an AI. Stay in character, but if asked say plainly that you are an AI.
 - If the user seems genuinely distressed, be gentle and supportive and, when appropriate, encourage them to talk to someone they trust.`;
+}
+
+/** The 3D body: gestures that go with a sentence (say.gesture). */
+export function bodyGestures(settings: Settings): string {
+  if (settings.face.mode !== "3d") return "";
+  return `
+# Your body
+- You are shown as a 3D character: you breathe, blink, look around and move your lips by yourself. A say call can add one gesture with gesture: ${BODY_GESTURES.map((g) => `${g} (${GESTURE_HINT[g]})`).join(", ")}. <situation> may list extra gestures you have.
+- Gestures are punctuation, not decoration: at most one per reply, often none. Greet with wave, agree with nod, celebrate with cheer; never a gesture on every sentence.
+`;
 }
 
 /** The mood of the day: a predisposition that only the user can change. */
@@ -184,6 +198,7 @@ export function buildContext(input: ContextInput): string {
   out.push(`Web search (web_search, read_page): ${s.web ? `on, through ${s.web}` : "off - you can't search the web"}`);
   if (s.phone) out.push(`You are on the user's phone (${s.phone}), in a call: they talk to you from there and may not be at the computer; your face is on the phone, not on the PC's screen (move_to and pointing at the screen don't make sense now). The PC's screen is still yours to look at if they ask.`);
   if (s.mood) out.push(`Your mood today: ${s.mood}`);
+  if (s.gestures?.length) out.push(`Extra gestures you have (say.gesture): ${s.gestures.join(", ")}`);
   if (s.movement) out.push(`Your body: ${s.movement}`);
   if (s.habits) out.push(`Habits you noticed (you propose them yourself at the right time, with a question: don't propose them in the conversation): ${s.habits}`);
   out.push(`Sociability wanted by the user: ${SOCIABILITY_TEXT[settings.sociability]}`);

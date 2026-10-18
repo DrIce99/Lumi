@@ -47,6 +47,7 @@ export interface LiveSay {
   emotion?: string;
   intensity?: number;
   look?: string;
+  gesture?: string;
   /** The call's arguments are complete. */
   complete: boolean;
 }

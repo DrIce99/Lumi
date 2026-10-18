@@ -7,6 +7,7 @@ import {
   DEFAULT_SETTINGS,
   DEVICES,
   EMBEDDING_PROVIDERS,
+  FACE_MODES,
   WEB_PROVIDERS,
   LISTEN_MODES,
   OCR_ENGINES,
@@ -223,6 +224,8 @@ export function sanitizeSettings(input: unknown): Settings {
       adaptiveShadow: bool(face.adaptiveShadow, d.face.adaptiveShadow),
       glare: bool(face.glare, d.face.glare),
       showInCaptures: bool(face.showInCaptures, d.face.showInCaptures),
+      mode: oneOf(face.mode, FACE_MODES, d.face.mode),
+      model: /\.vrm$/i.test(str(face.model, "", 400).trim()) ? str(face.model, "", 400).trim() : "",
     },
     perception: {
       enabled: bool(perception.enabled, d.perception.enabled),

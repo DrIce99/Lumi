@@ -7,9 +7,9 @@ import { BrowserWindow, ipcMain, screen, type IpcMainEvent, type Rectangle } fro
 import { join } from "node:path";
 import { IPC } from "../shared/ipc";
 import {
-  FACE_HEIGHT,
-  FACE_WIDTH,
+  FACE_BOX,
   type AudioBegin,
+  type AvatarConfig,
   type AudioChunk,
   type BubbleChunk,
   type BubbleEnd,
@@ -17,6 +17,7 @@ import {
   type FaceContrast,
   type FaceGesture,
   type FaceLayout,
+  type FaceMode,
   type FaceState,
   type GazeCommand,
   type MicControl,
@@ -49,6 +50,8 @@ export class FaceWindow {
   private anchor: Point;
   private scale: number;
   private color: string;
+  private mode: FaceMode;
+  private avatar: AvatarConfig | null = null;
   private layout: FaceLayout;
   private drag: { dx: number; dy: number; timer: NodeJS.Timeout } | null = null;
   private lastContrast: FaceContrast | null = null;
@@ -58,10 +61,11 @@ export class FaceWindow {
 
   constructor(
     private readonly handlers: FaceWindowHandlers,
-    options: { url: string; anchor: Point | null; scale: number; color: string },
+    options: { url: string; anchor: Point | null; scale: number; color: string; mode: FaceMode },
   ) {
     this.scale = options.scale;
     this.color = options.color;
+    this.mode = options.mode;
     this.anchor = this.validAnchor(options.anchor);
     const { bounds, layout } = this.compute();
     this.layout = layout;
@@ -116,6 +120,7 @@ export class FaceWindow {
       });
     on(IPC.ready, () => {
       this.sendLayout();
+      if (this.avatar) this.send(IPC.avatar, this.avatar);
       if (this.lastContrast) this.send(IPC.contrast, this.lastContrast);
       handlers.ready();
     });
@@ -168,7 +173,13 @@ export class FaceWindow {
 
   /** The face's size now (DIP). */
   faceSize(): { width: number; height: number } {
-    return { width: FACE_WIDTH * this.scale, height: FACE_HEIGHT * this.scale };
+    return { width: FACE_BOX[this.mode].width * this.scale, height: FACE_BOX[this.mode].height * this.scale };
+  }
+
+  /** The center of a face whose top-left corner is at `p`. */
+  private centerOf(p: Point): Point {
+    const size = this.faceSize();
+    return { x: Math.round(p.x + size.width / 2), y: Math.round(p.y + size.height / 2) };
   }
 
   /**
@@ -183,7 +194,7 @@ export class FaceWindow {
     if (this.drag) return done(false);
     const to = this.validAnchor(target);
     const from = { ...this.anchor };
-    const displayOf = (p: Point) => screen.getDisplayNearestPoint({ x: Math.round(p.x + (FACE_WIDTH * this.scale) / 2), y: Math.round(p.y + (FACE_HEIGHT * this.scale) / 2) });
+    const displayOf = (p: Point) => screen.getDisplayNearestPoint(this.centerOf(p));
     const a = displayOf(from);
     const b = displayOf(to);
     if (a.id !== b.id && a.scaleFactor !== b.scaleFactor) return this.fadeTo(to, done);
@@ -242,13 +253,29 @@ export class FaceWindow {
     }, 18);
   }
 
-  setAppearance(scale: number, color: string): void {
-    // Keep the face centered on the same point when it grows or shrinks
-    const center = this.faceCenter();
+  setAppearance(scale: number, color: string, mode: FaceMode = this.mode): void {
+    // The face stays centered on the same point when it grows or shrinks; a
+    // new mode keeps the bottom center instead (the avatar stands where the eyes were)
+    const f = this.faceRect();
+    const keep = { x: f.x + f.width / 2, y: mode === this.mode ? f.y + f.height / 2 : f.y + f.height };
     this.scale = scale;
     this.color = color;
-    this.anchor = this.validAnchor({ x: center.x - (FACE_WIDTH * scale) / 2, y: center.y - (FACE_HEIGHT * scale) / 2 });
+    const sameMode = mode === this.mode;
+    this.mode = mode;
+    const size = this.faceSize();
+    this.anchor = this.validAnchor({ x: keep.x - size.width / 2, y: keep.y - (sameMode ? size.height / 2 : size.height) });
     this.applyBounds();
+  }
+
+  /** The 3D avatar's model and clips (re-sent when the renderer reloads). */
+  setAvatar(config: AvatarConfig): void {
+    this.avatar = config;
+    this.send(IPC.avatar, config);
+  }
+
+  /** A body gesture chosen by the brain. */
+  act(gesture: string): void {
+    this.send(IPC.act, gesture);
   }
 
   /** Screens were added, removed or rearranged. */
@@ -369,22 +396,17 @@ export class FaceWindow {
   private validAnchor(anchor: Point | null): Point {
     const fallback = () => {
       const area = screen.getPrimaryDisplay().workArea;
-      return { x: area.x + area.width - FACE_WIDTH * this.scale - 40, y: area.y + area.height - FACE_HEIGHT * this.scale - 30 };
+      const size = this.faceSize();
+      return { x: area.x + area.width - size.width - 40, y: area.y + area.height - size.height - 30 };
     };
     const point = anchor ?? fallback();
-    const display = screen.getDisplayNearestPoint({
-      x: Math.round(point.x + (FACE_WIDTH * this.scale) / 2),
-      y: Math.round(point.y + (FACE_HEIGHT * this.scale) / 2),
-    });
-    return clampAnchor(point, this.scale, display.workArea);
+    const display = screen.getDisplayNearestPoint(this.centerOf(point));
+    return clampAnchor(point, this.scale, display.workArea, this.mode);
   }
 
   private compute(): { bounds: Rectangle; layout: FaceLayout } {
-    const display = screen.getDisplayNearestPoint({
-      x: Math.round(this.anchor.x + (FACE_WIDTH * this.scale) / 2),
-      y: Math.round(this.anchor.y + (FACE_HEIGHT * this.scale) / 2),
-    });
-    return computeLayout(this.anchor, this.scale, this.color, display.workArea);
+    const display = screen.getDisplayNearestPoint(this.centerOf(this.anchor));
+    return computeLayout(this.anchor, this.scale, this.color, display.workArea, this.mode);
   }
 
   private applyBounds(): void {

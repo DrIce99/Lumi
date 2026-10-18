@@ -195,7 +195,7 @@ test("transit: the eyes stretch into the edge point, vanish, then come back whol
 });
 
 test("transit point: the window edge toward the nearest screen edge", () => {
-  const layout: FaceLayout = { scale: 1, color: "#FFFFFF", face: { x: 20, y: 120, width: 160, height: 120 }, windowWidth: 200, windowHeight: 240, overlay: "above" };
+  const layout: FaceLayout = { mode: "minimal", scale: 1, color: "#FFFFFF", face: { x: 20, y: 120, width: 160, height: 120 }, windowWidth: 200, windowHeight: 240, overlay: "above" };
   const area = { x: 0, y: 0, width: 1920, height: 1040 };
   // Near the bottom of the screen: down
   assert.deepEqual(transitPoint(layout, { x: 900, y: 1040 - 240, width: 200, height: 240 }, area), { x: 100, y: 234 });

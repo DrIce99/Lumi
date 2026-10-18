@@ -1,6 +1,6 @@
 // Geometry of the face window: where the window goes for a given face
 // position, and where the face sits inside it. Pure, tested.
-import { FACE_HEIGHT, FACE_WIDTH, type FaceLayout } from "../shared/types";
+import { FACE_BOX, type FaceLayout, type FaceMode } from "../shared/types";
 
 export interface Point {
   x: number;
@@ -19,9 +19,9 @@ export const OVERLAY_HEIGHT = 300;
 export const MIN_WINDOW_WIDTH = 400;
 
 /** Window bounds and face layout for a face whose top-left corner is at `anchor` (screen DIP). */
-export function computeLayout(anchor: Point, scale: number, color: string, workArea: Rect): { bounds: Rect; layout: FaceLayout } {
-  const faceW = Math.round(FACE_WIDTH * scale);
-  const faceH = Math.round(FACE_HEIGHT * scale);
+export function computeLayout(anchor: Point, scale: number, color: string, workArea: Rect, mode: FaceMode = "minimal"): { bounds: Rect; layout: FaceLayout } {
+  const faceW = Math.round(FACE_BOX[mode].width * scale);
+  const faceH = Math.round(FACE_BOX[mode].height * scale);
   const width = Math.max(faceW + 40, MIN_WINDOW_WIDTH);
   const height = faceH + OVERLAY_HEIGHT;
   // Bubbles go above the eyes, or below them when the face is near the top of the screen
@@ -32,6 +32,7 @@ export function computeLayout(anchor: Point, scale: number, color: string, workA
   return {
     bounds: { x, y, width, height },
     layout: {
+      mode,
       scale,
       color,
       face: { x: Math.round(anchor.x - x), y: overlay === "above" ? OVERLAY_HEIGHT : 0, width: faceW, height: faceH },
@@ -67,9 +68,9 @@ export function transitPoint(layout: FaceLayout, windowBounds: Rect, workArea: R
 }
 
 /** Keeps most of the face inside the work area. */
-export function clampAnchor(anchor: Point, scale: number, area: Rect): Point {
-  const faceW = FACE_WIDTH * scale;
-  const faceH = FACE_HEIGHT * scale;
+export function clampAnchor(anchor: Point, scale: number, area: Rect, mode: FaceMode = "minimal"): Point {
+  const faceW = FACE_BOX[mode].width * scale;
+  const faceH = FACE_BOX[mode].height * scale;
   return {
     x: Math.round(Math.min(Math.max(anchor.x, area.x - faceW * 0.3), area.x + area.width - faceW * 0.7)),
     y: Math.round(Math.min(Math.max(anchor.y, area.y - faceH * 0.3), area.y + area.height - faceH * 0.7)),

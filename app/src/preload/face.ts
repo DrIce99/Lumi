@@ -14,6 +14,8 @@ const bridge: FaceBridge = {
   onState: listen(IPC.state),
   onGaze: listen(IPC.gaze),
   onGesture: listen(IPC.gesture),
+  onAct: listen(IPC.act),
+  onAvatar: listen(IPC.avatar),
   onContrast: listen(IPC.contrast),
   onGlare: listen(IPC.glare),
   onTravel: listen(IPC.travel),

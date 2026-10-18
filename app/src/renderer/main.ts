@@ -1,11 +1,14 @@
-// Face window renderer: draws the eyes, shows speech bubbles and the chat
-// box, and turns mouse gestures into clicks and drags. The window is
-// click-through except over the eyes, the bubble and the chat box.
-import type { FaceBridge, FaceLayout } from "../shared/types";
+// Face window renderer: draws the eyes (or the 3D avatar), shows speech
+// bubbles and the chat box, and turns mouse gestures into clicks and drags.
+// The window is click-through except over the face, the bubble and the chat
+// box.
+import type { AvatarConfig, FaceBridge, FaceLayout, FaceMode, FaceState, GazeCommand } from "../shared/types";
 import { Player } from "./audio/player";
 import { Listener } from "./audio/vad";
+import type { Avatar } from "./avatar/avatar";
 import { Bubble } from "./bubble";
 import { Face } from "./face/face";
+import type { FaceView } from "./faceView";
 
 declare global {
   interface Window {
@@ -15,10 +18,20 @@ declare global {
 
 const api = window.lumi;
 const canvas = document.getElementById("face") as HTMLCanvasElement;
+let avatarCanvas = document.getElementById("avatar") as HTMLCanvasElement;
+
+/** A new canvas for each avatar: a canvas whose WebGL context was released can't give another one. */
+function freshAvatarCanvas(): HTMLCanvasElement {
+  const next = avatarCanvas.cloneNode(false) as HTMLCanvasElement;
+  avatarCanvas.replaceWith(next);
+  avatarCanvas = next;
+  return next;
+}
 const chat = document.getElementById("chat") as HTMLFormElement;
 const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement;
 
 let layout: FaceLayout = {
+  mode: "minimal",
   scale: 1,
   color: "#F5F3EE",
   face: { x: 110, y: 280, width: 160, height: 120 },
@@ -27,7 +40,83 @@ let layout: FaceLayout = {
   overlay: "above",
 };
 
-const face = new Face(canvas, layout);
+// The face drawn now: the eyes, or the avatar once its bundle and model are loaded
+let face: FaceView = new Face(canvas, layout);
+let mode: FaceMode = "minimal";
+let avatarConfig: AvatarConfig | null = null;
+let lastState: FaceState | null = null;
+let lastGaze: GazeCommand | null = null;
+
+/** Does nothing while the avatar loads (the window shows only bubbles meanwhile). */
+const NO_FACE: FaceView = {
+  setLayout: () => undefined,
+  setState: () => undefined,
+  setGaze: () => undefined,
+  setContrast: () => undefined,
+  gesture: () => undefined,
+  glare: () => undefined,
+  travel: () => undefined,
+  transit: () => 0,
+  resetTransit: () => undefined,
+  sentenceStart: () => undefined,
+  sentenceEnd: () => undefined,
+  setLevelSource: () => undefined,
+  setTalking: () => undefined,
+  hitTest: () => false,
+  dispose: () => undefined,
+};
+
+/** The avatar bundle (three.js and the VRM loader), loaded the first time it is needed. */
+let avatarModule: Promise<NonNullable<Window["LumiAvatar"]>> | null = null;
+function loadAvatarModule(): Promise<NonNullable<Window["LumiAvatar"]>> {
+  avatarModule ??= new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "avatar/index.js";
+    script.onload = () => (window.LumiAvatar ? resolve(window.LumiAvatar) : reject(new Error("avatar bundle without its module")));
+    script.onerror = () => reject(new Error("avatar bundle not found"));
+    document.head.append(script);
+  });
+  return avatarModule;
+}
+
+/** Gives a new face what the old one knew. */
+function adopt(next: FaceView): void {
+  face = next;
+  face.setLevelSource(() => player.level());
+  face.setTalking(player.active);
+  if (lastState) face.setState(lastState);
+  if (lastGaze) face.setGaze(lastGaze);
+}
+
+function useEyes(): void {
+  face.dispose();
+  adopt(new Face(canvas, layout));
+}
+
+function setMode(next: FaceMode): void {
+  if (next === mode) return;
+  mode = next;
+  if (next === "minimal") return useEyes();
+  face.dispose();
+  face = NO_FACE;
+  loadAvatarModule()
+    .then((m) => {
+      if (mode !== "3d") return;
+      const avatar = new m.Avatar(freshAvatarCanvas(), layout, (err) => {
+        // No WebGL, or a broken model: back to the eyes
+        console.error(`The 3D avatar can't be shown, back to the eyes: ${err instanceof Error ? err.message : String(err)}`);
+        if (face === avatar) useEyes();
+      });
+      avatar.setBrightSource(() => player.brightness());
+      adopt(avatar);
+      if (avatarConfig) void avatar.setConfig(avatarConfig).catch(() => undefined);
+    })
+    .catch((err: unknown) => {
+      console.error(`The avatar bundle failed to load: ${err instanceof Error ? err.message : String(err)}`);
+      if (mode === "3d") useEyes();
+    });
+}
+
 const bubble = new Bubble(document.getElementById("bubble") as HTMLDivElement, {
   relayout: () => placeOverlays(),
   clicked: () => api.bubbleClicked(),
@@ -77,7 +166,9 @@ function placeOverlays(): void {
   const centerX = f.x + f.width / 2;
   const gap = 4 * layout.scale;
   // Overlays stack away from the eyes: above them, or below when the face is near the top of the screen
-  let edge = layout.overlay === "above" ? f.y + f.height * 0.18 - gap : f.y + f.height * 0.82 + gap;
+  // (the eyes sit in the middle of their box; the avatar's head is at the top of its own)
+  const inset = layout.mode === "3d" ? 0.01 : 0.18;
+  let edge = layout.overlay === "above" ? f.y + f.height * inset - gap : f.y + f.height * (1 - inset) + gap;
   const place = (el: HTMLElement) => {
     const w = el.offsetWidth;
     const h = el.offsetHeight;
@@ -121,18 +212,18 @@ function endDrag(): void {
   if (!dragging) return;
   dragging = false;
   press = null;
-  canvas.classList.remove("dragging");
+  document.body.classList.remove("dragging");
   api.dragEnd();
 }
 
 document.addEventListener("mousemove", (e) => {
   if (dragging && (e.buttons & 1) === 0) endDrag();
   const onEyes = face.hitTest(e.clientX, e.clientY);
-  canvas.classList.toggle("over-eyes", onEyes);
+  document.body.classList.toggle("over-eyes", onEyes);
   setInteractive(dragging || press !== null || onEyes || inside(bubble.el, e.clientX, e.clientY) || inside(chat, e.clientX, e.clientY));
   if (press && !dragging && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 4) {
     dragging = true;
-    canvas.classList.add("dragging");
+    document.body.classList.add("dragging");
     api.dragStart();
   }
 });
@@ -141,8 +232,11 @@ document.addEventListener("mouseleave", () => {
   if (!dragging && !press) setInteractive(false);
 });
 
-canvas.addEventListener("mousedown", (e) => {
-  if (e.button !== 0 || !face.hitTest(e.clientX, e.clientY)) return;
+/** Mouse events on the bubble or the chat box are theirs, not the face's. */
+const onOverlay = (e: MouseEvent) => e.target instanceof Element && e.target.closest("#bubble, #chat") !== null;
+
+document.addEventListener("mousedown", (e) => {
+  if (e.button !== 0 || onOverlay(e) || !face.hitTest(e.clientX, e.clientY)) return;
   press = { x: e.clientX, y: e.clientY };
   e.preventDefault();
 });
@@ -157,8 +251,8 @@ window.addEventListener("mouseup", (e) => {
   if (face.hitTest(e.clientX, e.clientY, 8)) api.click();
 });
 
-canvas.addEventListener("contextmenu", (e) => {
-  if (!face.hitTest(e.clientX, e.clientY, 8)) return;
+document.addEventListener("contextmenu", (e) => {
+  if (onOverlay(e) || !face.hitTest(e.clientX, e.clientY, 8)) return;
   e.preventDefault();
   api.contextMenu();
 });
@@ -219,11 +313,25 @@ window.addEventListener("blur", () => {
 api.onLayout((next) => {
   layout = next;
   face.setLayout(next);
+  setMode(next.mode);
   placeOverlays();
 });
-api.onState((state) => face.setState(state));
-api.onGaze((gaze) => face.setGaze(gaze));
+api.onAvatar((config) => {
+  avatarConfig = config;
+  if (mode === "3d" && face !== NO_FACE && "setConfig" in face) void (face as Avatar).setConfig(config).catch(() => undefined);
+});
+api.onState((state) => {
+  lastState = state;
+  face.setState(state);
+});
+api.onGaze((gaze) => {
+  lastGaze = gaze;
+  face.setGaze(gaze);
+});
 api.onGesture((gesture) => face.gesture(gesture));
+api.onAct((gesture) => {
+  if ("act" in face) (face as Avatar).act(gesture);
+});
 api.onContrast((contrast) => face.setContrast(contrast));
 api.onGlare(({ lightDx }) => face.glare(lightDx));
 api.onTravel(({ vx, vy, landed }) => face.travel(vx, vy, landed));

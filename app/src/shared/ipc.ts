@@ -5,6 +5,8 @@ export const IPC = {
   state: "face:state",
   gaze: "face:gaze",
   gesture: "face:gesture",
+  act: "face:act",
+  avatar: "face:avatar",
   contrast: "face:contrast",
   glare: "face:glare",
   bubbleStart: "face:bubble-start",
@@ -51,6 +53,7 @@ export const IPC = {
   settingsForgetItems: "settings:forget-items",
   settingsHabit: "settings:habit",
   settingsRerollMood: "settings:reroll-mood",
+  settingsPickModel: "settings:pick-model",
   settingsPhonePair: "settings:phone-pair",
   settingsPhoneRevoke: "settings:phone-revoke",
   // command bar

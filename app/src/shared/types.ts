@@ -144,6 +144,10 @@ export interface Settings {
     glare: boolean;
     /** Visible to OBS, Remote Desktop and screen sharing (Lumi's own captures paint it over). */
     showInCaptures: boolean;
+    /** "minimal": the two eyes; "3d": the VRM avatar (renderer/avatar/). */
+    mode: FaceMode;
+    /** A VRM file for the 3D mode; empty = the bundled Lumi.vrm. */
+    model: string;
   };
   perception: {
     enabled: boolean;
@@ -206,7 +210,7 @@ export const DEFAULT_SETTINGS: Settings = {
   voices: { enabled: true, onlyMe: false },
   discord: { enabled: false, userId: "" },
   appAudio: { enabled: false, apps: ["Discord"] },
-  face: { scale: 1, color: "#F5F3EE", subtitles: false, adaptiveShadow: true, glare: true, showInCaptures: false },
+  face: { scale: 1, color: "#F5F3EE", subtitles: false, adaptiveShadow: true, glare: true, showInCaptures: false, mode: "minimal", model: "" },
   perception: {
     enabled: true,
     ocr: "windows",
@@ -260,7 +264,23 @@ export type KeySource = "settings" | "environment" | "none";
 export const FACE_WIDTH = 160;
 export const FACE_HEIGHT = 120;
 
+export const FACE_MODES = ["minimal", "3d"] as const;
+export type FaceMode = (typeof FACE_MODES)[number];
+
+/** The face box at scale 1 per mode: the eyes, or the avatar's bust (a half-length shot). */
+export const FACE_BOX: Record<FaceMode, { width: number; height: number }> = {
+  minimal: { width: FACE_WIDTH, height: FACE_HEIGHT },
+  "3d": { width: 180, height: 220 },
+};
+
+/** What the 3D avatar loads: the model and the extra clips (gesture name -> app:// URL). */
+export interface AvatarConfig {
+  model: string;
+  clips: Record<string, string>;
+}
+
 export interface FaceLayout {
+  mode: FaceMode;
   scale: number;
   color: string;
   /** The face box inside the window (DIP). */
@@ -433,6 +453,9 @@ export interface FaceBridge {
   onState(cb: (state: FaceState) => void): void;
   onGaze(cb: (gaze: GazeCommand) => void): void;
   onGesture(cb: (gesture: FaceGesture) => void): void;
+  /** A body gesture chosen by the brain (the 3D avatar plays it; the eyes map a few). */
+  onAct(cb: (gesture: string) => void): void;
+  onAvatar(cb: (config: AvatarConfig) => void): void;
   onContrast(cb: (contrast: FaceContrast) => void): void;
   onGlare(cb: (msg: { lightDx: number }) => void): void;
   /** Flying across the screen: direction and speed (-1..1), `landed` at the end of a flight. */
@@ -532,6 +555,8 @@ export interface SettingsSnapshot {
   memoryIndex: MemoryIndexStatus | null;
   /** Habits found (phase 11), archived ones included. */
   habits: HabitInfo[];
+  /** Where the 3D avatar's extra gesture clips go, and the ones found there. */
+  avatarClips: { dir: string; names: string[] };
   /** Today's mood (null when the mood of the day is off). */
   dayMood: { mood: DayMoodId; rolled: DayMoodId; intensity: number; since: string; changes: { at: string; from: DayMoodId; to: DayMoodId; intensity: number }[] } | null;
   /** The phone link: paired phones (no keys), the server and the call. */
@@ -625,6 +650,8 @@ export interface SettingsBridge {
   habit(id: number, action: "auto" | "ask" | "forget"): Promise<SettingsSnapshot>;
   /** Draws today's mood again. */
   rerollMood(): Promise<SettingsSnapshot>;
+  /** A VRM file for the 3D avatar, or null when cancelled. */
+  pickModelFile(): Promise<string | null>;
   /** Something changed outside the window (a phone was paired): reload. */
   onRefresh(cb: () => void): void;
   /** Lumi asked to forget something: the Memory tab opens on it. */

@@ -24,6 +24,8 @@ import { detectGpu } from "./gpu";
 import { readJson, writeJson } from "./jsonStore";
 import { initLog, log } from "./log";
 import { Mood } from "./mood";
+import { AvatarFiles, clipsDirIn } from "./avatar";
+import { BODY_GESTURES, EYE_GESTURE } from "../shared/gestures";
 import { DayMood, describeMood, restingFace } from "./brain/dayMood";
 import type { DayMoodId } from "../shared/dayMood";
 import { ensureOllama } from "./ollama";
@@ -212,8 +214,19 @@ function start(): void {
         writeJson(stateFile, windowState);
       },
     },
-    { url: `${APP_ORIGIN}/renderer/face.html`, anchor: windowState.anchor ?? null, scale: settings().face.scale, color: settings().face.color },
+    { url: `${APP_ORIGIN}/renderer/face.html`, anchor: windowState.anchor ?? null, scale: settings().face.scale, color: settings().face.color, mode: settings().face.mode },
   );
+  // The 3D avatar's model and clips; the folder is watched for new clips
+  const avatarFiles = new AvatarFiles(clipsDirIn(dataDir), () => face.setAvatar(avatarFiles.config(settings().face.model)));
+  face.setAvatar(avatarFiles.config(settings().face.model));
+  /** A body gesture from a say call: the avatar plays it, the eyes show the few they can (also on the phone). */
+  function act(gesture: string): void {
+    if (settings().face.mode === "3d" && !onPhone()) face.act(gesture);
+    const eye = EYE_GESTURE[gesture];
+    if (!eye) return;
+    if (settings().face.mode !== "3d") face.gesture(eye);
+    phone?.gesture(eye);
+  }
   const mood = new Mood((state) => {
     face.state(state);
     phone?.faceState(state);
@@ -297,6 +310,7 @@ function start(): void {
     sentenceStart: (sentence) => {
       lastSentenceAt = Date.now();
       mood.setEmotion(sentence.emotion, sentence.intensity);
+      if (sentence.gesture) act(sentence.gesture);
       // The eyes go to what Lumi is talking about
       if (sentence.look) perception.lookAtText(sentence.look);
     },
@@ -1095,6 +1109,7 @@ function start(): void {
         {
           emotion: (e, i) => (react ? mood.setEmotion(e, i) : undefined),
           look: (text) => (react && perception.watching() ? void perception.lookAtText(text) : undefined),
+          gesture: (g) => (react ? act(g) : undefined),
         },
         spontaneous,
       );
@@ -1137,6 +1152,7 @@ function start(): void {
       phone: onPhone() ? phone!.phoneName() : "",
       habits: habits.summary(),
       mood: settings().mood.enabled ? describeMood(dayMood.current()) : "",
+      gestures: settings().face.mode === "3d" ? Object.keys(avatarFiles.clips()).filter((g) => !(BODY_GESTURES as readonly string[]).includes(g)) : [],
     };
   }
 
@@ -1200,6 +1216,26 @@ function start(): void {
           if (call?.name === "move_to") log.info(`Debug move to ${where}: ${await mover.move(call, true)} -> ${JSON.stringify(face.win.getBounds())}`);
         }, 2000 + i * 2500);
       });
+    }
+    // Development aid: body gestures one after the other (e.g. "wave,shrug"; "rest" = none; "gaze:-300:0" looks there; "mode:minimal" switches), on a dark
+    // background, with LUMI_DEBUG_CAPTURE saved at a few moments of each (3D mode: the model loads first)
+    const debugAct = process.env.LUMI_DEBUG_ACT;
+    if (debugAct) {
+      void face.win.webContents.executeJavaScript('document.body.style.background = "#2b2d31"');
+      debugAct.split(",").forEach((gesture, i) => {
+        const start = 5000 + i * 3000;
+        // "gaze:dx:dy" looks at a point (DIP from the face center) instead
+        const gaze = /^gaze:(-?\d+):(-?\d+)$/.exec(gesture.trim());
+        const mode = /^mode:(minimal|3d)$/.exec(gesture.trim());
+        if (gaze) setTimeout(() => face.gaze({ target: { dx: Number(gaze[1]), dy: Number(gaze[2]) }, kind: "text", pursuit: false }), start);
+        else if (mode) setTimeout(() => settingsStore.update({ face: { mode: mode[1] as "minimal" | "3d" } }), start);
+        else if (gesture !== "rest") setTimeout(() => face.act(gesture.trim()), start);
+        if (!capturePrefix) return;
+        for (const ms of [300, 700, 1300]) {
+          setTimeout(async () => writeFileSync(`${capturePrefix}_${gesture.replace(/[^\w-]/g, "_")}_${ms}.png`, (await face.win.webContents.capturePage()).toPNG()), start + ms);
+        }
+      });
+      return;
     }
     // Development aid: show expressions one after the other (e.g. "saccente,paura"), on a dark
     // background, and with LUMI_DEBUG_CAPTURE save each one at a few moments of its animation
@@ -1457,6 +1493,7 @@ function start(): void {
       discord: { ...discordVoice.status(), token: discordToken.source() },
       memoryIndex,
       habits: habits.infos(),
+      avatarClips: { dir: avatarFiles.clipsDir, names: Object.keys(avatarFiles.clips()) },
       dayMood: settings().mood.enabled
         ? ((m) => ({ mood: m.mood, rolled: m.rolled, intensity: m.intensity, since: m.since, changes: m.changes.map(({ at, from, to, intensity }) => ({ at, from, to, intensity })) }))(dayMood.current())
         : null,
@@ -1526,6 +1563,14 @@ function start(): void {
         settingsStore.replace({ ...applyProfile(settings(), profile), setupDone: true });
         services.invalidate();
         return snapshot();
+      },
+      pickModelFile: async (win: BrowserWindow) => {
+        const result = await dialog.showOpenDialog(win, {
+          title: "Modello 3D di Lumi",
+          filters: [{ name: "Modello VRM", extensions: ["vrm"] }],
+          properties: ["openFile"],
+        });
+        return result.canceled ? null : (result.filePaths[0] ?? null);
       },
       pickVoiceFile: async (win: BrowserWindow) => {
         const result = await dialog.showOpenDialog(win, {
@@ -1609,7 +1654,8 @@ function start(): void {
 
   settingsStore.onChange((next, prev) => {
     if (next.mood.enabled !== prev.mood.enabled) refreshDayMood();
-    if (next.face.scale !== prev.face.scale || next.face.color !== prev.face.color) face.setAppearance(next.face.scale, next.face.color);
+    if (next.face.scale !== prev.face.scale || next.face.color !== prev.face.color || next.face.mode !== prev.face.mode) face.setAppearance(next.face.scale, next.face.color, next.face.mode);
+    if (next.face.model !== prev.face.model) face.setAvatar(avatarFiles.config(next.face.model));
     if (next.face.showInCaptures !== prev.face.showInCaptures) applyCaptureVisibility();
     if (next.chatHotkey !== prev.chatHotkey || next.listen.hotkey !== prev.listen.hotkey || next.listen.mode !== prev.listen.mode) registerHotkeys();
     if (next.listen.mode !== prev.listen.mode || next.doNotDisturb !== prev.doNotDisturb) updateWake();

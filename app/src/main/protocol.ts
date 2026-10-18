@@ -14,13 +14,39 @@ export function registerAppScheme(): void {
   ]);
 }
 
-/** Maps app://lumi/<path> to files under `root` (the dist folder). */
-export function serveAppScheme(root: string): void {
+/** Paths outside the dist folder the pages may read: URL path -> a file, or (ending in "/") a folder. */
+const mounts = new Map<string, string>();
+
+/** Serves `target` (a file, or a folder when `urlPath` ends in "/") at app://lumi<urlPath>; null removes it. */
+export function mountAppPath(urlPath: string, target: string | null): void {
+  if (target) mounts.set(urlPath, target);
+  else mounts.delete(urlPath);
+}
+
+/** The file an app:// path maps to, or null when it is outside what is served. Exported for the tests. */
+export function resolveAppPath(root: string, pathname: string, table: ReadonlyMap<string, string> = mounts): string | null {
+  const path = decodeURIComponent(pathname);
+  for (const [prefix, target] of table) {
+    if (!prefix.endsWith("/")) {
+      if (path === prefix) return target;
+      continue;
+    }
+    if (!path.startsWith(prefix)) continue;
+    const dir = normalize(target + sep);
+    const file = normalize(join(dir, path.slice(prefix.length)));
+    return file.startsWith(dir) && file !== dir ? file : null;
+  }
   const base = normalize(root + sep);
+  const file = normalize(join(base, path));
+  return file.startsWith(base) ? file : null;
+}
+
+/** Maps app://lumi/<path> to files under `root` (the dist folder), plus the mounts. */
+export function serveAppScheme(root: string): void {
   protocol.handle("app", (request) => {
     const url = new URL(request.url);
-    const file = normalize(join(base, decodeURIComponent(url.pathname)));
-    if (url.host !== "lumi" || !file.startsWith(base)) return new Response("Not found", { status: 404 });
+    const file = url.host === "lumi" ? resolveAppPath(root, url.pathname) : null;
+    if (!file) return new Response("Not found", { status: 404 });
     return net.fetch(pathToFileURL(file).toString());
   });
   // Only our own pages may use the microphone; nothing else is granted

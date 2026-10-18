@@ -29,11 +29,11 @@ body {
   top: 0;
 }
 
-.face.over-eyes {
+.over-eyes .face {
   cursor: grab;
 }
 
-.face.dragging {
+.dragging .face {
   cursor: grabbing;
 }
 

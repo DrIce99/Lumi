@@ -449,6 +449,12 @@ function renderDayMood(next: SettingsSnapshot): void {
   $<HTMLElement>("moodToday").textContent = `Oggi è ${strength(m.intensity)} ${moodName(m.mood)} (dalle ${time(m.since)}).${story}`;
 }
 
+$("face3d").addEventListener("change", () => ($<HTMLElement>("face3dOptions").hidden = !$("face3d").checked));
+$<HTMLButtonElement>("pickModel").addEventListener("click", async () => {
+  const path = await api.pickModelFile();
+  if (path) $("faceModel").value = path;
+});
+
 $<HTMLButtonElement>("moodReroll").addEventListener("click", async () => {
   await save(false);
   fill(await api.rerollMood());
@@ -586,6 +592,10 @@ function fill(next: SettingsSnapshot): void {
   $("moveInitiative").checked = s.movement.initiative;
   $("movePranks").checked = s.movement.pranks;
   $("moveDodge").checked = s.movement.dodge;
+  $("face3d").checked = s.face.mode === "3d";
+  $("faceModel").value = s.face.model;
+  $<HTMLElement>("face3dOptions").hidden = s.face.mode !== "3d";
+  $<HTMLElement>("avatarClips").textContent = `Gesti in più: metti dei file Mixamo .fbx (scaricati "Without Skin") o .vrma in ${next.avatarClips.dir}, con il nome del gesto ("wave.fbx" sostituisce il saluto incluso, "dance.fbx" ne aggiunge uno nuovo). ${next.avatarClips.names.length ? `Trovati: ${next.avatarClips.names.join(", ")}.` : "Per ora nessuno: usa i gesti inclusi."}`;
   $("moodEnabled").checked = s.mood.enabled;
   for (const m of DAY_MOODS) $(`mood-${m}`).value = String(s.mood.weights[m]);
   moodChances();
@@ -720,7 +730,16 @@ function collect(): Settings {
     chatHotkey: $("chatHotkey").value,
     commandBar: { reply: $<HTMLSelectElement>("barReply").value as Settings["commandBar"]["reply"], useSelection: $("barSelection").checked },
     launchAtLogin: $("launchAtLogin").checked,
-    face: { scale: num("scale", s.face.scale), color: $("color").value, subtitles: $("subtitles").checked, adaptiveShadow: $("adaptiveShadow").checked, glare: $("glare").checked, showInCaptures: $("showInCaptures").checked },
+    face: {
+      scale: num("scale", s.face.scale),
+      color: $("color").value,
+      subtitles: $("subtitles").checked,
+      adaptiveShadow: $("adaptiveShadow").checked,
+      glare: $("glare").checked,
+      showInCaptures: $("showInCaptures").checked,
+      mode: $("face3d").checked ? "3d" : "minimal",
+      model: $("faceModel").value.trim(),
+    },
     voices: { enabled: $("voicesEnabled").checked, onlyMe: $("onlyMe").checked },
     habits: { ...s.habits, enabled: $("habitsEnabled").checked },
     phone: { enabled: $("phoneEnabled").checked, port: num("phonePort", s.phone.port) },

@@ -133,7 +133,7 @@ export class BubbleSpeech implements SpeechSink {
 
   constructor(
     private readonly bubbles: Bubbles,
-    private readonly react: { emotion(emotion: Emotion, intensity: number): void; look(text: string): void },
+    private readonly react: { emotion(emotion: Emotion, intensity: number): void; look(text: string): void; gesture?(gesture: string): void },
     private readonly spontaneous: boolean,
   ) {
     this.heard = new Promise((resolve) => (this.resolve = resolve));
@@ -177,6 +177,7 @@ export class BubbleSpeech implements SpeechSink {
       if (!s.emotion && !s.complete) break;
       this.react.emotion(toEmotion(s.emotion) ?? "neutra", clampIntensity(s.intensity));
       if (s.look) this.react.look(s.look);
+      if (s.gesture) this.react.gesture?.(s.gesture);
       this.emotions = i + 1;
     }
   }

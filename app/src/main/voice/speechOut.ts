@@ -41,6 +41,8 @@ export interface Sentence {
   emotion: Emotion;
   intensity: number;
   look?: string;
+  /** A body gesture: only on the first sentence of its say call. */
+  gesture?: string;
   /** The say call it belongs to. */
   say: number;
   state: "synth" | "playing" | "played" | "failed" | "cancelled";
@@ -65,6 +67,9 @@ interface SayState {
   emotion?: Emotion;
   intensity: number;
   look?: string;
+  gesture?: string;
+  /** The gesture went with a sentence already. */
+  gestured: boolean;
   /** Sentences waiting for the emotion (it normally arrives before the text). */
   waiting: string[];
   complete: boolean;
@@ -161,13 +166,14 @@ export class VoiceSpeech implements SpeechSink {
   private feed(index: number, say: LiveSay, final: boolean): void {
     let state = this.says[index];
     if (!state) {
-      state = { chunker: new SentenceChunker(index === 0 ? DEFAULT_CHUNKER : { ...DEFAULT_CHUNKER, firstCommaAfter: DEFAULT_CHUNKER.commaAfter }), fed: "", intensity: 0.6, waiting: [], complete: false, guess: false };
+      state = { chunker: new SentenceChunker(index === 0 ? DEFAULT_CHUNKER : { ...DEFAULT_CHUNKER, firstCommaAfter: DEFAULT_CHUNKER.commaAfter }), fed: "", intensity: 0.6, waiting: [], complete: false, guess: false, gestured: false };
       this.says[index] = state;
     }
     if (state.complete) return;
     if (say.emotion && !state.emotion) state.emotion = toEmotion(say.emotion) ?? "neutra";
     if (say.intensity !== undefined) state.intensity = clampIntensity(say.intensity);
     if (say.look) state.look = say.look;
+    if (say.gesture) state.gesture = say.gesture;
     const text = say.text;
     const sentences: string[] = [];
     if (!text.startsWith(state.fed)) {
@@ -198,12 +204,14 @@ export class VoiceSpeech implements SpeechSink {
       emotion: state.emotion ?? guessed?.emotion ?? "neutra",
       intensity: guessed?.intensity ?? state.intensity,
       look: state.look,
+      ...(state.gesture && !state.gestured ? { gesture: state.gesture } : {}),
       say,
       state: "synth",
       synthDone: false,
       totalMs: 0,
       playedMs: 0,
     };
+    if (sentence.gesture) state.gestured = true;
     this.sentences.push(sentence);
     this.out.begin({ id: sentence.id, kind: "speech", text, emotion: sentence.emotion, intensity: sentence.intensity, volume: this.options.volume });
     const ok = this.out.speak(

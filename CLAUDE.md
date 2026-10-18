@@ -1,7 +1,7 @@
 # Lumi - notes for development sessions
 
 Desktop voice assistant: an always-on-top transparent face (two vertical
-capsule eyes, no mouth) that listens, talks with an expressive voice and
+capsule eyes, no mouth; or a 3D VRM avatar with `face.mode` "3d") that listens, talks with an expressive voice and
 watches the screen. Electron + TypeScript app (`app/`) plus a Python sidecar
 (`sidecar/`) for STT, TTS, OCR and UI Automation. Modeled on Pixel Pet
 (github.com/DrIce99/pet): reuse its patterns and code where they fit.
@@ -643,6 +643,38 @@ Work one roadmap phase at a time; finish each with checks green.
   a "neutra" say keeps the resting face. Logs carry mood names, never
   the reason.
 
+- Lumi in 3D (roadmap 19, `face.mode` minimal|3d, `face.model` = a .vrm
+  path, "" = `app/assets/avatar/Lumi.vrm`, copied to dist by build.mjs):
+  `renderer/faceView.ts` is the interface both faces implement; the face
+  window's main.ts swaps them live on `layout.mode` (new canvas per
+  avatar: a canvas whose WebGL context was lost can't give another one).
+  The avatar bundle (`renderer/avatar/index.ts` -> `window.LumiAvatar`,
+  three + @pixiv/three-vrm, ~2 MB) is loaded by a script tag only in 3D;
+  no WebGL or a broken model -> back to the eyes. Face box per mode:
+  `FACE_BOX` (3d 180x220, a half-length shot: `framing.ts` bustSpan =
+  hips + 6 cm to the hair's top; below the box the body fades through a
+  CSS mask on the canvas, since the bubble may sit there); `computeLayout`/`clampAnchor` take the mode;
+  a mode change keeps the bottom center. Per frame (`avatar.ts`): idle
+  pose (`pose.ts`, pure: Euler XYZ degrees on normalized bones, model
+  faces +Z, left arm down = -Z, X+ = head down) -> gestures slerped over
+  it with fade weights -> gaze (Blinker/GazeController reused; 40% on
+  head+neck, rest to `vrm.lookAt.yaw/pitch`, pitch + = up) -> expression
+  weights eased (`expressions3d.ts`) + blink + visemes (`visemes()`:
+  level opens, `Player.brightness()` = 3x energy share above 1.5 kHz picks
+  e/i vs o/u vs a) -> `vrm.update()` (spring bones). Arm poses are given
+  as directions (`arm()`/`arms()`: fromUnitVectors, forearm local =
+  conj(upper) * world) because Euler twists sent forearms the wrong way.
+  `say.gesture` (free id, `gestureId`) rides the first sentence of its say
+  call, applied on lead with the emotion (`act()` in main: 3D -> face.act,
+  eyes -> `EYE_GESTURE`); the prompt's "# Your body" exists only in 3D.
+  User clips: `%APPDATA%\Luminimations\<gesture>.fbx|.vrma` (watched,
+  `AvatarFiles`), served via `mountAppPath` (`/user/model.vrm`,
+  `/user/animations/`, `resolveAppPath` refuses escapes); Mixamo FBX
+  retargeted as in three-vrm's example; tracks sampled with their own
+  interpolants, no AnimationMixer (its fades blend against the bind
+  pose, not the procedural one). Hit test = alpha of the last frame
+  (`preserveDrawingBuffer`). Checked by eye with `LUMI_DEBUG_ACT`.
+
 ## Planned features (phase 16 not built yet; phase 10 kept as its design notes)
 
 Decisions already taken for the next phases. Nothing here exists in the
@@ -729,6 +761,9 @@ face, to check it on screen),
 LUMI_DEBUG_CAPTURE), `LUMI_DEBUG_FACE=<expr,...>` (cycles expressions on a
 dark background, no greeting; with LUMI_DEBUG_CAPTURE saves each at 250,
 650, 1500 ms), `LUMI_DEBUG_MOVE=<places>` (flies there one after the other),
+`LUMI_DEBUG_ACT=<gestures>` (body gestures in turn from 5 s, every 3 s;
+"rest", "gaze:dx:dy", "mode:minimal|3d"; with LUMI_DEBUG_CAPTURE saves
+each at 300, 700, 1300 ms),
 `LUMI_DEBUG_REFLECT=1` (habits reflection 20 s after start),
 `LUMI_DATA_DIR=<dir>` (another userData: settings, memory,
 logs), `LUMI_DEBUG_RUNTIME=<dir>` (the installed app's uv environment

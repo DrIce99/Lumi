@@ -59,7 +59,8 @@ export function liveSayFrom(json: string, textKey: string, complete: boolean): L
   const emotion = stringFieldComplete(json, "emotion") ? (partialStringField(json, "emotion") ?? undefined) : undefined;
   const intensity = numberField(json, "intensity") ?? undefined;
   const look = stringFieldComplete(json, "look") ? (partialStringField(json, "look") ?? undefined) : undefined;
-  return { text, emotion, intensity, look, complete: complete || stringFieldComplete(json, textKey) };
+  const gesture = stringFieldComplete(json, "gesture") ? (partialStringField(json, "gesture") ?? undefined) : undefined;
+  return { text, emotion, intensity, look, ...(gesture ? { gesture } : {}), complete: complete || stringFieldComplete(json, textKey) };
 }
 
 /** Removes reasoning that some open models write inline as <think>...</think>. */
@@ -78,6 +79,7 @@ In this conversation you cannot call tools. Reply ONLY with one JSON object, wit
 {"emotion": "${EMOTIONS.join("|")}",
  "intensity": 0.6,
  "look": "visible text you are talking about",
+ "gesture": "a body gesture with this sentence, only when your body is shown",
  "say": "what you say out loud (leave it out to stay silent)",
  "look_at": "visible text to look at",
  "remember": [{"fact": "one short sentence", "kind": "${FACT_KINDS.join("|")}"}],
@@ -129,6 +131,7 @@ export function parseJsonReply(raw: string): ToolCallOut[] {
       emotion: typeof o.emotion === "string" ? o.emotion : "neutra",
       ...(typeof o.intensity === "number" ? { intensity: o.intensity } : {}),
       ...(typeof o.look === "string" && o.look.trim() ? { look: o.look } : {}),
+      ...(typeof o.gesture === "string" && o.gesture.trim() ? { gesture: o.gesture } : {}),
     });
   }
   if (typeof o.look_at === "string" && o.look_at.trim()) add("look_at", { text: o.look_at });

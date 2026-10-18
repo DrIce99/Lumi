@@ -26,6 +26,7 @@ export interface SettingsBackend {
   findForget(query: string): Promise<ForgetCandidate[]>;
   habit(id: number, action: "auto" | "ask" | "forget"): Promise<SettingsSnapshot>;
   rerollMood(): SettingsSnapshot;
+  pickModelFile(window: BrowserWindow): Promise<string | null>;
   phonePair(): Promise<{ ok: boolean; url: string; qr: string; hosts: string[]; message: string }>;
   phoneRevoke(id: string): SettingsSnapshot;
   forgetItems(selection: { messages: number[]; summaries: number[]; facts: number[] }): Promise<{ ok: boolean; message: string; snapshot: SettingsSnapshot }>;
@@ -86,6 +87,7 @@ export class SettingsWindow {
       return backend.habit(id as number, action as "auto" | "ask" | "forget");
     });
     handle(IPC.settingsRerollMood, () => backend.rerollMood());
+    handle(IPC.settingsPickModel, () => backend.pickModelFile(this.win!));
     handle(IPC.settingsFindForget, (query) => backend.findForget(typeof query === "string" ? query.slice(0, 300) : ""));
     handle(IPC.settingsForgetItems, (selection) => {
       const s = (selection ?? {}) as Record<string, unknown>;

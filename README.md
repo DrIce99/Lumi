@@ -38,6 +38,7 @@ L'obiettivo è che sembri **il più umano possibile**, cioè con poca latenza, t
 ## Cosa sa fare
 
 - **Sempre in primo piano**: una finestra trasparente, senza bordi e trascinabile. I clic passano attraverso tutto ciò che non sono gli occhi, e la finestra è esclusa dalle catture e dalle condivisioni dello schermo.
+- **Due aspetti**: i due occhi minimali di sempre oppure, con una spunta, **Lumi in 3D**: un avatar VRM a mezzobusto che respira, sbatte le palpebre, segue con lo sguardo quello che succede sullo schermo, muove le labbra con la voce e accompagna le frasi con dei gesti (saluta, annuisce, alza le spalle…) scelti dal cervello.
 - **Occhi vivi**: battito di ciglia naturale (con doppi battiti occasionali), saccadi, micro-movimenti ed espressioni fatte solo con la forma degli occhi.
 - **Sguardo che segue lo schermo**: il cursore del testo mentre scrivi, il testo nuovo che appare (che Lumi "legge" riga per riga), le zone che cambiano, il mouse e ciò di cui sta parlando.
 - **Conversazione a voce**: push-to-talk, parola di attivazione oppure ascolto continuo. Puoi interromperlo mentre parla e lui si ferma e ti ascolta.
@@ -213,6 +214,27 @@ Quando lo schermo che Lumi sta guardando passa all'improvviso da prevalentemente
 | assestamento | — | 1–2 battiti rapidi entro 600 ms | idem | — |
 
 L'abbagliamento è uno strato sopra l'espressione (le altezze si moltiplicano), quindi prevale su tutte. Se Lumi sta parlando, si applica una versione ridotta (60%) e l'audio non si interrompe. Si spegne in Impostazioni → Generale («Abbagliamento»).
+
+### Lumi in 3D
+
+Con «Lumi in 3D» (Impostazioni → Generale → Aspetto) gli occhi lasciano il posto a un avatar **VRM** inquadrato a mezzobusto: `app/assets/avatar/Lumi.vrm` (VRM 1.0 da VRoid Studio, 16 MB), oppure un altro file `.vrm` scelto nello stesso riquadro. La spunta si cambia senza riavviare: la finestra passa dall'uno all'altro aspetto al volo. L'approccio è **ibrido**, dal più leggero al più pesante:
+
+1. **Sempre attivo, procedurale** (`renderer/avatar/pose.ts`, puro e testato): respiro (circa 15 al minuto), spostamento lento del peso, braccia rilassate, testa che vaga di pochi gradi. Battito e sguardo sono gli stessi moduli degli occhi (`face/blink.ts`, `face/gaze.ts`): lo sguardo va agli occhi del modello (`VRMLookAt`) e per il 40% a testa e collo, quindi Lumi gira la testa verso il testo che legge o il mouse.
+2. **Espressioni e labbra, senza reti dedicate** (`avatar/expressions3d.ts`): ogni emozione diventa un insieme di espressioni VRM (happy, sad, angry, surprised, relaxed) più una postura (testa, busto, spalle, palpebre, vivacità del movimento); l'intensità le scala e i pesi si interpolano come le forme degli occhi. Il **lipsync** segue l'audio del TTS nello stesso renderer: il volume apre la bocca e la "brillantezza" della voce (quota di energia sopra 1,5 kHz, dall'analizzatore del player) sceglie la vocale: chiara → e/i, scura → o/u, nel mezzo a. Nessun fonema dal testo: niente G2P, come per la pronuncia.
+3. **Gesti da una libreria di clip**: il tool `say` ha un campo facoltativo `gesture`, applicato alla prima frase della chiamata insieme all'emozione (sul "lead" del player, come lo sguardo). Il prompt li descrive solo in 3D e chiede di usarli come punteggiatura, al massimo uno per risposta. Inclusi, a fotogrammi chiave: `wave`, `nod`, `shake_head`, `shrug`, `think`, `point`, `bow`, `cheer`, `clap`, `facepalm`, `cross_arms`, `tilt_head`, `hop`. Le braccia sono definite per **direzioni** (dove punta il braccio, dove punta l'avambraccio) e convertite in rotazioni con i quaternioni, così una posa si scrive e si corregge a occhio. I gesti a una mano usano la mano dal lato verso cui Lumi guarda. Con gli occhi minimali i pochi gesti che hanno senso diventano gesti degli occhi (annuire, scuotere, saltello).
+
+**Clip tue**: metti in `%APPDATA%\Luminimations` dei file **Mixamo `.fbx`** (scaricati "Without Skin") o **`.vrma`**, con il nome del gesto: `wave.fbx` sostituisce il saluto incluso, `dance.fbx` aggiunge `dance` (il cervello lo trova in `<situation>`). La cartella è sorvegliata, quindi non serve riavviare. Le Mixamo vengono riadattate allo scheletro umanoide del VRM come nell'esempio di three-vrm (`avatar/clipFiles.ts`: rotazioni portate nel sistema delle ossa normalizzate, altezza dei fianchi riscalata). Ogni gesto, incluso o tuo, si fonde sopra la posa a riposo con una dissolvenza in entrata e in uscita (slerp per osso), e due gesti si sovrappongono per il tempo del cambio. Le **spring bone** (capelli, vestiti) restano attive con `vrm.update()`, quindi reagiscono a qualsiasi movimento.
+
+**Dettagli**:
+
+- Il disegno è three.js con `@pixiv/three-vrm`, in un bundle a parte (`dist/renderer/avatar/index.js`, circa 2 MB) caricato solo in 3D: con gli occhi minimali la finestra non lo carica nemmeno. Senza WebGL, o con un modello rotto, si torna agli occhi e il log lo dice.
+- **Mezzobusto**: la telecamera inquadra dalla vita (poco sopra i fianchi del modello) a sopra i capelli (`avatar/framing.ts`), in un riquadro di 180 × 220 a scala 1 (`FACE_BOX` in `shared/types.ts`); cambiando aspetto il riquadro resta appoggiato dove erano gli occhi (stesso centro in basso). La tela copre tutta la finestra, così un braccio alzato (saluto, esultanza) si vede anche sopra e ai lati del riquadro, mentre sotto il corpo sfuma nell'ultimo 14% del riquadro (una maschera CSS: lì sotto può esserci lo spazio del fumetto). I gesti tengono le mani all'altezza del petto, dentro l'inquadratura.
+- 30 fotogrammi al secondo a riposo, 60 mentre parla, gesticola o vola. Il volo inclina il corpo nella direzione del moto, con un piccolo piegamento all'atterraggio; il passaggio al telefono la rimpicciolisce nel punto di uscita.
+- Il clic passa attraverso tutto tranne l'avatar: il test di contatto legge il canale alfa del fotogramma appena disegnato intorno al puntatore.
+- I file arrivano al renderer da `app://lumi/user/...`, che serve solo il modello scelto e la cartella delle clip (`mountAppPath` in `main/protocol.ts`, niente percorsi che ne escono).
+- Sul telefono resta il volto con gli occhi.
+
+Per provare gesti e pose senza cervello: `LUMI_DEBUG_ACT=wave,shrug,gaze:-300:0,mode:minimal` (con `LUMI_DEBUG_CAPTURE` salva i fotogrammi).
 
 ---
 
@@ -951,6 +973,7 @@ lumi/
 │  │     └─ endpoint.ts        fine turno: VAD + euristiche/Smart Turn
 │  ├─ src/renderer/
 │  │  ├─ face/                 face.ts  blink.ts  gaze.ts  expressions.ts  transit.ts
+│  │  ├─ avatar/               Lumi in 3D: avatar.ts (three-vrm)  pose.ts  expressions3d.ts  clipFiles.ts
 │  │  ├─ phone/                bridge.ts: WebRTC verso il telefono (renderer nascosto)
 │  │  ├─ audio/                vad.ts (microfono + VAD)  player.ts  rms.ts
 │  │  └─ settings/
@@ -1015,7 +1038,7 @@ Il sidecar ascolta solo su `127.0.0.1`, con una porta casuale e un token generat
   "listen":  { "mode": "push-to-talk", "hotkey": "Ctrl+Alt+Space", "wakeWord": "ehi lumi", "wakeThreshold": 0.5, "followUpSeconds": 8 },
   "chatHotkey": "Control+Alt+L",
   "commandBar": { "reply": "voice+text", "useSelection": true },
-  "face":    { "scale": 1.0, "color": "#F5F3EE", "adaptiveShadow": true, "glare": true },
+  "face":    { "scale": 1.0, "color": "#F5F3EE", "adaptiveShadow": true, "glare": true, "mode": "minimal", "model": "" },
   "perception": {
     "enabled": true, "ocr": "windows", "captureFps": 4, "ocrFps": 1.5,
     "pauseInApps": ["KeePass", "1Password", "Bitwarden"],
@@ -1112,6 +1135,11 @@ Ogni fase si chiude con `npm run check` e `pytest` verdi e una prova manuale.
     4. ~~Accenti grafici scritti dal cervello sulle parole ambigue, solo se il confronto mostra che il modello li rispetta~~ (fatto: `scripts/accenti.py`; li rispetta solo Kokoro, quindi il prompt li chiede solo con Kokoro).
     5. ~~Facoltativo, solo se restano errori sistematici: LoRA su Qwen3-TTS Base con 5–10 ore di un solo parlante italiano, pesi fusi nel modello, confronto prima/dopo con lo script~~ (fatto: `sidecar/lora/`; il modello addestrato non supera la Base clonata e resta un'opzione).
 18. ~~**Umore del giorno** ([dettagli](#umore-del-giorno)): umore estratto ogni mattina con le probabilità delle impostazioni, predisposizione nelle risposte e negli occhi, tool `change_mood` con passi singoli, resistenza e attesa, cambiamenti solo per merito dell'utente, in meglio o in peggio~~ (fatto).
+19. **Lumi in 3D** ([dettagli](#lumi-in-3d)):
+    1. ~~Avatar VRM con three-vrm al posto degli occhi (spunta, cambio al volo), respiro, battito e sguardo procedurali, espressioni dalle emozioni, lipsync dall'audio del TTS~~ (fatto).
+    2. ~~Gesti scelti dal cervello (`say.gesture`) da una libreria di clip: tredici inclusi a fotogrammi chiave, clip Mixamo `.fbx` e `.vrma` dell'utente in `%APPDATA%\Luminimations`~~ (fatto).
+    3. Clip generate offline con modelli text-to-motion open source (HY-Motion 1.0 di Tencent, Kimodo di NVIDIA), riadattate al VRM ed esportate in `.vrma`: una libreria più ricca senza generare niente durante la conversazione.
+    4. Gesti neurali dal parlato in streaming (modelli audio → gesti senza look-ahead, come quelli presentati a CVPR 2026 o EchoAvatar) come processo separato nel sidecar, se latenza e GPU lo permettono; lo scheletro va riadattato al VRM.
 
 ---
 

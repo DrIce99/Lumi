@@ -263,6 +263,16 @@ export class Face {
     return this.state.speaking || this.talking;
   }
 
+  /** Stops drawing and clears the canvas (switching to the 3D avatar). */
+  dispose(): void {
+    cancelAnimationFrame(this.raf);
+    this.raf = 0;
+    window.clearTimeout(this.wakeTimer);
+    this.wake = () => undefined;
+    this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+  }
+
   /** Whether a point (window DIP) is on one of the eyes, with a few px of tolerance. */
   hitTest(x: number, y: number, margin = 4): boolean {
     if (this.transitPlay) return false;
@@ -433,7 +443,7 @@ export class Face {
     );
   }
 
-  private wake = (): void => {
+  private wake: () => void = (): void => {
     window.clearTimeout(this.wakeTimer);
     this.wakeTimer = undefined;
     if (!this.raf) this.raf = requestAnimationFrame(this.frame);
