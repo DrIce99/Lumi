@@ -695,7 +695,15 @@ Work one roadmap phase at a time; finish each with checks green.
   `/user/animations/`, `resolveAppPath` refuses escapes); Mixamo FBX
   retargeted as in three-vrm's example; tracks sampled with their own
   interpolants, no AnimationMixer (its fades blend against the bind
-  pose, not the procedural one). No snaps (the user saw "spasms"): keys
+  pose, not the procedural one). Generated clips (19.3, `sidecar/motion/`):
+  text-to-motion runs on a rented RunPod GPU (`runpod/setup.sh`, `run.sh`,
+  `generate.py`, prompts in `gestures.json`); `vrma.py` (pure numpy,
+  tested) writes .vrma with identity rest rotations: SMPL and Kimodo's
+  SOMA "standard T-pose" joints are world-aligned like VRM normalized
+  bones, so local rotations copy over (SOMA's Neck2 and finger
+  metacarpals folded into the next bone); in place, turned to face +Z,
+  floor under the clip's lowest joint. Default engine Kimodo SOMA: the
+  HY-Motion license excludes the EU (the user is in Italy). No snaps (the user saw "spasms"): keys
   are slerped (`qslerp`), a restarted/replaced gesture fades out
   (`replacedWeight`, 220 ms), the head's share is eased like the head,
   the talk nod uses a level smoothed at 220 ms, the idle motion runs on
@@ -793,7 +801,9 @@ dark background, no greeting; with LUMI_DEBUG_CAPTURE saves each at 250,
 650, 1500 ms), `LUMI_DEBUG_MOVE=<places>` (flies there one after the other),
 `LUMI_DEBUG_ACT=<gestures>` (body gestures in turn from 5 s, every 3 s;
 "rest", "gaze:dx:dy", "mode:minimal|3d"; with LUMI_DEBUG_CAPTURE saves
-each at 300, 700, 1300 ms),
+each at 300, 700, 1300 ms; `LUMI_DEBUG_ACT_EVERY=<ms>` and
+`LUMI_DEBUG_ACT_SHOTS=<ms,ms,...>` change the spacing and the moments, for
+longer clips),
 `LUMI_DEBUG_REFLECT=1` (habits reflection 20 s after start),
 `LUMI_DATA_DIR=<dir>` (another userData: settings, memory,
 logs), `LUMI_DEBUG_RUNTIME=<dir>` (the installed app's uv environment

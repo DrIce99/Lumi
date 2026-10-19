@@ -1228,12 +1228,15 @@ function start(): void {
       });
     }
     // Development aid: body gestures one after the other (e.g. "wave,shrug"; "rest" = none; "gaze:-300:0" looks there; "mode:minimal" switches), on a dark
-    // background, with LUMI_DEBUG_CAPTURE saved at a few moments of each (3D mode: the model loads first)
+    // background, with LUMI_DEBUG_CAPTURE saved at a few moments of each (3D mode: the model loads first).
+    // LUMI_DEBUG_ACT_EVERY (ms between gestures) and LUMI_DEBUG_ACT_SHOTS ("ms,ms,...") fit longer clips.
     const debugAct = process.env.LUMI_DEBUG_ACT;
     if (debugAct) {
       void face.win.webContents.executeJavaScript('document.body.style.background = "#2b2d31"');
+      const every = Number(process.env.LUMI_DEBUG_ACT_EVERY) || 3000;
+      const shots = (process.env.LUMI_DEBUG_ACT_SHOTS ?? "300,700,1300").split(",").map(Number).filter((ms) => ms >= 0);
       debugAct.split(",").forEach((gesture, i) => {
-        const start = 5000 + i * 3000;
+        const start = 5000 + i * every;
         // "gaze:dx:dy" looks at a point (DIP from the face center) instead
         const gaze = /^gaze:(-?\d+):(-?\d+)$/.exec(gesture.trim());
         const mode = /^mode:(minimal|3d)$/.exec(gesture.trim());
@@ -1241,7 +1244,7 @@ function start(): void {
         else if (mode) setTimeout(() => settingsStore.update({ face: { mode: mode[1] as "minimal" | "3d" } }), start);
         else if (gesture !== "rest") setTimeout(() => face.act(gesture.trim()), start);
         if (!capturePrefix) return;
-        for (const ms of [300, 700, 1300]) {
+        for (const ms of shots) {
           setTimeout(async () => writeFileSync(`${capturePrefix}_${gesture.replace(/[^\w-]/g, "_")}_${ms}.png`, (await face.win.webContents.capturePage()).toPNG()), start + ms);
         }
       });

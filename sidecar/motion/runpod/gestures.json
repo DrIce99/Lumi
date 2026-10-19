@@ -1,0 +1,25 @@
+{
+  "defaults": { "duration": 3.0, "seeds": 4 },
+  "gestures": [
+    { "name": "explain", "duration": 4.0, "prompt": "A person stands in place and talks with both hands, moving them in front of the chest and opening the palms outward." },
+    { "name": "laugh", "duration": 3.0, "prompt": "A person stands in place and laughs heartily, the shoulders shaking, leaning back slightly and then forward with a hand on the belly." },
+    { "name": "yawn", "duration": 4.0, "prompt": "A person stands in place, raises both arms overhead stretching while yawning, then lowers the arms." },
+    { "name": "stretch", "duration": 4.0, "prompt": "A person stands in place, interlocks the fingers, stretches both arms forward and then straight up, and relaxes." },
+    { "name": "dance", "duration": 5.0, "prompt": "A person dances happily in place, swaying the hips side to side and moving both arms to the rhythm." },
+    { "name": "look_around", "duration": 4.0, "prompt": "A person stands still and turns the head to the left, then to the right, looking around, then faces forward again." },
+    { "name": "sigh", "duration": 3.0, "prompt": "A person stands in place, drops the shoulders and lowers the head with a deep breath out, then straightens up." },
+    { "name": "excited", "duration": 3.0, "prompt": "A person bounces on the toes in place and shakes both fists quickly in front of the chest." },
+    { "name": "salute", "duration": 2.5, "prompt": "A person stands straight and raises the right hand to the forehead in a military salute, then lowers it." },
+    { "name": "fist_pump", "duration": 2.5, "prompt": "A person stands in place and pumps the right fist up in the air twice." },
+    { "name": "stop", "duration": 2.5, "prompt": "A person stands in place and raises the right hand in front of the body with the palm facing forward, holding it there, then lowers it." },
+    { "name": "come_here", "duration": 3.0, "prompt": "A person stands in place and beckons with the right hand, waving it toward the body several times." },
+    { "name": "scratch_head", "duration": 3.0, "prompt": "A person stands in place, raises the right hand and scratches the back of the head, then lowers the hand." },
+    { "name": "hands_on_hips", "duration": 3.0, "prompt": "A person stands in place and puts both hands on the hips, leaning slightly forward." },
+    { "name": "shiver", "duration": 3.0, "prompt": "A person stands in place hugging themselves with both arms and shivers, rubbing the upper arms." },
+    { "name": "air_guitar", "duration": 4.0, "prompt": "A person stands in place playing air guitar, strumming quickly with the right hand while the left hand holds the neck of the guitar out to the side." },
+    { "name": "shy", "duration": 3.5, "prompt": "A person stands with the hands clasped behind the back, sways gently side to side and lowers the head." },
+    { "name": "sneeze", "duration": 2.5, "prompt": "A person tilts the head back, then jerks the head and torso forward in a sneeze, covering the mouth with the right hand." },
+    { "name": "dab", "duration": 2.5, "prompt": "A person does a dab: the head dips into the bent left elbow while the right arm extends straight up and out to the side, then returns." },
+    { "name": "point_self", "duration": 2.5, "prompt": "A person stands in place and points at their own chest with the right index finger, then lowers the hand." }
+  ]
+}

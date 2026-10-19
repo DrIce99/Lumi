@@ -234,7 +234,7 @@ Con «Lumi in 3D» (Impostazioni → Generale → Aspetto) gli occhi lasciano il
 - I file arrivano al renderer da `app://lumi/user/...`, che serve solo il modello scelto e la cartella delle clip (`mountAppPath` in `main/protocol.ts`, niente percorsi che ne escono).
 - Sul telefono resta il volto con gli occhi.
 
-Per provare gesti e pose senza cervello: `LUMI_DEBUG_ACT=wave,shrug,gaze:-300:0,mode:minimal` (con `LUMI_DEBUG_CAPTURE` salva i fotogrammi).
+Per provare gesti e pose senza cervello: `LUMI_DEBUG_ACT=wave,shrug,gaze:-300:0,mode:minimal` (con `LUMI_DEBUG_CAPTURE` salva i fotogrammi a 300, 700 e 1300 ms; per clip più lunghe `LUMI_DEBUG_ACT_EVERY=<ms>` cambia l'intervallo tra un gesto e l'altro e `LUMI_DEBUG_ACT_SHOTS=<ms,ms,...>` i momenti delle catture).
 
 ---
 
@@ -996,6 +996,7 @@ lumi/
 │  ├─ text/                    normalize_it.py  lexicon_it.py  trappole_it.txt  accenti_it.txt
 │  ├─ embed/                   onnx_embed.py  (embedding bge-m3 sul processore per la memoria, fase 10.6)
 │  ├─ lora/                    data.py  prepare.py  train.py  (voce addestrata in italiano, fase 17.5)
+│  ├─ motion/                  vrma.py  runpod/  (gesti text-to-motion su una GPU in affitto -> .vrma, fase 19.3)
 │  ├─ scripts/                 smoke.py  pronuncia.py  accenti.py  prosody.py
 │  ├─ pyproject.toml
 │  └─ tests/
@@ -1141,7 +1142,7 @@ Ogni fase si chiude con `npm run check` e `pytest` verdi e una prova manuale.
 19. **Lumi in 3D** ([dettagli](#lumi-in-3d)):
     1. ~~Avatar VRM con three-vrm al posto degli occhi (spunta, cambio al volo), respiro, battito e sguardo procedurali, espressioni dalle emozioni, lipsync dall'audio del TTS~~ (fatto).
     2. ~~Gesti scelti dal cervello (`say.gesture`) da una libreria di clip: tredici inclusi a fotogrammi chiave, clip Mixamo `.fbx` e `.vrma` dell'utente in `%APPDATA%\Luminimations`~~ (fatto).
-    3. Clip generate offline con modelli text-to-motion open source (HY-Motion 1.0 di Tencent, Kimodo di NVIDIA), riadattate al VRM ed esportate in `.vrma`: una libreria più ricca senza generare niente durante la conversazione.
+    3. Clip generate offline con modelli text-to-motion open source (HY-Motion 1.0 di Tencent, Kimodo di NVIDIA), riadattate al VRM ed esportate in `.vrma`: una libreria più ricca senza generare niente durante la conversazione. In corso: `sidecar/motion/` (conversione in `.vrma` testata, script per RunPod da provare su un pod; istruzioni nel suo README). Predefinito Kimodo SOMA: la licenza di HY-Motion esclude l'Unione Europea.
     4. Gesti neurali dal parlato in streaming (modelli audio → gesti senza look-ahead, come quelli presentati a CVPR 2026 o EchoAvatar) come processo separato nel sidecar, se latenza e GPU lo permettono; lo scheletro va riadattato al VRM.
 
 ---
