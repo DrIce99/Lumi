@@ -4,8 +4,10 @@
 //
 // Each moment is a fresh request: a stable system prompt plus one user
 // message carrying the situation, the screen, memory and recent
-// conversation. Within a moment the loop only continues after
-// look_at_screen, whose screenshot the model needs to see.
+// conversation. Within a moment the loop continues after the tools that
+// bring something back (look_at_screen, searches) and after actions on the
+// PC (phase 16), whose verified result the model needs to go on: those get
+// a budget of steps and time per request.
 import { guessEmotion, type Emotion } from "../../shared/emotions";
 import { PROVIDERS } from "../../shared/providers";
 import type { DayMoodId } from "../../shared/dayMood";
@@ -16,7 +18,7 @@ import { PROMISES, readIntents } from "./intents";
 import { describeHit, factFromRow, importanceOf, RECENT_LINES, speakerLabel, type ConversationEntry, type Memory, type RewriteMaterial, type SummaryRecord } from "./memory";
 import { buildContext, buildSystemPrompt, messageForHistory, type Situation, type Trigger } from "./prompt";
 import { ProviderError, type ChatProvider, type LiveSay, type MomentSession, type ToolCallOut, type ToolResultIn } from "./providers/types";
-import { parseToolCall, type LookRegion, type ToolCall } from "./tools";
+import { isPcCall, parseToolCall, PC_TOOLS, type LookRegion, type PcCall, type ToolCall } from "./tools";
 
 export interface LookResult {
   notes: string[];
@@ -77,12 +79,25 @@ export interface BrainHost {
   /** Web search and page reading; return what the model reads. */
   webSearch?(query: string): Promise<string>;
   readPage?(url: string): Promise<string>;
+  /** Acts on the PC through the policy (main/pc/actions.ts); `first`: the moment's first action. Returns what happened, verified, for the model. */
+  pc?(call: PcCall, context: { requested: boolean; first: boolean }): Promise<string>;
 }
 
 const MAX_ROUNDS = 4;
 /** A sentence that waits longer than this for the "is it for me?" check is judged without the model. */
 const ADDRESSING_TIMEOUT_MS = 1500;
-const FOLLOW_UP = new Set<ToolCall["name"]>(["look_at_screen", "search_memory", "web_search", "read_page"]);
+const FOLLOW_UP = new Set<string>(["look_at_screen", "search_memory", "web_search", "read_page", ...PC_TOOLS]);
+/** Actions on the PC per request, and the time they may take from the first one (roadmap 16). */
+const PC_MAX_STEPS = 12;
+const PC_MAX_MS = 60_000;
+/** Rounds once the PC is involved: one per step, plus the answer. */
+const PC_MAX_ROUNDS = PC_MAX_STEPS + 2;
+
+/** The PC actions of one moment. */
+interface PcBudget {
+  steps: number;
+  startedAt: number;
+}
 /** search_memory results per call, and characters per result. */
 const MEMORY_RESULTS = 6;
 const MEMORY_HIT_CHARS = 700;
@@ -439,7 +454,7 @@ export class Brain {
     }
 
     const { provider, model } = chosen;
-    const session = provider.start({ model, system: buildSystemPrompt(settings), context });
+    const session = provider.start({ model, system: buildSystemPrompt(settings), context, ...(settings.pc.enabled ? {} : { exclude: PC_TOOLS }) });
     this.current = session;
     const speech = host.startSpeech(trigger);
     this.speech = speech;
@@ -449,10 +464,11 @@ export class Brain {
     const calledSoFar = new Set<string>();
     const heldTo = new Set<string>();
     let thinking = isMessage;
+    const pc: PcBudget = { steps: 0, startedAt: 0 };
 
     if (isMessage) host.setThinking(true);
     try {
-      for (let round = 0; round < MAX_ROUNDS && !this.interrupted; round++) {
+      for (let round = 0; round < (pc.steps ? PC_MAX_ROUNDS : MAX_ROUNDS) && !this.interrupted; round++) {
         const prior: LiveSay[] = says.map((s) => ({ ...s, complete: true }));
         const onLive = (live: LiveSay[]) => {
           if (thinking && live.some((s) => s.text)) {
@@ -476,7 +492,7 @@ export class Brain {
           }
           break;
         }
-        const ran = await this.runTools(result.toolCalls, says, isMessage);
+        const ran = await this.runTools(result.toolCalls, says, isMessage, pc);
         // Plain text counts as speech only when answering: some open models
         // reply in text instead of calling say, but in autonomous moments
         // that text is often just their reasoning.
@@ -485,7 +501,7 @@ export class Brain {
         for (const name of ran.called) calledSoFar.add(name);
         // Asked to remember or to move, and the tool wasn't called (small models just say "te lo segno", "arrivo"): one more round to do it
         const broken = PROMISES.filter((p) => intents[p.intent] && !calledSoFar.has(p.tool) && !heldTo.has(p.tool));
-        if (broken.length && ran.results.length && round < MAX_ROUNDS - 1) {
+        if (broken.length && ran.results.length && round < (pc.steps ? PC_MAX_ROUNDS : MAX_ROUNDS) - 1) {
           for (const p of broken) heldTo.add(p.tool);
           log.info(`Asked for ${broken.map((p) => p.tool).join(", ")} but it wasn't called: one more round`);
           const last = ran.results[ran.results.length - 1];
@@ -513,7 +529,7 @@ export class Brain {
     if (heard.text) host.memory.addMessage("lumi", heard.text, heard.interrupted);
   }
 
-  private async runTools(calls: ToolCallOut[], says: SayCall[], requestedByUser: boolean): Promise<{ results: ToolResultIn[]; said: boolean; followUp: boolean; called: Set<string> }> {
+  private async runTools(calls: ToolCallOut[], says: SayCall[], requestedByUser: boolean, pc: PcBudget): Promise<{ results: ToolResultIn[]; said: boolean; followUp: boolean; called: Set<string> }> {
     const results: ToolResultIn[] = [];
     const called = new Set<string>();
     let said = false;
@@ -530,7 +546,7 @@ export class Brain {
       if (parsed.name === "say") said = true;
       called.add(parsed.name);
       try {
-        const out = await this.execute(parsed, says, requestedByUser);
+        const out = isPcCall(parsed) ? { text: await this.actOnPc(parsed, requestedByUser, pc), images: [] } : await this.execute(parsed, says, requestedByUser);
         // A refused move must reach the model, or it goes on believing it moved
         if (parsed.name === "move_to" && /^You did NOT|^You can't/.test(out.text)) followUp = true;
         results.push({ id: call.id, name: call.name, text: out.text, images: out.images, isError: false });
@@ -543,7 +559,22 @@ export class Brain {
     return { results, said, followUp, called };
   }
 
-  private async execute(call: ToolCall, says: SayCall[], requestedByUser: boolean): Promise<{ text: string; images: LookResult["images"] }> {
+  /** One action on the PC, within the moment's budget of steps and time. */
+  private async actOnPc(call: PcCall, requested: boolean, pc: PcBudget): Promise<string> {
+    if (!this.host.pc || !this.host.settings().pc.enabled) return "You can't act on this PC: using the PC is off in the settings (tab PC). Tell the user they can turn it on there.";
+    if (this.interrupted) return "You were interrupted: nothing more was done.";
+    const now = Date.now();
+    if (pc.steps >= PC_MAX_STEPS || (pc.startedAt && now - pc.startedAt > PC_MAX_MS)) {
+      log.info(`PC budget used (${pc.steps} steps, ${Math.round((now - pc.startedAt) / 1000)} s): ${call.name} not run`);
+      return `You did NOT do it: this request already used its ${PC_MAX_STEPS} actions or ${PC_MAX_MS / 1000} seconds. Stop here, tell the user what you did and what is left.`;
+    }
+    const first = pc.steps === 0;
+    if (first) pc.startedAt = now;
+    pc.steps++;
+    return this.host.pc(call, { requested, first });
+  }
+
+  private async execute(call: Exclude<ToolCall, PcCall>, says: SayCall[], requestedByUser: boolean): Promise<{ text: string; images: LookResult["images"] }> {
     const memory = this.host.memory;
     const done = (text: string) => ({ text, images: [] });
     switch (call.name) {

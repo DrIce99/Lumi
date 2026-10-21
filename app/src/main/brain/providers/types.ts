@@ -73,6 +73,8 @@ export interface MomentOptions {
   model: string;
   system: string;
   context: string;
+  /** Tools left out of this moment (the PC's while that is off): fixed per settings, so the prefix stays cacheable. */
+  exclude?: ReadonlySet<string>;
 }
 
 /** One moment: a request, plus follow-ups after tools that return something (look_at_screen). */

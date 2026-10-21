@@ -118,7 +118,6 @@ class Skeleton:
     rest: np.ndarray  # (J, 3) joint positions at rest
     bones: dict[str, list[int]]  # VRM bone -> source joints folded into it, parent first
     head: int
-    fingers_move: bool  # the source animates the fingers (worth writing by default)
 
     def __post_init__(self) -> None:
         # Folding is right only when each bone's chain hangs from its VRM parent's last joint
@@ -159,7 +158,7 @@ def smpl_skeleton(joints: int = 22) -> Skeleton:
                     parents.append(up)
                     up = len(parents) - 1
                     bones[f"{side}{finger}{part}"] = [up]
-    return Skeleton(parents, np.array(rest), bones, head=15, fingers_move=False)
+    return Skeleton(parents, np.array(rest), bones, head=15)
 
 
 def named_skeleton(names: list[str], parents: list[int], rest: np.ndarray) -> Skeleton:
@@ -173,7 +172,7 @@ def named_skeleton(names: list[str], parents: list[int], rest: np.ndarray) -> Sk
         missing = [b for b in SMPL_BODY if b not in bones and b not in ("upperChest",)]
         if missing:
             raise ValueError(f"SOMA skeleton without {', '.join(missing)}")
-        return Skeleton(list(parents), np.asarray(rest, dtype=np.float64), bones, index["Head"], fingers_move=True)
+        return Skeleton(list(parents), np.asarray(rest, dtype=np.float64), bones, index["Head"])
     if len(names) >= 22 and names[0].lower() == "pelvis":
         sk = smpl_skeleton(22)
         sk.rest = np.asarray(rest, dtype=np.float64)[:22]
@@ -189,6 +188,9 @@ class Motion:
     pos: np.ndarray
     fps: float
     skeleton: Skeleton
+    # The up axis when the format fixes it ("y": Kimodo, HY-Motion), None to find it from the pose.
+    # Finding it fails on a clip spent lying down (the head is beside the hips, not above).
+    up: str | None = None
 
     @property
     def frames(self) -> int:
@@ -310,7 +312,7 @@ def from_axis_angle(poses: np.ndarray, trans: np.ndarray, fps: float = 30.0) -> 
         rots, sk = np.concatenate([mats[:, :22], mats[:, 25:55]], axis=1), smpl_skeleton(52)
     else:
         rots, sk = mats[:, :22], smpl_skeleton(22)
-    return Motion(rots, np.asarray(trans, dtype=np.float64).reshape(T, 3), float(fps), sk)
+    return Motion(rots, np.asarray(trans, dtype=np.float64).reshape(T, 3), float(fps), sk)  # up unknown: AMASS is Z up
 
 
 def load(path: str | Path, fps: float | None = None) -> Motion:
@@ -338,9 +340,12 @@ def load(path: str | Path, fps: float | None = None) -> Motion:
                 )
             if rots.shape[1] != len(sk.parents):
                 raise ValueError(f"{rots.shape[1]} joint rotations for a {len(sk.parents)} joint skeleton")
-            return Motion(rots, pos, rate, sk)
+            return Motion(rots, pos, rate, sk, up="y")  # Kimodo: Y up
         if "poses" in keys and "trans" in keys:
-            return from_axis_angle(z["poses"], z["trans"], rate)
+            m = from_axis_angle(z["poses"], z["trans"], rate)
+            if "Rh" in keys:  # HY-Motion's files (AMASS has no Rh): Y up
+                m.up = "y"
+            return m
         if {"root_orient", "pose_body", "trans"} <= keys:
             poses = np.concatenate([z["root_orient"], z["pose_body"]], axis=-1)
             if "pose_hand" in keys:
@@ -357,14 +362,18 @@ def trim(m: Motion, start: float | None, end: float | None) -> Motion:
     b = m.frames if end is None else min(m.frames, int(round(end * m.fps)))
     if b - a < 2:
         raise ValueError("the trimmed clip is shorter than two frames")
-    return Motion(m.rots[a:b], m.pos[a:b], m.fps, m.skeleton)
+    return Motion(m.rots[a:b], m.pos[a:b], m.fps, m.skeleton, m.up)
 
 
-def orient(m: Motion, up: str = "auto", facing: str = "start") -> tuple[Motion, str, float, float]:
-    """Y up, facing +Z. Returns the motion, the up axis found, the start turn and the yaw range (degrees)."""
+def orient(m: Motion, up: str = "auto", facing: str = "start", turn: float | np.ndarray = 0.0) -> tuple[Motion, str, float, float]:
+    """Y up, facing +Z, then turned by `turn` degrees (90 = facing +X, the character's left: a profile;
+    one value per frame turns it gradually).
+    Returns the motion, the up axis found, the start turn and the yaw range (degrees)."""
     root = m.skeleton.root
     rots = m.rots.copy()
     pos = m.pos.copy()
+    if up == "auto" and m.up:
+        up = m.up
     if up == "auto":
         v = (forward_kinematics(m)[:, m.skeleton.head] - pos).mean(axis=0)
         i = int(np.argmax(np.abs(v)))
@@ -386,11 +395,13 @@ def orient(m: Motion, up: str = "auto", facing: str = "start") -> tuple[Motion, 
     start = float(np.arctan2(np.sin(yaw[:n]).mean(), np.cos(yaw[:n]).mean()))
     if facing not in FACING_MODES:
         raise ValueError(f"facing must be one of {FACING_MODES}, not {facing!r}")
-    turn = 0.0 if facing == "keep" else -start
-    q0 = rot_y(turn)
-    pos = pos @ q0.T
-    rots[:, root] = (rot_y(-yaw) if facing == "locked" else q0) @ rots[:, root]
-    return Motion(rots, pos, m.fps, m.skeleton), up_name, float(np.degrees(-turn)), yaw_range
+    first = 0.0 if facing == "keep" else -start
+    # The extra turn may change over time (an idle turning into profile while it lies down)
+    extra = rot_y(np.broadcast_to(np.radians(np.asarray(turn, dtype=np.float64)), (m.frames,)))
+    q0 = extra @ rot_y(first)
+    pos = np.einsum("tij,tj->ti", q0, pos)
+    rots[:, root] = (extra @ rot_y(-yaw) if facing == "locked" else q0) @ rots[:, root]
+    return Motion(rots, pos, m.fps, m.skeleton, "y"), up_name, float(np.degrees(-first)), yaw_range
 
 
 def hips_track(m: Motion, root: str = "inplace") -> tuple[np.ndarray, float]:
@@ -408,13 +419,13 @@ def hips_track(m: Motion, root: str = "inplace") -> tuple[np.ndarray, float]:
     return out, travel
 
 
-def vrm_bones(m: Motion, fingers: bool) -> list[tuple[str, int, np.ndarray, np.ndarray]]:
+def vrm_bones(m: Motion) -> list[tuple[str, int, np.ndarray, np.ndarray]]:
     """(VRM bone, index of its parent in this list, rest offset, local rotations (T, 3, 3)), parents first."""
     sk = m.skeleton
     out: list[tuple[str, int, np.ndarray, np.ndarray]] = []
     at: dict[str, int] = {}
     for bone in VRM_PARENT:  # parents come first in this order
-        if bone not in sk.bones or (bone in FINGER_BONES and not fingers):
+        if bone not in sk.bones:
             continue
         chain = sk.bones[bone]
         rot = m.rots[:, chain[0]]
@@ -427,22 +438,179 @@ def vrm_bones(m: Motion, fingers: bool) -> list[tuple[str, int, np.ndarray, np.n
     return out
 
 
-def convert(
+# --- hands -------------------------------------------------------------------
+
+# Text-to-motion models leave the fingers still (Kimodo SOMA fills them with a
+# relaxed pose, HY-Motion with a mean pose): such tracks would freeze the
+# app's living fingers, so they are dropped, and a gesture that needs a fist
+# or a pointing finger names a shape. Same conventions and angles as the
+# app's pose.ts: Euler XYZ degrees on normalized bones, fingers curl with Z
+# (left -, right +), the thumb folds with X and crosses the palm with Y.
+HAND_SHAPES = ("relaxed", "open", "fist", "point", "claw", "pinch", "thumbs_up")
+_CURLS = {
+    # index, middle, ring, little, thumb fold
+    "relaxed": (14, 14, 14, 14, 20),
+    "open": (2, 2, 2, 2, 0),
+    "fist": (85, 85, 85, 85, 55),
+    "point": (0, 85, 85, 85, 45),
+    "claw": (45, 45, 45, 45, 25),
+    "pinch": (45, 35, 30, 30, 45),
+    "thumbs_up": (85, 85, 85, 85, 0),
+}
+
+
+def euler_xyz(deg: np.ndarray) -> np.ndarray:
+    """Euler angles in degrees (three.js order XYZ) -> rotation matrix."""
+    x, y, z = np.radians(np.asarray(deg, dtype=np.float64))
+    rx = np.array([[1, 0, 0], [0, np.cos(x), -np.sin(x)], [0, np.sin(x), np.cos(x)]])
+    ry = np.array([[np.cos(y), 0, np.sin(y)], [0, 1, 0], [-np.sin(y), 0, np.cos(y)]])
+    rz = np.array([[np.cos(z), -np.sin(z), 0], [np.sin(z), np.cos(z), 0], [0, 0, 1]])
+    return rx @ ry @ rz
+
+
+def hand_shape(side: str, shape: str) -> dict[str, np.ndarray]:
+    """VRM finger bone -> Euler degrees of a hand shape."""
+    if shape not in _CURLS:
+        raise ValueError(f"hand shape {shape!r}: one of {', '.join(HAND_SHAPES)}")
+    *fingers, fold = _CURLS[shape]
+    z = -1 if side == "left" else 1
+    out: dict[str, np.ndarray] = {}
+    for name, deg in zip(("Index", "Middle", "Ring", "Little"), fingers):
+        for joint in ("Proximal", "Intermediate", "Distal"):
+            out[f"{side}{name}{joint}"] = np.array([0.0, 0.0, z * deg])
+    y = (0.6 if side == "left" else -0.6) * fold
+    out[f"{side}ThumbMetacarpal"] = np.array([0.2 * fold, 0.6 * y, 0.0])
+    out[f"{side}ThumbProximal"] = np.array([0.4 * fold, y, 0.0])
+    out[f"{side}ThumbDistal"] = np.array([0.5 * fold, 0.5 * y, 0.0])
+    return out
+
+
+def fingers_animated(bones: list[tuple[str, int, np.ndarray, np.ndarray]], side: str, degrees: float = 2.0) -> bool:
+    """Whether any finger of that hand moves by more than `degrees` during the clip."""
+    for name, _, _, rot in bones:
+        if name.startswith(side) and name in FINGER_BONES:
+            q = continuous(matrix_to_quat(rot)[:, None])[:, 0]
+            if np.degrees(2 * np.arccos(np.clip(np.abs(q @ q[0]), 0, 1))).max() > degrees:
+                return True
+    return False
+
+
+def hand_activity(m: Motion, side: str) -> np.ndarray:
+    """0 while the hand hangs by the hips, 1 once it is up and gesturing (above the hips), smoothed over 0.2 s."""
+    sk = m.skeleton
+    world = forward_kinematics(m)
+    lift = world[:, sk.bones[f"{side}Hand"][0], 1] - world[:, sk.root, 1]
+    x = np.clip((lift + 0.02) / 0.17, 0, 1)
+    a = x * x * (3 - 2 * x)
+    k = max(1, int(round(0.2 * m.fps)))
+    padded = np.pad(a, (k // 2, k - 1 - k // 2), mode="edge")
+    return np.convolve(padded, np.ones(k) / k, mode="valid")
+
+
+def slerp(q0: np.ndarray, q1: np.ndarray, t: np.ndarray) -> np.ndarray:
+    """Quaternions from q0 to q1 at each t (T,) -> (T, 4)."""
+    if q0 @ q1 < 0:
+        q1 = -q1
+    theta = float(np.arccos(np.clip(q0 @ q1, -1, 1)))
+    t = np.asarray(t, dtype=np.float64)[:, None]
+    if theta < 1e-6:
+        q = q0 + t * (q1 - q0)
+    else:
+        q = (np.sin((1 - t) * theta) * q0 + np.sin(t * theta) * q1) / np.sin(theta)
+    return q / np.linalg.norm(q, axis=-1, keepdims=True)
+
+
+def quat_to_matrix(q: np.ndarray) -> np.ndarray:
+    x, y, z, w = q[..., 0], q[..., 1], q[..., 2], q[..., 3]
+    rows = [
+        1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w),
+        2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w),
+        2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y),
+    ]  # fmt: skip
+    return np.stack(rows, -1).reshape(*q.shape[:-1], 3, 3)
+
+
+def finger_offset(bone: str) -> np.ndarray:
+    """A finger bone's rest offset from its parent, from the SMPL-H hand (for skeletons without fingers)."""
+    side = "left" if bone.startswith("left") else "right"
+    mirror = np.array([1.0 if side == "left" else -1.0, 1.0, 1.0])
+    for f, (finger, parts) in enumerate(SMPL_FINGERS):
+        names = parts.split()
+        for k, part in enumerate(names):
+            if bone == f"{side}{finger}{part}":
+                prev = SMPL_FINGER_REST[f * 3 + k - 1] if k else np.zeros(3)
+                return (SMPL_FINGER_REST[f * 3 + k] - prev) * mirror
+    raise KeyError(bone)
+
+
+def shaped_fingers(m: Motion, side: str, shape: str) -> dict[str, np.ndarray]:
+    """Finger rotations (T, 3, 3): relaxed while the hand hangs, `shape` while it gestures."""
+    a = hand_activity(m, side)
+    relaxed = hand_shape(side, "relaxed")
+    out = {}
+    for bone, deg in hand_shape(side, shape).items():
+        q0 = matrix_to_quat(euler_xyz(relaxed[bone]))
+        q1 = matrix_to_quat(euler_xyz(deg))
+        out[bone] = quat_to_matrix(slerp(q0, q1, a))
+    return out
+
+
+# --- the whole conversion ----------------------------------------------------
+
+
+def convert_parts(
     m: Motion,
+    parts: list[tuple[str, int, int]],
     root: str = "inplace",
     facing: str = "start",
     up: str = "auto",
     hands: bool | None = None,
-) -> tuple[bytes, Report]:
-    """The .vrma bytes; `hands` None = fingers only when the source animates them (Kimodo SOMA)."""
-    m, up_name, turned, yaw_range = orient(m, up, facing)
+    shapes: dict[str, str] | None = None,
+    turn: float | np.ndarray = 0.0,
+) -> tuple[dict[str, bytes], Report]:
+    """Several .vrma cut from one motion at frames [start, end): orientation, floor and hands are worked
+    out on the whole motion, so the parts join where they were cut (an idle's enter, loop and exit).
+    `hands`: True/False forces the model's finger tracks in or out, None keeps them only if they move;
+    `shapes` ({"right": "fist"}) gives a hand that shape while it gestures (relaxed while it hangs)."""
+    m, up_name, turned, yaw_range = orient(m, up, facing, turn)
     hips, travel = hips_track(m, root)
-    fingers = m.skeleton.fingers_move if hands is None else hands
-    bones = vrm_bones(m, fingers)
-    fingers = any(b[0] in FINGER_BONES for b in bones)
-    data = vrma_bytes(bones, hips, m.skeleton.hips_height(), m.fps)
+    bones = vrm_bones(m)
+    shaped = {side: shaped_fingers(m, side, shape) for side, shape in (shapes or {}).items()}
+    keep = {s: s not in shaped and (fingers_animated(bones, s) if hands is None else hands) for s in ("left", "right")}
+    kept = []
+    for name, parent, offset, rot in bones:
+        if name in FINGER_BONES:
+            side = "left" if name.startswith("left") else "right"
+            if side in shaped:
+                rot = shaped[side].get(name, rot)
+            elif not keep[side]:
+                continue
+        kept.append((name, parent, offset, rot))
+    # Parent indices pointed into the full list: renumber (fingers only hang from hands and fingers)
+    index = {b[0]: i for i, b in enumerate(kept)}
+    kept = [(n, index[bones[p][0]] if p >= 0 else -1, o, r) for n, p, o, r in kept]
+    # A skeleton without fingers (SMPL body) gets them, at the SMPL-H hand's rest offsets
+    for side, rots in shaped.items():
+        for bone, rot in rots.items():
+            if bone in index:
+                continue
+            up = VRM_PARENT[bone]
+            index[bone] = len(kept)
+            kept.append((bone, index[up], finger_offset(bone), rot))
+    fingers = any(b[0] in FINGER_BONES for b in kept)
+    out = {}
+    for name, a, b in parts:
+        if not 0 <= a < b <= m.frames or b - a < 2:
+            raise ValueError(f"part {name}: frames {a}-{b} outside the motion ({m.frames} frames)")
+        out[name] = vrma_bytes([(n, p, o, r[a:b]) for n, p, o, r in kept], hips[a:b], m.skeleton.hips_height(), m.fps)
     report = Report(m.frames / m.fps, m.frames, up_name, turned, travel, yaw_range, fingers)
-    return data, report
+    return out, report
+
+
+def convert(m: Motion, **options) -> tuple[bytes, Report]:
+    """One .vrma for the whole motion (options as in convert_parts)."""
+    parts, report = convert_parts(m, [("all", 0, m.frames)], **options)
+    return parts["all"], report
 
 
 # --- glTF / VRMA -------------------------------------------------------------
@@ -566,8 +734,26 @@ def add_options(p: argparse.ArgumentParser) -> None:
         "--hands",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="finger tracks (default: only when the model animates them, i.e. Kimodo SOMA)",
+        help="the model's finger tracks (default: only if they move; Kimodo and HY-Motion leave them still)",
     )
+    p.add_argument(
+        "--hand",
+        action="append",
+        default=[],
+        metavar="SIDE=SHAPE",
+        help=f"a hand shape while that hand gestures, e.g. right=fist ({', '.join(HAND_SHAPES)})",
+    )
+    p.add_argument("--turn", type=float, default=0.0, help="degrees to turn after facing the camera (90 = profile)")
+
+
+def options_from(args: argparse.Namespace) -> dict:
+    shapes = {}
+    for item in args.hand:
+        side, _, shape = item.partition("=")
+        if side not in ("left", "right") or shape not in HAND_SHAPES:
+            raise SystemExit(f"--hand {item}: left|right=one of {', '.join(HAND_SHAPES)}")
+        shapes[side] = shape
+    return {"root": args.root, "facing": args.facing, "up": args.up, "hands": args.hands, "shapes": shapes, "turn": args.turn}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -578,6 +764,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--trim", help="seconds to keep, start:end (either may be empty)")
     p.add_argument("--fps", type=float, help="frame rate when the file doesn't say (default 30)")
     args = p.parse_args(argv)
+    options = options_from(args)
 
     files: list[Path] = []
     for item in map(Path, args.inputs):
@@ -596,7 +783,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.trim:
                 a, _, b = args.trim.partition(":")
                 m = trim(m, float(a) if a else None, float(b) if b else None)
-            data, report = convert(m, root=args.root, facing=args.facing, up=args.up, hands=args.hands)
+            data, report = convert(m, **options)
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_bytes(data)
             print(f"{src} -> {dst}: {describe(report)}")
@@ -608,3 +795,17 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def turn_ramp(parts: list[tuple[str, int, int]], frames: int, degrees: float) -> np.ndarray:
+    """An idle's extra turn per frame: from 0 to `degrees` over the enter part, held in the loop, back to 0
+    over the exit (it turns into profile while it lies down, and back while it gets up)."""
+    out = np.full(frames, float(degrees))
+    for name, a, b in parts:
+        u = np.clip((np.arange(a, b) - a) / max(1, b - 1 - a), 0, 1)
+        ease = u * u * (3 - 2 * u)
+        if name == "enter":
+            out[a:b] = degrees * ease
+        elif name == "exit":
+            out[a:b] = degrees * (1 - ease)
+    return out

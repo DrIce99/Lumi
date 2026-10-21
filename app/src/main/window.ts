@@ -20,6 +20,7 @@ import {
   type FaceMode,
   type FaceState,
   type GazeCommand,
+  type IdleCommand,
   type MicControl,
   type MicEvent,
   type PlaybackEvent,
@@ -42,6 +43,8 @@ export interface FaceWindowHandlers {
   mic(event: MicEvent): void;
   /** The face is somewhere else: dropped by the user (`byUser`), or arrived after a flight. */
   moved(anchor: { x: number; y: number }, byUser: boolean): void;
+  /** An idle walk's loop started: the window should move at this pace (DIP per second). */
+  walkSpeed(pxPerSecond: number): void;
 }
 
 export class FaceWindow {
@@ -55,7 +58,7 @@ export class FaceWindow {
   private layout: FaceLayout;
   private drag: { dx: number; dy: number; timer: NodeJS.Timeout } | null = null;
   private lastContrast: FaceContrast | null = null;
-  private flight: { timer: NodeJS.Timeout; done: (arrived: boolean) => void } | null = null;
+  private flight: { timer: NodeJS.Timeout; done: (arrived: boolean) => void; walk?: boolean } | null = null;
   /** A flight between monitors with different scales: fading out, jumping, fading in. */
   private fading = false;
 
@@ -146,6 +149,9 @@ export class FaceWindow {
     on(IPC.mic, (_e, event) => {
       if (event && typeof event === "object") handlers.mic(event as MicEvent);
     });
+    on(IPC.walkSpeed, (_e, px) => {
+      if (typeof px === "number" && Number.isFinite(px) && px > 0) handlers.walkSpeed(Math.min(2000, px));
+    });
   }
 
   /** Center of the face in screen DIP. */
@@ -211,6 +217,26 @@ export class FaceWindow {
     this.flight = { timer, done };
   }
 
+  /**
+   * Walks the face to `target` at a steady `pxPerSecond` (an idle walk: her
+   * steps set the pace). No lean or landing: the walk clip does the body.
+   */
+  walkTo(target: Point, pxPerSecond: number, done: (arrived: boolean) => void = () => undefined): void {
+    this.stopFlight();
+    if (this.drag) return done(false);
+    const to = this.validAnchor(target);
+    const from = { ...this.anchor };
+    const duration = Math.max(1, (Math.hypot(to.x - from.x, to.y - from.y) / Math.max(1, pxPerSecond)) * 1000);
+    const start = Date.now();
+    const timer = setInterval(() => {
+      const t = Math.min(1, (Date.now() - start) / duration);
+      this.anchor = { x: Math.round(from.x + (to.x - from.x) * t), y: Math.round(from.y + (to.y - from.y) * t) };
+      this.applyBounds();
+      if (t >= 1) this.finishFlight(true);
+    }, 16);
+    this.flight = { timer, done, walk: true };
+  }
+
   /** Stops a flight where it is (the user grabbed the face). */
   stopFlight(): void {
     if (this.flight) this.finishFlight(false);
@@ -221,7 +247,7 @@ export class FaceWindow {
     if (!flight) return;
     clearInterval(flight.timer);
     this.flight = null;
-    this.send(IPC.travel, { vx: 0, vy: 0, landed: arrived });
+    if (!flight.walk) this.send(IPC.travel, { vx: 0, vy: 0, landed: arrived });
     if (arrived) {
       this.anchor = this.validAnchor(this.anchor);
       this.applyBounds();
@@ -276,6 +302,11 @@ export class FaceWindow {
   /** A body gesture chosen by the brain. */
   act(gesture: string): void {
     this.send(IPC.act, gesture);
+  }
+
+  /** Starts or stops an idle routine (3D). */
+  idle(command: IdleCommand): void {
+    this.send(IPC.idle, command);
   }
 
   /** Screens were added, removed or rearranged. */
@@ -391,6 +422,11 @@ export class FaceWindow {
 
   micControl(control: MicControl): void {
     this.send(IPC.micControl, control);
+  }
+
+  /** The work area of the display the face is on (DIP). */
+  workArea(): Rectangle {
+    return screen.getDisplayNearestPoint(this.centerOf(this.anchor)).workArea;
   }
 
   private validAnchor(anchor: Point | null): Point {

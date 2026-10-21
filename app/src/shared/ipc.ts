@@ -7,6 +7,7 @@ export const IPC = {
   gesture: "face:gesture",
   act: "face:act",
   avatar: "face:avatar",
+  idle: "face:idle",
   contrast: "face:contrast",
   glare: "face:glare",
   bubbleStart: "face:bubble-start",
@@ -34,6 +35,7 @@ export const IPC = {
   bubbleChoice: "face:bubble-choice",
   playback: "audio:playback",
   mic: "mic:event",
+  walkSpeed: "face:walk-speed",
   // settings window <-> main (invoke/handle)
   settingsLoad: "settings:load",
   settingsSave: "settings:save",

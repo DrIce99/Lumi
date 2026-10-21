@@ -121,6 +121,7 @@ export function sanitizeSettings(input: unknown): Settings {
   const moodWeights = obj(mood.weights);
   const habits = obj(raw.habits);
   const phone = obj(raw.phone);
+  const pc = obj(raw.pc);
   const memory = obj(raw.memory);
   const embeddings = obj(memory.embeddings);
   const weights = obj(memory.weights);
@@ -184,6 +185,10 @@ export function sanitizeSettings(input: unknown): Settings {
       enabled: bool(phone.enabled, d.phone.enabled),
       port: Math.round(num(phone.port, d.phone.port, 1024, 65535)),
     },
+    pc: {
+      enabled: bool(pc.enabled, d.pc.enabled),
+      trustedApps: strings(pc.trustedApps, d.pc.trustedApps, 50, 80).map((a) => a.replace(/\.exe$/i, "")),
+    },
     habits: {
       enabled: bool(habits.enabled, d.habits.enabled),
       proposalCooldownMinutes: Math.round(num(habits.proposalCooldownMinutes, d.habits.proposalCooldownMinutes, 5, 240)),
@@ -227,6 +232,10 @@ export function sanitizeSettings(input: unknown): Settings {
       showInCaptures: bool(face.showInCaptures, d.face.showInCaptures),
       mode: oneOf(face.mode, FACE_MODES, d.face.mode),
       model: /\.vrm$/i.test(str(face.model, "", 400).trim()) ? str(face.model, "", 400).trim() : "",
+      idle: {
+        enabled: bool(obj(face.idle).enabled, d.face.idle.enabled),
+        afterMinutes: Math.round(num(obj(face.idle).afterMinutes, d.face.idle.afterMinutes, 0.5, 60) * 2) / 2,
+      },
     },
     perception: {
       enabled: bool(perception.enabled, d.perception.enabled),

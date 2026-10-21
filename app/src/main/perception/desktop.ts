@@ -131,6 +131,17 @@ function processPath(w: Api, pid: number): string {
   return path;
 }
 
+/** The full path of a process's executable ("" when unknown): the open windows' apps (pc/win32.ts). */
+export function processImage(pid: number): string {
+  const w = load();
+  if (!w) return "";
+  try {
+    return processPath(w, pid);
+  } catch {
+    return "";
+  }
+}
+
 /** The window the user is working in, or null when unknown (or it is Lumi itself). */
 export function foregroundWindow(): ForegroundWindow | null {
   const w = load();

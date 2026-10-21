@@ -25,6 +25,7 @@
       <button class="tab" data-tab="screen" type="button">Schermo</button>
       <button class="tab" data-tab="memory" type="button">Memoria</button>
       <button class="tab" data-tab="phone" type="button">Telefono</button>
+      <button class="tab" data-tab="pc" type="button">PC</button>
       <button class="tab" data-tab="status" type="button">Stato</button>
     </nav>
 
@@ -74,6 +75,12 @@
               <small class="hint">Un file <code>.vrm</code> (VRoid Studio e simili).</small>
             </label>
             <p id="avatarClips" class="hint"></p>
+            <label class="check"><input id="idleEnabled" type="checkbox" /> Momenti di inattività: quando nessuno le parla per un po', si siede, legge, si appisola, passeggia (le routine nella cartella <code>idle</code> delle animazioni)</label>
+            <label class="field">
+              <span>Dopo quanti minuti di silenzio</span>
+              <input id="idleAfter" type="number" min="0.5" max="60" step="0.5" />
+            </label>
+            <p id="avatarIdles" class="hint"></p>
           </div>
         </div>
         <div class="card">
@@ -483,6 +490,24 @@
         </div>
         <h2>Telefoni abbinati</h2>
         <ul id="phones" class="list"></ul>
+      </section>
+
+      <section class="panel" data-panel="pc">
+        <h2>Usare il PC</h2>
+        <label class="check"><input id="pcEnabled" type="checkbox" /> Lumi può agire sul PC quando glielo chiedi: aprire app, giochi, cartelle e file, gestire le finestre, la musica, cercare file</label>
+        <p class="note">
+          Cosa può fare lo decide il codice, non il modello. Aprire, mettere in primo piano, ridurre a icona, i tasti della musica e la ricerca
+          dei file sono liberi. Chiudere un'app o spostare un file nel cestino li fa solo dopo il tuo sì (fumetto o a voce). Non cancella mai
+          file definitivamente, non esegue comandi o script, non installa né disinstalla, non tocca sicurezza, account, password e pagamenti,
+          e non agisce nelle app in cui la percezione si ferma. Se muovi il mouse o premi un tasto mentre lavora si ferma; Esc due volte annulla tutto.
+        </p>
+        <label class="field">
+          <span>App di fiducia: Lumi può chiuderle senza chiedere (una per riga, per esempio Spotify)</span>
+          <textarea id="pcTrustedApps" rows="3"></textarea>
+        </label>
+        <small id="pcIndex" class="hint"></small>
+        <h2>Ultime azioni</h2>
+        <ul id="pcActions" class="list"></ul>
       </section>
 
       <section class="panel" data-panel="status">

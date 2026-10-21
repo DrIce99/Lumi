@@ -4,9 +4,10 @@
 import { clampIntensity, EMOTIONS, guessEmotion, toEmotion, type Emotion } from "../../shared/emotions";
 import { DAY_MOODS, isDayMood, type DayMoodId } from "../../shared/dayMood";
 import { BODY_GESTURES, gestureId } from "../../shared/gestures";
-import { FACT_KINDS, type FactKind } from "../../shared/types";
+import { FACT_KINDS, FILE_KINDS, type FactKind, type FileKind } from "../../shared/types";
 import { STYLES, type MoveStyle } from "../motion/path";
 import { PLACES, type Place } from "../motion/places";
+import { MEDIA_ACTIONS, WINDOW_ACTIONS, type MediaAction, type WindowAction } from "../pc/policy";
 
 export interface ToolSpec {
   name: string;
@@ -223,6 +224,65 @@ export const TOOLS: ToolSpec[] = [
     },
   },
   {
+    name: "open",
+    description:
+      "Open something on the user's PC when they ask: an app or a game by its name ('Spotify', 'Hollow Knight', 'esplora file', 'il browser'), a folder ('la cartella download'), a file by its full path (from find_files), a web address, or a settings page ('impostazioni audio'). The result says what really opened.",
+    parameters: {
+      type: "object",
+      properties: { target: { type: "string", description: "What to open: a name as the user said it, a full path, or an address." } },
+      required: ["target"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "window",
+    description: "Act on the open window of an app when the user asks: bring it to the front, minimize, maximize, restore or close it. Closing asks the user first by itself.",
+    parameters: {
+      type: "object",
+      properties: {
+        app: { type: "string", description: "The app, as the user named it ('Discord', 'Chrome', 'la finestra della bolletta')." },
+        action: { type: "string", enum: [...WINDOW_ACTIONS], description: "focus (to the front), minimize, maximize, restore or close." },
+      },
+      required: ["app", "action"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "media",
+    description: "Press a media key, for any player (Spotify, a video in the browser...): play/pause, next or previous track, volume up or down by 10%, mute.",
+    parameters: {
+      type: "object",
+      properties: { action: { type: "string", enum: [...MEDIA_ACTIONS] } },
+      required: ["action"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "find_files",
+    description:
+      "Search the files on the user's PC (Windows Search index and recent files) by name, kind and date, without opening them: 'il PDF della bolletta', 'le foto di ieri'. The result lists them with their full path; open one with open, or ask which one when they are several.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Words of the file name, e.g. 'bolletta luce'. Leave out for 'the latest' of a kind." },
+        kind: { type: "string", enum: [...FILE_KINDS], description: "What kind of file (default any)." },
+        from: { type: "string", description: "Modified from, local date: '2026-10' or '2026-10-20'; alone, that whole month or day." },
+        to: { type: "string", description: "Modified until, included, same format." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "trash_file",
+    description: "Move a file or folder to the Recycle Bin when the user asks to delete it (the user confirms first, and can restore it). Give its full path, from find_files.",
+    parameters: {
+      type: "object",
+      properties: { path: { type: "string", description: "The full path." } },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "stay_quiet",
     description:
       "Choose to say nothing now (the best choice in most autonomous moments, and when the user is busy). Optionally, how many minutes to wait before your next autonomous moment.",
@@ -247,7 +307,22 @@ export type ToolCall =
   | { name: "name_voice"; voice: string; person: string }
   | { name: "stay_quiet"; minutes?: number }
   | { name: "change_mood"; mood: DayMoodId; reason: string }
-  | { name: "move_to"; where: Place | "stop"; text?: string; style?: MoveStyle; stay?: number };
+  | { name: "move_to"; where: Place | "stop"; text?: string; style?: MoveStyle; stay?: number }
+  | PcCall;
+
+/** Using the PC (phase 16): main/pc/actions.ts runs them through the policy. */
+export type PcCall =
+  | { name: "open"; target: string }
+  | { name: "window"; app: string; action: WindowAction }
+  | { name: "media"; action: MediaAction }
+  | { name: "find_files"; query?: string; kind?: FileKind; from?: string; to?: string }
+  | { name: "trash_file"; path: string };
+
+export const PC_TOOLS: ReadonlySet<string> = new Set<PcCall["name"]>(["open", "window", "media", "find_files", "trash_file"]);
+
+export function isPcCall(call: ToolCall): call is PcCall {
+  return PC_TOOLS.has(call.name);
+}
 
 /** Parses `when` ("+20", "20", "15:30", "2026-10-14 09:00") into a date after `now`; null when unreadable. */
 export function parseWhen(when: unknown, now: Date): Date | null {
@@ -363,6 +438,33 @@ export function parseToolCall(name: string, input: unknown, now = new Date()): T
     case "change_mood": {
       const mood = typeof o.mood === "string" ? o.mood.trim().toLowerCase() : "";
       return isDayMood(mood) ? { name, mood, reason: text(o.reason, 300) ?? "" } : null;
+    }
+    case "open": {
+      const target = text(o.target ?? o.app ?? o.path ?? o.url ?? o.name, 1000);
+      return target ? { name, target } : null;
+    }
+    case "window": {
+      const app = text(o.app ?? o.target ?? o.name, 200);
+      const action = typeof o.action === "string" ? o.action.trim().toLowerCase() : "";
+      return app && (WINDOW_ACTIONS as readonly string[]).includes(action) ? { name, app, action: action as WindowAction } : null;
+    }
+    case "media": {
+      const action = typeof o.action === "string" ? o.action.trim().toLowerCase().replace(/[\s-]+/g, "_") : "";
+      const alias: Record<string, MediaAction> = { play: "play_pause", pause: "play_pause", playpause: "play_pause", skip: "next", prev: "previous" };
+      const value = (MEDIA_ACTIONS as readonly string[]).includes(action) ? (action as MediaAction) : alias[action];
+      return value ? { name, action: value } : null;
+    }
+    case "find_files": {
+      const query = text(o.query ?? o.name ?? o.text, 200);
+      const kind = typeof o.kind === "string" && (FILE_KINDS as readonly string[]).includes(o.kind) ? (o.kind as FileKind) : undefined;
+      const from = text(o.from, 40);
+      const to = text(o.to, 40);
+      if (!query && !from && !to && (!kind || kind === "any")) return null;
+      return { name, ...(query ? { query } : {}), ...(kind ? { kind } : {}), ...(from ? { from } : {}), ...(to ? { to } : {}) };
+    }
+    case "trash_file": {
+      const path = text(o.path ?? o.target ?? o.file, 1000);
+      return path ? { name, path } : null;
     }
     case "stay_quiet": {
       const minutes = typeof o.minutes === "number" && Number.isFinite(o.minutes) && o.minutes >= 1 && o.minutes <= 240 ? o.minutes : undefined;

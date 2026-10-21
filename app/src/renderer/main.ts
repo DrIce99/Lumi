@@ -108,6 +108,7 @@ function setMode(next: FaceMode): void {
         if (face === avatar) useEyes();
       });
       avatar.setBrightSource(() => player.brightness());
+      avatar.onWalkSpeed = (px) => api.walkSpeed(px);
       adopt(avatar);
       if (avatarConfig) void avatar.setConfig(avatarConfig).catch(() => undefined);
     })
@@ -331,6 +332,9 @@ api.onGaze((gaze) => {
 api.onGesture((gesture) => face.gesture(gesture));
 api.onAct((gesture) => {
   if ("act" in face) (face as Avatar).act(gesture);
+});
+api.onIdle((command) => {
+  if ("idle" in face) (face as Avatar).idle(command);
 });
 api.onContrast((contrast) => face.setContrast(contrast));
 api.onGlare(({ lightDx }) => face.glare(lightDx));

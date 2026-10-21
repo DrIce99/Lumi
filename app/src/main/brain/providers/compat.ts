@@ -147,12 +147,15 @@ class CompatSession implements MomentSession {
   private jsonMode: boolean;
   private lastReply: SimpleMessage | null = null;
   private controller = new AbortController();
+  /** The tools this moment offers (all of them unless the options leave some out). */
+  private readonly tools: ToolSpec[];
 
   constructor(
     private readonly provider: CompatProvider,
     private readonly options: MomentOptions,
   ) {
     this.jsonMode = provider.noTools.has(options.model);
+    this.tools = options.exclude?.size ? TOOL_SPECS.filter((t) => !options.exclude!.has(t.name)) : TOOL_SPECS;
     this.messages = [
       { role: "system", text: this.systemText() },
       { role: "user", text: options.context },
@@ -252,7 +255,7 @@ class CompatSession implements MomentSession {
       if (says.length) onLive(says);
     };
     const outcome = await this.provider.transport.stream(
-      { model: this.options.model, messages: this.messages, tools: this.jsonMode ? null : TOOL_SPECS, json: this.jsonMode, maxTokens: MAX_TOKENS },
+      { model: this.options.model, messages: this.messages, tools: this.jsonMode ? null : this.tools, json: this.jsonMode, maxTokens: MAX_TOKENS },
       (delta) => {
         if (delta.text) {
           text += delta.text;

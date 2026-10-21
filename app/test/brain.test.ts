@@ -584,6 +584,53 @@ test("a short line and a web search in one reply: the results come back and the 
   );
 });
 
+test("actions on the PC continue the moment step by step, within a budget of 12; the tools exist only when it is on", async () => {
+  const provider = new CompatProvider("groq", new OpenAITransport("https://api.example/v1", "gsk-test", "Groq"));
+  const t = host(provider, "llama-test");
+  const offered = (request: { body: Record<string, unknown> }) => ((request.body.tools ?? []) as { function: { name: string } }[]).map((x) => x.function.name);
+
+  // Off (the default): no PC tools in the request
+  await withFetch(
+    () => sse([toolDelta(0, { id: "c", function: { name: "say", arguments: '{"emotion": "neutra", "text": "Non posso."}' } }), { choices: [{ delta: {}, finish_reason: "tool_calls" }] }]),
+    async (requests) => {
+      await new Brain(t.h).handle({ kind: "message", text: "apri spotify", via: "voice" });
+      assert.ok(!offered(requests[0]).includes("open"));
+      assert.ok(offered(requests[0]).includes("web_search"));
+    },
+  );
+
+  const settings = { ...DEFAULT_SETTINGS, pc: { enabled: true, trustedApps: [] } };
+  t.h.settings = () => settings;
+  const calls: { target: string; first: boolean; requested: boolean }[] = [];
+  t.h.pc = async (call, context) => {
+    calls.push({ target: call.name === "open" ? call.target : call.name, ...context });
+    return `Opened ${call.name === "open" ? call.target : ""}.`;
+  };
+  await withFetch(
+    (_request, n) =>
+      n <= 13
+        ? sse([toolDelta(0, { id: `call_${n}`, function: { name: "open", arguments: JSON.stringify({ target: `app ${n}` }) } }), { choices: [{ delta: {}, finish_reason: "tool_calls" }] }])
+        : sse([toolDelta(0, { id: "end", function: { name: "say", arguments: '{"emotion": "neutra", "text": "Ho aperto tutto quello che potevo."}' } }), { choices: [{ delta: {}, finish_reason: "tool_calls" }] }]),
+    async (requests) => {
+      await new Brain(t.h).handle({ kind: "message", text: "apri tutte le app", via: "voice" });
+      assert.ok(offered(requests[0]).includes("open") && offered(requests[0]).includes("find_files"));
+      // Beyond the usual 4 rounds: 13 actions asked, then the answer
+      assert.equal(requests.length, 14);
+      const refused = requests[13].body.messages.find((m) => m.role === "tool" && m.tool_call_id === "call_13");
+      assert.match(String(refused?.content), /already used its 12 actions/);
+    },
+  );
+  assert.equal(calls.length, 12);
+  assert.deepEqual(calls.slice(0, 2), [
+    { target: "app 1", first: true, requested: true },
+    { target: "app 2", first: false, requested: true },
+  ]);
+  assert.deepEqual(t.finals.at(-1)?.map((s) => s.text), ["Ho aperto tutto quello che potevo."]);
+  // The system prompt explains the rules only when it is on
+  assert.match(buildSystemPrompt(settings), /# Using the PC/);
+  assert.doesNotMatch(buildSystemPrompt(DEFAULT_SETTINGS), /# Using the PC/);
+});
+
 test("models without tools can search memory and the web through the JSON reply", () => {
   assert.deepEqual(
     parseJsonReply('{"emotion": "neutra", "say": "Controllo.", "web_search": "orari farmacia", "search_memory": "dentista", "read_page": "https://example.com/a"}').map((c) => [c.name, c.input]),

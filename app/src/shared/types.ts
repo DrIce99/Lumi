@@ -108,6 +108,12 @@ export interface Settings {
   habits: { enabled: boolean; proposalCooldownMinutes: number; minOccurrences: number; minFrequency: number };
   /** The phone app (phase 15): the LAN server for pairing and calls, off until enabled. */
   phone: { enabled: boolean; port: number };
+  /**
+   * Using the PC (phase 16, main/pc/): opening apps, files and games,
+   * windows, media keys, finding files. Off until enabled. `trustedApps`:
+   * apps Lumi may close and drive without asking (pc/policy.ts).
+   */
+  pc: { enabled: boolean; trustedApps: string[] };
   /** Searching the web (web_search, read_page): which free service, or none. */
   web: { provider: WebProvider; searxngUrl: string };
   /** Long-term memory (memory.db): where the embeddings come from, and how results are ordered. */
@@ -151,6 +157,8 @@ export interface Settings {
     mode: FaceMode;
     /** A VRM file for the 3D mode; empty = the bundled Lumi.vrm. */
     model: string;
+    /** 3D only: idle routines (asleep, reading, walking...) when nobody talks to Lumi for `afterMinutes`. */
+    idle: { enabled: boolean; afterMinutes: number };
   };
   perception: {
     enabled: boolean;
@@ -195,6 +203,7 @@ export const DEFAULT_SETTINGS: Settings = {
   mood: { enabled: true, weights: DEFAULT_MOOD_WEIGHTS },
   habits: { enabled: true, proposalCooldownMinutes: 20, minOccurrences: 5, minFrequency: 0.7 },
   phone: { enabled: false, port: 47821 },
+  pc: { enabled: false, trustedApps: [] },
   web: { provider: "auto", searxngUrl: "" },
   memory: { embeddings: { provider: "auto", model: "bge-m3" }, weights: { relevance: 1, recency: 0.5, importance: 0.5 }, backupDays: 7 },
   listen: {
@@ -213,7 +222,7 @@ export const DEFAULT_SETTINGS: Settings = {
   voices: { enabled: true, onlyMe: false },
   discord: { enabled: false, userId: "" },
   appAudio: { enabled: false, apps: ["Discord"] },
-  face: { scale: 1, color: "#F5F3EE", subtitles: false, adaptiveShadow: true, glare: true, showInCaptures: false, mode: "minimal", model: "" },
+  face: { scale: 1, color: "#F5F3EE", subtitles: false, adaptiveShadow: true, glare: true, showInCaptures: false, mode: "minimal", model: "", idle: { enabled: true, afterMinutes: 2 } },
   perception: {
     enabled: true,
     ocr: "windows",
@@ -280,7 +289,39 @@ export const FACE_BOX: Record<FaceMode, { width: number; height: number }> = {
 export interface AvatarConfig {
   model: string;
   clips: Record<string, string>;
+  /** Idle routines from the user's animations\idle\<name>\ folders (sidecar/motion makes them). */
+  idles: Record<string, IdleRoutine>;
 }
+
+/**
+ * How the camera frames an idle routine: the usual half-length shot, the
+ * whole body (lying, sitting, walking), a wide-angle close-up of the eyes,
+ * or the window's bottom edge as a desk the forearms rest on.
+ */
+export type IdleCamera = "bust" | "body" | "closeup" | "desk";
+export const IDLE_CAMERAS: readonly IdleCamera[] = ["bust", "body", "closeup", "desk"];
+
+/** A routine Lumi plays when nobody talks to her: enter, then the loop until it ends or is interrupted, then exit. */
+export interface IdleRoutine {
+  name: string;
+  /** Clip URLs (app://lumi/user/animations/idle/<name>/...). */
+  enter: string;
+  loop: string;
+  exit: string;
+  camera: IdleCamera;
+  /** A prop in her hands while the loop plays. */
+  prop: "book" | null;
+  /** Eyes and mouth during the loop: asleep with the mouth open, dozing. */
+  face: { eyes: "open" | "closed" | "sleepy"; mouth: number };
+  /** The emotion she wakes up with when interrupted in the loop (null: none, she just gets up). */
+  wake: Emotion | null;
+  /** Walks: the window moves along at this pace (model hips heights per second), she turns in profile. */
+  walkSpeed: number | null;
+  seconds: { enter: number; loop: number; exit: number };
+}
+
+/** main -> face window: start a routine (it loops for `loopMs`, or until stopped), or stop it. */
+export type IdleCommand = { name: string; loopMs: number; dir: 1 | -1 } | { stop: true; startled: boolean };
 
 export interface FaceLayout {
   mode: FaceMode;
@@ -459,6 +500,7 @@ export interface FaceBridge {
   /** A body gesture chosen by the brain (the 3D avatar plays it; the eyes map a few). */
   onAct(cb: (gesture: string) => void): void;
   onAvatar(cb: (config: AvatarConfig) => void): void;
+  onIdle(cb: (command: IdleCommand) => void): void;
   onContrast(cb: (contrast: FaceContrast) => void): void;
   onGlare(cb: (msg: { lightDx: number }) => void): void;
   /** Flying across the screen: direction and speed (-1..1), `landed` at the end of a flight. */
@@ -491,6 +533,8 @@ export interface FaceBridge {
   bubbleChoice(bubbleId: number, choice: string): void;
   playback(event: PlaybackEvent): void;
   mic(event: MicEvent): void;
+  /** An idle walk started: how fast the window must move (DIP per second) to match her steps. */
+  walkSpeed(pxPerSecond: number): void;
 }
 
 // ---------------- sidecar status ----------------
@@ -559,12 +603,30 @@ export interface SettingsSnapshot {
   /** Habits found (phase 11), archived ones included. */
   habits: HabitInfo[];
   /** Where the 3D avatar's extra gesture clips go, and the ones found there. */
-  avatarClips: { dir: string; names: string[] };
+  avatarClips: { dir: string; names: string[]; idles: string[] };
   /** Today's mood (null when the mood of the day is off). */
   dayMood: { mood: DayMoodId; rolled: DayMoodId; intensity: number; since: string; changes: { at: string; from: DayMoodId; to: DayMoodId; intensity: number }[] } | null;
   /** The phone link: paired phones (no keys), the server and the call. */
   phone: { listening: boolean; devices: { id: string; name: string; paired: string; lastSeen?: string }[]; call: string; phoneName: string };
+  /** Using the PC: the app index and the latest actions (actions.jsonl). */
+  pc: { apps: number; games: number; actions: ActionRecord[] };
 }
+
+/** One line of actions.jsonl (main/pc/actionLog.ts): never typed text. */
+export interface ActionRecord {
+  at: string;
+  tool: string;
+  action?: string;
+  /** What it touched: an app, a file name, a folder, a host. */
+  target: string;
+  level: "free" | "confirm" | "never";
+  confirmed?: boolean;
+  outcome: "done" | "refused" | "declined" | "unanswered" | "failed" | "not_found" | "ambiguous" | "stopped";
+}
+
+/** Kinds of file find_files can look for (Windows Search's System.Kind, plus pdf and folder). */
+export const FILE_KINDS = ["any", "document", "pdf", "picture", "video", "music", "folder", "archive"] as const;
+export type FileKind = (typeof FILE_KINDS)[number];
 
 /** A memory the user may choose to forget (memory/db.ts ForgetItem). */
 export interface ForgetCandidate {

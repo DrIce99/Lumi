@@ -177,6 +177,18 @@ export class Mover {
     this.returnTimer = null;
   }
 
+  /**
+   * Whether an idle routine may move the face by itself now (a walk, the
+   * screen's edge as a desk): the same rules as an initiative, without the
+   * two-minute spacing (idle routines have their own pauses).
+   */
+  mayWander(): boolean {
+    const s = this.host.settings().movement;
+    const face = this.host.face;
+    if (!s.enabled || !s.initiative || this.now() < this.stillUntil || this.sulking !== null) return false;
+    return !face.isDragging() && !face.isMoving() && this.host.busy() === null;
+  }
+
   /** The user dragged the face: that is its place now, and any mood or planned return is over. */
   userMoved(): void {
     this.cancelReturn();

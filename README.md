@@ -51,7 +51,7 @@ L'obiettivo è che sembri **il più umano possibile**, cioè con poca latenza, t
 - **Si muove sullo schermo**: se le chiedi di spostarsi ("vai in alto a destra", "sull'altro schermo", "levati, mi copri") vola lì da sola, anche tra i monitor; e si muove anche di sua iniziativa quando ha un motivo, per indicarti qualcosa o per farti un piccolo dispetto se l'hai infastidita.
 - **Ha i suoi giorni**: ogni mattina si sveglia con un umore estratto a sorte (con le probabilità che scegli tu): allegra, tranquilla, annoiata, triste, arrabbiata… L'umore colora le risposte e gli occhi, e se è giù di corda torna di buon umore solo se riesci a tirarla su tu (ma può anche peggiorare, se la tratti male).
 - **Passa sul telefono**: con il tasto "Chiama" dell'app Lumi viene risucchiata fuori dallo schermo del PC (come un oggetto che cade in un buco nero) e riemerge nell'app, dove la vedi e le parli; voce, cervello e memoria restano sul PC.
-- **Usa il PC** (fase 16, prevista): apre e chiude app, file e cartelle, gestisce le finestre e la musica e preme i controlli dentro le app; le azioni che cambiano qualcosa le fa solo dopo averti chiesto conferma.
+- **Usa il PC** (facoltativo, spento di default): quando glielo chiedi apre app, giochi di Steam, cartelle, file e pagine, mette in primo piano, riduce, ingrandisce e chiude le finestre, controlla la musica e cerca i file per nome, tipo e data. Chiudere un'app o spostare un file nel cestino lo fa solo dopo il tuo sì; cancellare per sempre, eseguire comandi, installare o pagare mai. Premere i controlli dentro le app e scrivere arriveranno nei prossimi passi.
 - **Impara le tue abitudini**: dalle app che apri (solo i nomi, sul PC) capisce che "nei feriali verso le 9 apri Spotify" o che "dopo VS Code apri Discord", e al momento giusto ti chiede se aprirle. Fa da sola solo quando glielo permetti tu, per singola abitudine.
 - **Riconosce le voci**: un piccolo modello (WeSpeaker ResNet34, ONNX su CPU) misura l'"impronta" di ogni frase. La prima voce sentita al microfono è la tua; le altre diventano "Voce 2", "Voce 3"… finché non dici a Lumi chi sono ("quello che ha parlato è Marco", tool `name_voice`). Le impronte restano in `voices.json` e si cancellano dalle impostazioni.
 - **Parla nelle chiamate Discord** (facoltativo, spento di default): un bot ti segue nei canali vocali dei server e parla con la voce di Lumi, così la sentono anche i tuoi amici; tu la senti in Discord (sul PC non suona due volte) e gli occhi continuano ad animarsi. Il bot entra "silenziato in ascolto" (non riceve l'audio di nessuno). Non funziona nelle chiamate private: i bot non possono entrarci.
@@ -223,7 +223,7 @@ Con «Lumi in 3D» (Impostazioni → Generale → Aspetto) gli occhi lasciano il
 2. **Espressioni e labbra, senza reti dedicate** (`avatar/expressions3d.ts`): ogni emozione diventa un insieme di espressioni VRM (happy, sad, angry, surprised, relaxed) più una postura (testa, busto, spalle, palpebre, vivacità del movimento); l'intensità le scala e i pesi si interpolano come le forme degli occhi. Le espressioni VRM di un modello VRoid muovono tutto il viso, bocca compresa (un sorriso a bocca aperta anche mentre parla), quindi quando il modello ha i morph separati (`Fcl_BRW_*`, `Fcl_EYE_*`, `Fcl_MTH_*`) l'emozione va a sopracciglia e occhi, mentre la sua bocca appare solo a riposo, più leggera (la gioia con il sorriso chiuso), e mentre parla lascia la bocca alle vocali. Finita la risposta il viso torna neutro. Il **lipsync** segue l'audio del TTS nello stesso renderer: il volume apre la bocca e la "brillantezza" della voce (quota di energia sopra 1,5 kHz, dall'analizzatore del player) sceglie la vocale: chiara → e/i, scura → o/u, nel mezzo a. Nessun fonema dal testo: niente G2P, come per la pronuncia.
 3. **Gesti da una libreria di clip**: il tool `say` ha un campo facoltativo `gesture`, applicato alla prima frase della chiamata insieme all'emozione (sul "lead" del player, come lo sguardo). Il prompt li descrive solo in 3D e chiede di usarli come punteggiatura, al massimo uno per risposta. Inclusi, a fotogrammi chiave: `wave`, `nod`, `shake_head`, `shrug`, `think`, `point`, `bow`, `cheer`, `clap`, `facepalm`, `cross_arms`, `tilt_head`, `hop`. Le braccia sono definite per **direzioni** (dove punta il braccio, dove punta l'avambraccio, verso dove guarda il palmo: la rotazione dell'avambraccio su sé stesso che lo ottiene viene cercata dal codice) e convertite in rotazioni con i quaternioni, così una posa si scrive e si corregge a occhio. Le mani hanno dita e pollici in posa (pugni chiusi nell'esultanza, indice teso nell'indicare, palmo verso chi guarda nel saluto, palmi in su nelle spallucce) e a riposo le dita si muovono appena. I gesti a una mano usano la mano dal lato verso cui Lumi guarda. Con gli occhi minimali i pochi gesti che hanno senso diventano gesti degli occhi (annuire, scuotere, saltello).
 
-**Clip tue**: metti in `%APPDATA%\Luminimations` dei file **Mixamo `.fbx`** (scaricati "Without Skin") o **`.vrma`**, con il nome del gesto: `wave.fbx` sostituisce il saluto incluso, `dance.fbx` aggiunge `dance` (il cervello lo trova in `<situation>`). La cartella è sorvegliata, quindi non serve riavviare. Le Mixamo vengono riadattate allo scheletro umanoide del VRM come nell'esempio di three-vrm (`avatar/clipFiles.ts`: rotazioni portate nel sistema delle ossa normalizzate, altezza dei fianchi riscalata). Ogni gesto, incluso o tuo, si fonde sopra la posa a riposo con una dissolvenza in entrata e in uscita (slerp per osso), e due gesti si sovrappongono per il tempo del cambio. Le **spring bone** (capelli, vestiti) restano attive con `vrm.update()`, quindi reagiscono a qualsiasi movimento.
+**Clip tue**: metti in `%APPDATA%\Lumi\animations` dei file **Mixamo `.fbx`** (scaricati "Without Skin") o **`.vrma`**, con il nome del gesto: `wave.fbx` sostituisce il saluto incluso, `dance.fbx` aggiunge `dance` (il cervello lo trova in `<situation>`). La cartella è sorvegliata, quindi non serve riavviare. Le Mixamo vengono riadattate allo scheletro umanoide del VRM come nell'esempio di three-vrm (`avatar/clipFiles.ts`: rotazioni portate nel sistema delle ossa normalizzate, altezza dei fianchi riscalata). Ogni gesto, incluso o tuo, si fonde sopra la posa a riposo con una dissolvenza in entrata e in uscita (slerp per osso), e due gesti si sovrappongono per il tempo del cambio. Le **spring bone** (capelli, vestiti) restano attive con `vrm.update()`, quindi reagiscono a qualsiasi movimento.
 
 **Dettagli**:
 
@@ -233,6 +233,8 @@ Con «Lumi in 3D» (Impostazioni → Generale → Aspetto) gli occhi lasciano il
 - Il clic passa attraverso tutto tranne l'avatar: il test di contatto legge il canale alfa del fotogramma appena disegnato intorno al puntatore.
 - I file arrivano al renderer da `app://lumi/user/...`, che serve solo il modello scelto e la cartella delle clip (`mountAppPath` in `main/protocol.ts`, niente percorsi che ne escono).
 - Sul telefono resta il volto con gli occhi.
+
+**Momenti di inattività** (Impostazioni → Generale → Aspetto, accesi di serie): quando nessuno le parla per un po' (2 minuti di serie), Lumi in 3D fa una routine presa da `%APPDATA%\Lumi\animations\idle\<nome>\` (generate con `sidecar/motion`: entrata, ciclo, uscita; vedi il suo README): si sdraia a dormire con la bocca aperta, legge a pancia in giù con un libro, si siede sul bordo di un tavolo invisibile, passeggia di profilo con le mani dietro la schiena mentre la finestra la segue al passo, scende in fondo allo schermo e si appisola appoggiata al bordo come a un banco, o si avvicina all'obiettivo finché un occhio lo riempie. Il regista è in `main/idle.ts` (puro, testato): una routine alla volta, mai le ultime due, una pausa di qualche minuto fra una e l'altra; qualsiasi interazione (le parli, la tocchi, la trascini, lei deve parlare) la interrompe, e dal sonno si sveglia di colpo spaventata. Se sei lontano dal PC si addormenta finché non torni. Camminata e banco spostano la finestra: servono gli spostamenti di sua iniziativa. Nel renderer la camera segue la routine: tutto il corpo, il primo piano grandangolare dell'occhio, il bordo della finestra come banco.
 
 Per provare gesti e pose senza cervello: `LUMI_DEBUG_ACT=wave,shrug,gaze:-300:0,mode:minimal` (con `LUMI_DEBUG_CAPTURE` salva i fotogrammi a 300, 700 e 1300 ms; per clip più lunghe `LUMI_DEBUG_ACT_EVERY=<ms>` cambia l'intervallo tra un gesto e l'altro e `LUMI_DEBUG_ACT_SHOTS=<ms,ms,...>` i momenti delle catture).
 
@@ -753,9 +755,9 @@ Serve l'SDK Android (quello di Android Studio) e un JDK 21 (per esempio `JAVA_HO
 
 ## Usare il PC
 
-> Previsto (fase 16).
+> Fatti i passi 16.1–16.3 (policy, ciclo con budget e conferme, registro; indice delle app, `open`, `window`, `media`; file con `find_files` e `trash_file`). Previsti: `ui_action`, `press_keys`, `type_text`, `click` (16.4–16.5).
 
-Lumi deve poter **agire sul PC** su cui gira: aprire e chiudere app (Esplora file, Discord, Spotify, Opera, Steam, VS Code…), aprire file, gestire le finestre, controllare la musica e, nei passi successivi, interagire con i controlli dentro le app ("metti in pausa", "apri la cartella Download", "avvia Hollow Knight", "chiudi Discord", "cerca il PDF della bolletta e aprilo").
+Si accende in Impostazioni → **PC** (spento di default). Lumi deve poter **agire sul PC** su cui gira: aprire e chiudere app (Esplora file, Discord, Spotify, Opera, Steam, VS Code…), aprire file, gestire le finestre, controllare la musica e, nei passi successivi, interagire con i controlli dentro le app ("metti in pausa", "apri la cartella Download", "avvia Hollow Knight", "chiudi Discord", "cerca il PDF della bolletta e aprilo").
 
 ### Il principio: dal più affidabile al meno affidabile
 
@@ -772,9 +774,10 @@ Un modello che "vede" lo schermo e clicca coordinate (computer use generico) è 
 
 ### Trovare app e file
 
-- **Indice delle app** (`pc/apps.ts`), costruito all'avvio in background e aggiornato ogni ora: collegamenti del menu Start (`%ProgramData%` e `%AppData%\Microsoft\Windows\Start Menu`), app dello Store con il loro AppUserModelID (`Get-StartApps`, avviate con `shell:AppsFolder\<id>`) e giochi di Steam (`libraryfolders.vdf` + `appmanifest_*.acf` → nome e id). Il nome detto si cerca con la stessa ricerca approssimata di `grounding.ts`, più alias comuni ("esplora file", "il browser", "la musica" → l'app predefinita).
-- **File**: l'indice di Windows Search (`SystemIndex`, interrogato dal sidecar via OLE DB) per nome, tipo e data ("il PDF di ieri"), più i recenti di Windows (`%AppData%\Microsoft\Windows\Recent`). I risultati tornano al modello come elenco breve; se sono ambigui chiede quale.
-- **Finestre aperte**: enumerazione con `EnumWindows` (titolo, processo, monitor), così "chiudi Discord" sa cosa c'è.
+- **Indice delle app** (`pc/apps.ts`), costruito in background quando l'opzione è accesa e aggiornato ogni ora (e subito, se un nome non si trova e l'indice ha più di un minuto): una sola chiamata a PowerShell legge `Get-StartApps` (tutte le app del menu Start, anche quelle dello Store, con il loro AppUserModelID) e la destinazione dei collegamenti del menu Start (per sapere l'eseguibile di ogni app e ritrovarne le finestre); i giochi di Steam vengono da `libraryfolders.vdf` + `appmanifest_*.acf`. Le app si avviano come fa il menu Start, con `explorer.exe shell:AppsFolder\<id>`; i giochi con `steam://rungameid/<id>`. Sul PC di sviluppo: 267 app e 23 giochi in circa 5 s, senza toccare il thread principale.
+- **Nomi detti** (`pc/match.ts`, puro e testato): nome esatto, parole contenute nel nome ("chrome" → Google Chrome), nome dell'eseguibile ("code" → Visual Studio Code), errori di battitura ("spotfy"); alias ("esplora file", "il browser" → il browser predefinito letto dal registro, "la musica" → Spotify, "impostazioni audio" → `ms-settings:sound`, "il cestino"); cartelle ("la cartella download", "documenti"); indirizzi web e percorsi. Due app quasi alla pari ("minecraft") tornano al modello come dubbio, e lui chiede quale. I disinstallatori si trovano solo se li nomini ("disinstalla Node"), e la policy li rifiuta.
+- **File** (`sidecar/files/search.py`): l'indice di Windows Search (`SystemIndex`, via OLE DB con ADODB) per parole del nome, tipo (documento, PDF, immagine, video, musica, cartella, archivio) e data, più i file recenti di Windows (i collegamenti in `%AppData%\Microsoft\Windows\Recent`), che vengono per primi. Le parole si cercano con `CONTAINS` (~70 ms), e se non trovano niente con `LIKE` (anche dentro una parola, ~350 ms); le cartelle di sistema e di sviluppo (`AppData`, `node_modules`, `.git`, `Program Files`…) si scartano dopo: filtrarle nella query la portava a 4–6 s. Al modello arrivano nome, data e percorso completo (per poterlo aprire); a voce dice solo nome e data.
+- **Finestre aperte** (`pc/win32.ts`): `EnumWindows` come Alt+Tab (visibili, con titolo, non di proprietà, non tool window, non "cloaked"), con il processo; il nome dell'app è quello del menu Start quando l'indice conosce l'eseguibile, o quando il titolo o l'eseguibile coincidono col nome (le app dello Store: `WhatsApp.Root.exe` → WhatsApp). Così "chiudi Discord" sa cosa c'è, e `<situation>` riporta le app aperte (solo i nomi, mai i titoli).
 
 ### Tool
 
@@ -782,25 +785,26 @@ Un modello che "vede" lo schermo e clicca coordinate (computer use generico) è 
 - `find_files({ query, kind?, from?, to? })`: cerca file, senza aprirli.
 - `window({ app, action })`: `focus`, `minimize`, `maximize`, `restore`, `close`.
 - `media({ action })`: `play_pause`, `next`, `previous`, `volume_up`, `volume_down`, `mute`.
-- `ui_action({ app?, element, action, text? })`: azione UI Automation su un controllo trovato per nome o ruolo.
-- `press_keys({ keys })` e `type_text({ text })`: tastiera, solo nella finestra in primo piano.
-- `click({ target })`: livello 6, il bersaglio è un testo o una regione vista, mai coordinate scritte dal modello.
+- `trash_file({ path })`: sposta un file o una cartella nel cestino, dopo il sì dell'utente.
+- `ui_action({ app?, element, action, text? })` (previsto): azione UI Automation su un controllo trovato per nome o ruolo.
+- `press_keys({ keys })` e `type_text({ text })` (previsti): tastiera, solo nella finestra in primo piano.
+- `click({ target })` (previsto): livello 6, il bersaglio è un testo o una regione vista, mai coordinate scritte dal modello.
 
-Dopo un'azione il modello riceve il risultato e lo **stato verificato** (la finestra è comparsa? il campo contiene il testo?), così può proseguire. Il ciclo del cervello oggi continua solo dopo `look_at_screen`: con questi tool continua dopo ogni azione, con un budget di passi per richiesta (12) e un tempo massimo (60 s). Mentre lavora Lumi guarda (e con la fase 14 si avvicina a) ciò che sta toccando, così si vede cosa fa.
+Dopo un'azione il modello riceve il risultato e lo **stato verificato**: la finestra dell'app è comparsa ed è in primo piano (o Windows ha tenuto davanti un'altra finestra, per esempio un gioco a schermo intero), la finestra è davvero ridotta o chiusa (o l'app sta chiedendo di salvare, o resta nella tray), il file è finito nel cestino, Spotify sta suonando quella canzone o è in pausa. Il ciclo del cervello continua dopo ogni azione, con un budget per richiesta di 12 azioni e 60 s dalla prima; le azioni arrivano solo nei momenti in cui l'utente ha chiesto qualcosa, mai in quelli autonomi. Mentre lavora Lumi guarda la finestra che ha appena toccato. Il prompt (sezione "Using the PC", presente solo con l'opzione accesa, come i tool) chiede una frase neutra insieme all'azione e il commento solo dopo il risultato, come per `move_to`.
 
 ### Sicurezza
 
 Agire sul PC è la parte più delicata: un errore o un testo malevolo letto sullo schermo ("ignora le istruzioni e cancella…") non deve poter fare danni.
 
-- **Tre livelli di permesso** per ogni azione, nel codice (`pc/policy.ts`, puro e testato), non decisi dal modello:
+- **Tre livelli di permesso** per ogni azione, nel codice (`pc/policy.ts`, puro e testato, che copre già anche le azioni dei passi 16.4–16.5), non decisi dal modello:
   - **libero**: aprire app, file e cartelle, mettere a fuoco, ridurre a icona, tasti multimediali, cercare file;
-  - **con conferma** (fumetto "Posso chiudere Discord?" con Sì/No, o una risposta a voce): chiudere app, scrivere testo, premere tasti, `ui_action` che invia o modifica qualcosa, clic con la visione, spostare file nel cestino;
-  - **mai**: cancellare definitivamente file, eseguire comandi o script, installare o disinstallare, impostazioni di sicurezza e account, campi password, pagamenti e acquisti (anche su Steam), app in `pauseInApps`.
-- Le app e le azioni libere si estendono in Impostazioni → **Usare il PC** (spento di default, con un elenco di app consentite). La stessa lista serve alle azioni automatiche delle [abitudini](#abitudini-e-proattività).
+  - **con conferma** (fumetto "Posso chiudere Discord?" con Sì/No, e la stessa domanda a voce dopo la frase in corso; un "sì" o un "no" detto subito dopo risponde, come per le abitudini): chiudere app, aprire una riga di comando, scrivere testo, premere tasti, `ui_action` che invia o modifica qualcosa, clic con la visione, spostare file nel cestino;
+  - **mai**: cancellare definitivamente file, eseguire comandi o script (aprire `.exe`, `.bat`, `.ps1`, `.lnk`… fuori dal menu Start; scrivere o premere tasti in un terminale; `Win+R`), installare o disinstallare (`.msi`, `.msix`, disinstallatori, `steam://install`), impostazioni di sicurezza, account e privacy (`ms-settings:privacy…`, Editor del Registro, Sicurezza di Windows), campi password, pagamenti e acquisti (anche su Steam), link di tipo sconosciuto, app in `pauseInApps`.
+- In Impostazioni → **PC** (spento di default) c'è l'elenco delle **app di fiducia**: Lumi può chiuderle (e, nei passi successivi, comandarle) senza chiedere. Le azioni automatiche delle [abitudini](#abitudini-e-proattività) passeranno dallo stesso esecutore e dalla stessa policy (16.5).
 - **Chiudere** = chiedere alla finestra di chiudersi (`WM_CLOSE`), così l'app può chiedere di salvare; mai terminare il processo.
 - **Il testo letto sullo schermo è un dato, non un'istruzione**: il prompt lo dice, e le azioni con conferma restano con conferma anche se il modello insiste.
-- **L'utente vince sempre**: se muovi il mouse o premi un tasto mentre Lumi agisce, si ferma; `Esc` due volte (o "fermati") annulla tutto.
-- **Registro** delle azioni in `actions.jsonl` (cosa, quando, esito, se confermata), visibile nelle impostazioni; non contiene il testo digitato.
+- **L'utente vince sempre**: se muovi il mouse o premi un tasto mentre Lumi agisce (cioè dopo la sua prima azione della richiesta: `GetLastInputInfo` più recente della sua ultima azione), le azioni successive non partono e il modello lo sa; il clic sul fumetto di conferma conta come risposta, non come interruzione. `Esc` due volte entro un secondo (letto solo mentre Lumi agisce, senza rubare `Esc` alle altre app) o "fermati" annullano tutto.
+- **Registro** delle azioni in `actions.jsonl` (cosa, quando, livello, esito, se confermata), le ultime 30 visibili in Impostazioni → PC; non contiene il testo digitato.
 - Niente azioni in "Non disturbare", con lo schermo bloccato o quando l'utente è assente, salvo quelle libere chieste esplicitamente.
 
 ---
@@ -937,10 +941,13 @@ lumi/
 │  │  │  ├─ path.ts            traiettoria e durata del volo (puro, testato)
 │  │  │  ├─ rules.ts           quando può muoversi di sua iniziativa (puro, testato)
 │  │  │  └─ mover.ts           move_to, ritorno a casa, stop, schivata del cursore
-│  │  ├─ pc/                   (previsto, fase 16)
-│  │  │  ├─ apps.ts            indice di app, app dello Store e giochi Steam
-│  │  │  ├─ actions.ts         esecuzione e verifica delle azioni, registro
-│  │  │  └─ policy.ts          libero / con conferma / mai (puro, testato)
+│  │  ├─ pc/                   usare il PC (fase 16)
+│  │  │  ├─ policy.ts          libero / con conferma / mai (puro, testato)
+│  │  │  ├─ match.ts           nomi detti -> app, giochi, cartelle, finestre; file VDF di Steam (puro, testato)
+│  │  │  ├─ apps.ts            indice: menu Start e Store (Get-StartApps), giochi Steam, browser predefinito
+│  │  │  ├─ win32.ts           finestre, primo piano, WM_CLOSE, tasti multimediali, ultimo input (koffi)
+│  │  │  ├─ actions.ts         esecuzione, conferme, verifica, stop dell'utente (testato)
+│  │  │  └─ actionLog.ts       actions.jsonl
 │  │  ├─ phone/
 │  │  │  ├─ server.ts          HTTP/WS in LAN: abbinamento, login, segnalazione firmata
 │  │  │  ├─ link.ts            la chiamata: stati, bridge, passaggio, instradamento di voce e microfono
@@ -992,6 +999,7 @@ lumi/
 │  ├─ tts/                     base.py  qwen3.py  chatterbox.py  kokoro.py  voices/ (voci italiane LibriVox)
 │  ├─ ocr/                     winocr_engine.py  rapidocr_engine.py
 │  ├─ uia/                     focus.py  caret.py  (eventi UIA)  act.py (azioni, previsto)
+│  ├─ files/                   search.py  (Windows Search + file recenti per find_files)
 │  ├─ wake/                    detector.py  train.py  (openWakeWord, dati sintetici dal TTS)
 │  ├─ text/                    normalize_it.py  lexicon_it.py  trappole_it.txt  accenti_it.txt
 │  ├─ embed/                   onnx_embed.py  (embedding bge-m3 sul processore per la memoria, fase 10.6)
@@ -1025,6 +1033,7 @@ Il sidecar ascolta solo su `127.0.0.1`, con una porta casuale e un token generat
 | `/wake` | WS | `{ model: "lumi" }` → `{ type: "ready" }` (o `{ type: "error", missing }`); poi `[id][PCM 16 kHz]` del parlato e `{ reset: true }` a ogni frase → `{ type: "scores", scores }`, uno ogni 80 ms |
 | `POST /tts/batch` | HTTP | testo lungo → file audio (modalità audiolibro) |
 | `POST /embed` | HTTP | `{ texts, kind }` → vettori `bge-m3` sul processore, per la memoria senza Ollama |
+| `POST /files/search` | HTTP | `{ query?, kind?, from?, to?, limit }` (date ISO) → `{ results: [{ path, name, folder, modified, size, recent }] }` dall'indice di Windows Search e dai file recenti |
 
 ---
 
@@ -1059,13 +1068,13 @@ Il sidecar ascolta solo su `127.0.0.1`, con una porta casuale e un token generat
   "habits": { "enabled": true, "proposalCooldownMinutes": 20, "minOccurrences": 5, "minFrequency": 0.7 },
   "movement": { "enabled": true, "initiative": true, "pranks": true, "dodge": true },
   "mood": { "enabled": true, "weights": { "tranquilla": 6, "allegra": 5, "entusiasta": 2, "annoiata": 2, "malinconica": 2, "triste": 1, "irritata": 2, "arrabbiata": 1 } },
-  "pc": { "enabled": false, "allowedApps": ["Spotify", "Esplora file"], "confirm": "always" },
+  "pc": { "enabled": false, "trustedApps": ["Spotify"] },
   "phone": { "enabled": false, "port": 47821 },
   "sociability": "normale"
 }
 ```
 
-I telefoni abbinati non stanno nelle impostazioni ma in `phones.bin`, cifrato con DPAPI. La sezione `pc` è prevista (fase 16). `brain.vision` resta come modello online per le immagini, usato solo senza visione locale e se `sendScreenshots` lo consente.
+I telefoni abbinati non stanno nelle impostazioni ma in `phones.bin`, cifrato con DPAPI. Le azioni sul PC si registrano in `actions.jsonl`, accanto alle impostazioni. `brain.vision` resta come modello online per le immagini, usato solo senza visione locale e se `sendScreenshots` lo consente.
 
 ---
 
@@ -1084,7 +1093,7 @@ I telefoni abbinati non stanno nelle impostazioni ma in `phones.bin`, cifrato co
 - **Bot Discord**: il token è cifrato con DPAPI in `discord.bin` (oppure `DISCORD_BOT_TOKEN`). Il bot riceve solo la voce di Lumi da mandare nel canale.
 - **Impronte vocali**: sono dati biometrici, restano in `voices.json` sul PC e si cancellano una per una (o con "Dimentica tutto") dalla scheda Memoria.
 - **Archivio della conversazione** (`memory.db` e i backup in `backups\`): resta sul PC. Puoi far dimenticare singole cose (Impostazioni → Memoria → Dimentica qualcosa) o tutto ("Dimentica tutto"); in entrambi i casi spariscono anche indici, vettori, riassunti e fatti derivati, il file viene compattato e i backup rifatti.
-- **Usare il PC** (previsto, spento di default): le azioni sono eseguite in locale; al servizio di IA arrivano solo i nomi di app, finestre e file che servono alla richiesta. Il registro `actions.jsonl` resta sul PC e non contiene il testo digitato.
+- **Usare il PC** (spento di default): le azioni sono eseguite in locale. Al servizio di IA arrivano i nomi delle app con una finestra aperta (mai i titoli), l'esito delle azioni e, per `find_files`, nome, data e percorso dei file trovati: mai il loro contenuto. Il registro `actions.jsonl` resta sul PC e non contiene il testo digitato; il log del sidecar conta i file trovati senza nominarli.
 - **Telefono**: durante una chiamata l'audio va solo dal PC al telefono abbinato, cifrato (WebRTC, DTLS-SRTP) e sulla rete locale (o sulla tua VPN Tailscale); nessun server di terzi. Il server per il telefono è spento finché non attivi l'opzione, accetta solo telefoni abbinati (sfida-risposta, segnalazione firmata) e i telefoni si revocano dalle impostazioni. Il sidecar resta raggiungibile solo da `127.0.0.1`.
 - I log di debug non salvano né l'audio né il testo OCR, a meno che non si attivi `LUMI_DEBUG_PERCEPTION=1`.
 
@@ -1127,9 +1136,9 @@ Ogni fase si chiude con `npm run check` e `pytest` verdi e una prova manuale.
     4. ~~Il passaggio: `transit.ts` con i test, disegno a tubo in `face.ts`, sincronizzazione `gone` tra i due lati~~ (fatto; il fruscio no).
     5. Fuori casa con Tailscale (guida e prova), servizio in primo piano Android per parlare a schermo spento, chiave nel keystore, ritrovare il PC con mDNS; l'APK entra nella distribuzione.
 16. **Usare il PC** ([dettagli](#usare-il-pc)):
-    1. `policy.ts` con i test e il ciclo del cervello che continua dopo le azioni (budget di passi, conferme con fumetto o a voce, stop con il mouse o `Esc`), registro delle azioni.
-    2. Indice delle app (menu Start, Store, Steam) e tool `open`, `window`, `media`.
-    3. File: `find_files` sull'indice di Windows Search e sui recenti, apertura, spostamento nel cestino con conferma.
+    1. ~~`policy.ts` con i test e il ciclo del cervello che continua dopo le azioni (budget di passi, conferme con fumetto o a voce, stop con il mouse o `Esc`), registro delle azioni~~ (fatto).
+    2. ~~Indice delle app (menu Start, Store, Steam) e tool `open`, `window`, `media`~~ (fatto).
+    3. ~~File: `find_files` sull'indice di Windows Search e sui recenti, apertura, spostamento nel cestino con conferma~~ (fatto: `trash_file`).
     4. UI Automation nel sidecar (`ui_action`) e tastiera (`press_keys`, `type_text`), con verifica dopo ogni passo.
     5. Ultima risorsa: `click` con la visione locale. Poi le azioni automatiche delle abitudini (fase 11) usano lo stesso esecutore e la stessa policy.
 17. ~~**Pronuncia italiana**~~ (fatto) ([dettagli](#pronuncia-italiana)). Indipendente dalle altre fasi:
@@ -1141,8 +1150,8 @@ Ogni fase si chiude con `npm run check` e `pytest` verdi e una prova manuale.
 18. ~~**Umore del giorno** ([dettagli](#umore-del-giorno)): umore estratto ogni mattina con le probabilità delle impostazioni, predisposizione nelle risposte e negli occhi, tool `change_mood` con passi singoli, resistenza e attesa, cambiamenti solo per merito dell'utente, in meglio o in peggio~~ (fatto).
 19. **Lumi in 3D** ([dettagli](#lumi-in-3d)):
     1. ~~Avatar VRM con three-vrm al posto degli occhi (spunta, cambio al volo), respiro, battito e sguardo procedurali, espressioni dalle emozioni, lipsync dall'audio del TTS~~ (fatto).
-    2. ~~Gesti scelti dal cervello (`say.gesture`) da una libreria di clip: tredici inclusi a fotogrammi chiave, clip Mixamo `.fbx` e `.vrma` dell'utente in `%APPDATA%\Luminimations`~~ (fatto).
-    3. Clip generate offline con modelli text-to-motion open source (HY-Motion 1.0 di Tencent, Kimodo di NVIDIA), riadattate al VRM ed esportate in `.vrma`: una libreria più ricca senza generare niente durante la conversazione. In corso: `sidecar/motion/` (conversione in `.vrma` testata, script per RunPod da provare su un pod; istruzioni nel suo README). Predefinito Kimodo SOMA: la licenza di HY-Motion esclude l'Unione Europea.
+    2. ~~Gesti scelti dal cervello (`say.gesture`) da una libreria di clip: tredici inclusi a fotogrammi chiave, clip Mixamo `.fbx` e `.vrma` dell'utente in `%APPDATA%\Lumi\animations`~~ (fatto).
+    3. Clip generate offline con modelli text-to-motion open source (HY-Motion 1.0 di Tencent, Kimodo di NVIDIA), riadattate al VRM ed esportate in `.vrma`: una libreria più ricca senza generare niente durante la conversazione. In corso: `sidecar/motion/` (conversione in `.vrma` testata, generazione con Kimodo provata in locale, script per RunPod da provare su un pod; istruzioni nel suo README), gesti con le forme della mano e routine di inattività (enter/loop/exit unite dai vincoli di posa di Kimodo, regista in `main/idle.ts`). Predefinito Kimodo SOMA: la licenza di HY-Motion esclude l'Unione Europea.
     4. Gesti neurali dal parlato in streaming (modelli audio → gesti senza look-ahead, come quelli presentati a CVPR 2026 o EchoAvatar) come processo separato nel sidecar, se latenza e GPU lo permettono; lo scheletro va riadattato al VRM.
 
 ---
@@ -1179,6 +1188,7 @@ Variabili di debug (stesso stile di Pixel Pet):
 - `LUMI_DEBUG_SETTINGS=<scheda>`: apre le impostazioni su quella scheda.
 - `LUMI_DEBUG_CAPTURE=<prefisso>`: salva in PNG i fotogrammi del volto.
 - `LUMI_DEBUG_BAR=1` (o un testo, `\n` per andare a capo): apre la barra dei comandi all'avvio, con quel testo nel campo.
+- `LUMI_DEBUG_IDLE=<routine>` (separate da virgole, ognuna `nome[:ms del ciclo][:startled]`, per esempio `sleep:6000:startled,walk`): le routine di inattività una dopo l'altra, come le farebbe partire il regista (la camminata sposta la finestra, il banco la porta in fondo allo schermo); con `LUMI_DEBUG_CAPTURE` salva un fotogramma nell'entrata, nel ciclo, appena prima della fine e nell'uscita.
 - `LUMI_DEBUG_FACE=<espressioni>` (separate da virgole): le mostra una dopo l'altra su sfondo scuro, senza saluto; con `LUMI_DEBUG_CAPTURE` ne salva tre fotogrammi ciascuna.
 - `LUMI_DEBUG_PAIR=<file>`: con l'opzione Telefono attiva, scrive in quel file un link di abbinamento (contiene la chiave: solo per le prove).
 - `LUMI_DEBUG_TRANSIT=1`: Lumi parte come per una chiamata e torna (con `LUMI_DEBUG_CAPTURE`, i fotogrammi).

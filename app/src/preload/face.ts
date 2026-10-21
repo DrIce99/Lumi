@@ -16,6 +16,7 @@ const bridge: FaceBridge = {
   onGesture: listen(IPC.gesture),
   onAct: listen(IPC.act),
   onAvatar: listen(IPC.avatar),
+  onIdle: listen(IPC.idle),
   onContrast: listen(IPC.contrast),
   onGlare: listen(IPC.glare),
   onTravel: listen(IPC.travel),
@@ -44,6 +45,7 @@ const bridge: FaceBridge = {
   bubbleChoice: (bubbleId, choice) => ipcRenderer.send(IPC.bubbleChoice, bubbleId, choice),
   playback: (event) => ipcRenderer.send(IPC.playback, event),
   mic: (event) => ipcRenderer.send(IPC.mic, event),
+  walkSpeed: (pxPerSecond) => ipcRenderer.send(IPC.walkSpeed, pxPerSecond),
 };
 
 contextBridge.exposeInMainWorld("lumi", bridge);

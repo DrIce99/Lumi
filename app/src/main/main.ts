@@ -1,5 +1,6 @@
 // Entry point: wires the face, perception, brain, voice and UI together.
 import { app, BrowserWindow, dialog, globalShortcut, nativeImage, powerMonitor, screen, shell, type Display, type Rectangle } from "electron";
+import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { monitorEventLoopDelay } from "node:perf_hooks";
@@ -8,7 +9,7 @@ import type { Emotion } from "../shared/emotions";
 import { toEmotion } from "../shared/emotions";
 import { applyProfile } from "../shared/profiles";
 import { PROVIDER_IDS, type ProviderId } from "../shared/providers";
-import { PROFILES, type BarContext, type GpuInfo, type KeySource, type MemoryIndexStatus, type Profile, type Settings, type SettingsSnapshot, type TtsEngine } from "../shared/types";
+import { PROFILES, type BarContext, type GpuInfo, type IdleRoutine, type KeySource, type MemoryIndexStatus, type Profile, type Settings, type SettingsSnapshot, type TtsEngine } from "../shared/types";
 import { Activity } from "./activity";
 import { readAttachments, type Attachment } from "./attachments";
 import { Audiobooks } from "./audiobook";
@@ -26,6 +27,7 @@ import { initLog, log } from "./log";
 import { Mood } from "./mood";
 import { consolidationReport } from "./brain/consolidate";
 import { AvatarFiles, clipsDirIn } from "./avatar";
+import { deskSpot, IdleDirector, walkTarget, type IdleChoice, type IdlePlan } from "./idle";
 import { BODY_GESTURES, EYE_GESTURE } from "../shared/gestures";
 import { DayMood, describeMood } from "./brain/dayMood";
 import type { DayMoodId } from "../shared/dayMood";
@@ -38,7 +40,7 @@ import { appName } from "./perception/context";
 import { listVisionModels } from "./perception/vision";
 import type { Frame } from "./perception/diff";
 import { GlareDetector, glareStats, thumbnail } from "./perception/glare";
-import { foregroundWindow, systemCaret } from "./perception/desktop";
+import { foregroundWindow, keyDown, systemCaret } from "./perception/desktop";
 import { findText, type TextItem } from "./perception/grounding";
 import { Perception, type OcrLine } from "./perception/perception";
 import { UiaClient } from "./perception/uia";
@@ -70,7 +72,7 @@ import { PitchStage } from "./voice/pitch";
 import { readWav, toFrames16k } from "./voice/wavInput";
 import { Vision } from "./vision";
 import { Mover } from "./motion/mover";
-import { hostname } from "node:os";
+import { homedir, hostname } from "node:os";
 import QRCode from "qrcode";
 import { safeStorage } from "electron";
 import { pairingUrl } from "../shared/phone";
@@ -78,6 +80,10 @@ import { PhoneDevices } from "./phone/devices";
 import { PhoneLink } from "./phone/link";
 import { Habits } from "./brain/habits/habits";
 import { readAnswer } from "./brain/habits/triggers";
+import { ActionLog } from "./pc/actionLog";
+import { PcActions, type FileHit } from "./pc/actions";
+import { AppIndex } from "./pc/apps";
+import * as win32 from "./pc/win32";
 import { parseToolCall } from "./brain/tools";
 import { describeResults, Web } from "./web";
 import { FaceWindow, type Point } from "./window";
@@ -221,6 +227,7 @@ function start(): void {
         }
         writeJson(stateFile, windowState);
       },
+      walkSpeed: (px) => idleWalk(px),
     },
     { url: `${APP_ORIGIN}/renderer/face.html`, anchor: windowState.anchor ?? null, scale: settings().face.scale, color: settings().face.color, mode: settings().face.mode },
   );
@@ -876,6 +883,14 @@ function start(): void {
       }
     },
     moveTo: (call, requested) => mover.move(call, requested),
+    pc: async (call, context) => {
+      watchEsc();
+      try {
+        return await pcActions.run(call, context);
+      } finally {
+        lastPcActionAt = Date.now();
+      }
+    },
     // The user's words mention the screen: the local OCR reads it now (it never leaves the PC except as this text)
     readScreen: async () => {
       if (!perception.watching() || !sidecar.endpoint() || !voice.configured) return null;
@@ -946,9 +961,124 @@ function start(): void {
   });
   setInterval(() => mover.dodgeTick(), 500).unref();
 
-  // ---- habits: what the user does, the patterns in it, proposals at the right time ----
-  /** Waiting for the answer to a habit proposal ("sì" / "no" said aloud, or the bubble). */
+  // ---- idle routines (3D): asleep, reading, walking about... when nobody talks to Lumi ----
+  const idles = new IdleDirector(Date.now());
+  /** The routine playing now, with what main must undo after it (a walk, the trip to the screen's edge). */
+  let idleRun: { routine: IdleRoutine; dir: 1 | -1; walkTo: Point | null; back: Point | null } | null = null;
+  function applyIdle(plan: IdlePlan | null): void {
+    if (!plan) return;
+    const routines = avatarFiles.idles();
+    if (plan.kind === "start") {
+      const routine = routines[plan.name];
+      if (!routine) return;
+      const anchor = face.getAnchor();
+      const area = face.workArea();
+      let dir: 1 | -1 = 1;
+      let walkTo: Point | null = null;
+      if (routine.walkSpeed) {
+        const walk = walkTarget(anchor, windowState.home ?? null, face.faceSize().width, area);
+        if (!walk) {
+          applyIdle(idles.finish(Date.now()));
+          return;
+        }
+        dir = walk.dir;
+        walkTo = walk.target;
+      }
+      idleRun = { routine, dir, walkTo, back: null };
+      log.info(`Idle routine: ${routine.name}${Number.isFinite(plan.loopMs) ? ` (${Math.round(plan.loopMs / 1000)} s)` : " (until the user is back)"}`);
+      const start = () => face.idle({ name: routine.name, loopMs: Number.isFinite(plan.loopMs) ? plan.loopMs : 3_600_000, dir });
+      if (routine.camera === "desk") {
+        // The bottom edge of the screen is her desk: down there first, back up afterwards
+        const spot = deskSpot(anchor, face.faceSize().height, area);
+        if (Math.abs(spot.y - anchor.y) > 4) {
+          idleRun.back = anchor;
+          face.flyTo(spot, "fly", (arrived) => (arrived && idleRun?.routine === routine ? start() : undefined));
+          return;
+        }
+      }
+      start();
+      return;
+    }
+    const run = idleRun;
+    idleRun = null;
+    face.idle({ stop: true, startled: plan.startled });
+    if (!run) return;
+    if (face.isMoving()) face.stopFlight();
+    if (plan.startled && run.routine.wake) mood.setEmotion(run.routine.wake, 0.9, 2500);
+    const back = run.back;
+    if (back) {
+      // Back where she was once the exit is over, unless the user put her somewhere meanwhile
+      const left = face.getAnchor();
+      setTimeout(() => {
+        const here = face.getAnchor();
+        if (Math.hypot(here.x - left.x, here.y - left.y) < 4 && !face.isDragging() && !idleRun) face.flyTo(back, "fly");
+      }, run.routine.seconds.exit * 1000 + 300);
+    }
+  }
+  /** An idle walk's loop started in the renderer: it says how fast her steps go, the window follows. */
+  function idleWalk(pxPerSecond: number): void {
+    const run = idleRun;
+    if (!run?.walkTo || face.isMoving()) return;
+    const routine = run.routine;
+    face.walkTo(run.walkTo, pxPerSecond, (arrived) => {
+      if (arrived && idleRun?.routine === routine) applyIdle(idles.finish(Date.now()));
+    });
+  }
+  setInterval(() => {
+    const now = Date.now();
+    const s = settings();
+    const flags = mood.state();
+    // Anything going on with Lumi counts as an interaction: the routine ends, the quiet time restarts
+    const busy = brain.isBusy() || voice.busy() || flags.listening || flags.thinking || flags.speaking || face.isInputOpen() || face.isDragging();
+    if (busy) {
+      applyIdle(idles.interaction(now));
+      return;
+    }
+    const routines = avatarFiles.idles();
+    const choices: IdleChoice[] = Object.values(routines).map((r) => ({
+      name: r.name,
+      wanders: r.walkSpeed !== null || r.camera === "desk",
+      sleeps: r.face.eyes === "closed",
+      seconds: r.seconds,
+    }));
+    const away = activity.snapshot().away;
+    const afterMs = s.face.idle.afterMinutes * 60_000;
+    // The foreground window and the rest only when one could start (they are read every half second otherwise)
+    const due = idles.due(now, afterMs, away);
+    applyIdle(
+      idles.tick(now, choices, {
+        enabled: s.face.idle.enabled && s.face.mode === "3d" && visible && !onPhone(),
+        free: due && !s.doNotDisturb && !inCall() && !face.isMoving() && !fullscreenApp(),
+        away,
+        mayWander: due && mover.mayWander(),
+        afterMs,
+      }),
+    );
+  }, 500).unref();
+
+  // ---- yes/no questions: habit proposals, PC actions to confirm ----
+  /** Waiting for the answer to a question ("sì" / "no" said aloud, or the bubble). */
   let pendingAnswer: ((yes: boolean) => void) | null = null;
+  /** Asks aloud (when the voice is on) and in a bubble with Sì/No; null without an answer in time. */
+  function askYesNo(question: string, emotion: Emotion, timeoutMs: number): Promise<boolean | null> {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (answer: boolean | null) => {
+        if (done) return;
+        done = true;
+        pendingAnswer = null;
+        resolve(answer);
+      };
+      pendingAnswer = (yes) => finish(yes);
+      if (!visible) setVisible(true);
+      if (voice.ready()) void voice.say(question, emotion, 0.5);
+      // In the conversation, so a spoken "sì" reads as an answer to Lumi's question
+      memory.addMessage("lumi", question);
+      void bubbles.ask(question, [{ id: "yes", label: "Sì" }, { id: "no", label: "No" }], timeoutMs).then((choice) => finish(choice === "yes" ? true : choice === "no" ? false : null));
+    });
+  }
+
+  // ---- habits: what the user does, the patterns in it, proposals at the right time ----
   const habits = new Habits({
     settings,
     store: memoryStore,
@@ -979,21 +1109,10 @@ function start(): void {
       const names = json ? (JSON.parse(json) as unknown[]) : [];
       return names.length === list.length && names.every((n) => typeof n === "string") ? (names as string[]) : null;
     },
-    propose: (habit, question) =>
-      new Promise((resolve) => {
-        let done = false;
-        const finish = (answer: boolean | null) => {
-          if (done) return;
-          done = true;
-          pendingAnswer = null;
-          resolve(answer);
-        };
-        pendingAnswer = (yes) => finish(yes);
-        log.info(`Proposing a habit: ${habit.key}`);
-        if (voice.ready()) void voice.say(question, "gioia", 0.5);
-        memory.addMessage("lumi", question);
-        void bubbles.ask(question, [{ id: "yes", label: "Sì" }, { id: "no", label: "No" }], 30_000).then((choice) => finish(choice === "yes" ? true : choice === "no" ? false : null));
-      }),
+    propose: (habit, question) => {
+      log.info(`Proposing a habit: ${habit.key}`);
+      return askYesNo(question, "gioia", 30_000);
+    },
     open: async (habit) => {
       const path = typeof habit.detail.path === "string" ? habit.detail.path : "";
       if (!/\.exe$/i.test(path)) return "no known path";
@@ -1005,6 +1124,115 @@ function start(): void {
     say: (text) => sayLine(text, "gioia"),
   });
   void habits.start();
+
+  // ---- using the PC (phase 16): the app index, the policy's executor, Esc twice ----
+  const appIndex = new AppIndex();
+  const actionLog = new ActionLog(dataDir);
+  /** %VARS% and ~ in a path the model wrote. */
+  const expandPath = (path: string) =>
+    path
+      .replace(/%([a-z_][a-z0-9_]*)%/gi, (whole, name: string) => {
+        const key = Object.keys(process.env).find((k) => k.toLowerCase() === name.toLowerCase());
+        return key ? process.env[key]! : whole;
+      })
+      .replace(/^~(?=[\\/])/, homedir())
+      .replace(/\//g, "\\");
+  const pcActions = new PcActions({
+    settings,
+    state: () => {
+      const a = activity.snapshot();
+      // On the phone the user answers from there: not away
+      return { doNotDisturb: settings().doNotDisturb, away: a.away && !onPhone(), locked: a.locked };
+    },
+    index: appIndex,
+    folder: (name) => app.getPath(name),
+    win: {
+      list: () => win32.listWindows(),
+      foregroundId: () => win32.foregroundId(),
+      focus: (w) => win32.focus(w),
+      show: (w, action) => win32.show(w, action),
+      state: (w) => win32.windowState(w),
+      close: (w) => win32.requestClose(w),
+      media: (action) => win32.mediaKey(action),
+      lastInput: () => win32.lastInputTick(),
+      tick: () => win32.tickNow(),
+    },
+    launch: {
+      // shell:AppsFolder\<AppID> starts an app the way the Start menu does; explorer hands it to the shell and exits
+      explorer: (arg) =>
+        new Promise((resolve, reject) => {
+          const child = spawn("explorer.exe", [arg], { detached: true, stdio: "ignore" });
+          child.once("error", reject);
+          child.once("spawn", () => {
+            child.unref();
+            resolve();
+          });
+        }),
+      path: (path) => shell.openPath(path),
+      external: (url) => shell.openExternal(url),
+    },
+    files: {
+      expand: expandPath,
+      kind: async (path) => {
+        try {
+          return (await stat(path)).isDirectory() ? "folder" : "file";
+        } catch {
+          return null;
+        }
+      },
+      trash: (path) => shell.trashItem(path),
+      search: async (query) => {
+        if (!sidecar.endpoint()) return null;
+        try {
+          return (await sidecar.request<{ results: FileHit[] }>("/files/search", query, 12_000)).results;
+        } catch (err) {
+          log.warn("File search failed", err);
+          return null;
+        }
+      },
+    },
+    confirm: async (question) => {
+      // Let the line already being said finish first, so the question is heard
+      for (let i = 0; i < 40 && voice.busy(); i++) await new Promise((resolve) => setTimeout(resolve, 200));
+      return askYesNo(question, "neutra", 30_000);
+    },
+    lookAtActive: () => {
+      if (perception.watching()) perception.lookAtRegion("active_window");
+    },
+    record: (entry) => actionLog.add(entry),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  });
+  if (settings().pc.enabled) appIndex.start();
+
+  // Esc twice stops whatever Lumi is doing on the PC. Polled only while it acts, so no global shortcut takes Esc from the other apps
+  let escWatch: NodeJS.Timeout | null = null;
+  let escDown = false;
+  let escPresses: number[] = [];
+  let lastPcActionAt = 0;
+  function watchEsc(): void {
+    lastPcActionAt = Date.now();
+    if (escWatch) return;
+    escWatch = setInterval(() => {
+      const down = keyDown(0x1b);
+      if (down && !escDown) {
+        const now = Date.now();
+        escPresses = [...escPresses.filter((t) => now - t < 1000), now];
+        if (escPresses.length >= 2) {
+          escPresses = [];
+          log.info("Esc twice: stopping the actions on the PC");
+          pcActions.abort();
+          brain.interrupt();
+          voice.stopAll();
+        }
+      }
+      escDown = down;
+      if (!brain.isBusy() && Date.now() - lastPcActionAt > 5000) {
+        clearInterval(escWatch!);
+        escWatch = null;
+        escPresses = [];
+      }
+    }, 40);
+  }
 
   // ---- the phone: pairing, calls, Lumi leaving the screen for the phone ----
   const phoneDevices = new PhoneDevices(dataDir, {
@@ -1163,6 +1391,7 @@ function start(): void {
       habits: habits.summary(),
       mood: settings().mood.enabled ? describeMood(dayMood.current()) : "",
       gestures: settings().face.mode === "3d" ? Object.keys(avatarFiles.clips()).filter((g) => !(BODY_GESTURES as readonly string[]).includes(g)) : [],
+      pcApps: settings().pc.enabled ? pcActions.openApps() : null,
     };
   }
 
@@ -1230,6 +1459,38 @@ function start(): void {
     // Development aid: body gestures one after the other (e.g. "wave,shrug"; "rest" = none; "gaze:-300:0" looks there; "mode:minimal" switches), on a dark
     // background, with LUMI_DEBUG_CAPTURE saved at a few moments of each (3D mode: the model loads first).
     // LUMI_DEBUG_ACT_EVERY (ms between gestures) and LUMI_DEBUG_ACT_SHOTS ("ms,ms,...") fit longer clips.
+    // Development aid: idle routines one after the other ("sleep,walk:8000:startled": name, loop ms, woken with a
+    // start), in 3D on a dark background, as main would play them (a walk moves the window, the desk goes to the
+    // screen's edge); with LUMI_DEBUG_CAPTURE frames in the enter, the loop, just before the stop and in the exit
+    const debugIdle = process.env.LUMI_DEBUG_IDLE;
+    if (debugIdle) {
+      void face.win.webContents.executeJavaScript('document.body.style.background = "#2b2d31"');
+      if (settings().face.mode !== "3d") settingsStore.update({ face: { mode: "3d" } });
+      let at = 6000;
+      for (const item of debugIdle.split(",")) {
+        const [name, loop, how] = item.trim().split(":");
+        const routine = avatarFiles.idles()[name];
+        if (!routine) {
+          log.warn(`LUMI_DEBUG_IDLE: no routine ${name} (have: ${Object.keys(avatarFiles.idles()).join(", ") || "none"})`);
+          continue;
+        }
+        const loopMs = Number(loop) || 6000;
+        const startled = how === "startled";
+        const start = at;
+        const stop = start + routine.seconds.enter * 1000 + loopMs;
+        setTimeout(() => applyIdle({ kind: "start", name, loopMs: loopMs + 60_000 }), start);
+        setTimeout(() => applyIdle({ kind: "stop", name, startled }), stop);
+        // A calm stop waits for the loop to come round: at most one loop more
+        const exitAt = stop + (startled ? 0 : routine.seconds.loop * 1000);
+        at = exitAt + routine.seconds.exit * 1000 + 2500;
+        if (!capturePrefix) continue;
+        const shots = { enter: start + routine.seconds.enter * 500, loop: start + routine.seconds.enter * 1000 + Math.min(1500, loopMs / 2), loopEnd: stop - 300, exit: exitAt + routine.seconds.exit * 500 };
+        for (const [label, ms] of Object.entries(shots)) {
+          setTimeout(async () => writeFileSync(`${capturePrefix}_idle_${name}_${label}.png`, (await face.win.webContents.capturePage()).toPNG()), ms);
+        }
+      }
+      return;
+    }
     const debugAct = process.env.LUMI_DEBUG_ACT;
     if (debugAct) {
       void face.win.webContents.executeJavaScript('document.body.style.background = "#2b2d31"');
@@ -1506,7 +1767,8 @@ function start(): void {
       discord: { ...discordVoice.status(), token: discordToken.source() },
       memoryIndex,
       habits: habits.infos(),
-      avatarClips: { dir: avatarFiles.clipsDir, names: Object.keys(avatarFiles.clips()) },
+      pc: { ...appIndex.counts(), actions: actionLog.recent(30) },
+      avatarClips: { dir: avatarFiles.clipsDir, names: Object.keys(avatarFiles.clips()), idles: Object.keys(avatarFiles.idles()) },
       dayMood: settings().mood.enabled
         ? ((m) => ({ mood: m.mood, rolled: m.rolled, intensity: m.intensity, since: m.since, changes: m.changes.map(({ at, from, to, intensity }) => ({ at, from, to, intensity })) }))(dayMood.current())
         : null,
@@ -1692,6 +1954,10 @@ function start(): void {
     if (JSON.stringify(next.perception) !== JSON.stringify(prev.perception)) updateUia();
     if (JSON.stringify(next.discord) !== JSON.stringify(prev.discord)) updateDiscord();
     if (JSON.stringify(next.phone) !== JSON.stringify(prev.phone)) void phone?.configure();
+    if (next.pc.enabled !== prev.pc.enabled) {
+      if (next.pc.enabled) appIndex.start();
+      else appIndex.stop();
+    }
     if (JSON.stringify(next.appAudio) !== JSON.stringify(prev.appAudio) || next.doNotDisturb !== prev.doNotDisturb || next.stt.vocabulary !== prev.stt.vocabulary) updateAppAudio();
     turns.refresh();
     tray.refresh();
@@ -1721,6 +1987,7 @@ function start(): void {
     gazeOverlay?.dispose();
     autonomy.stop();
     habits.stop();
+    appIndex.stop();
     phone?.dispose();
     bubbles.dispose();
     mood.dispose();

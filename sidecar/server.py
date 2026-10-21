@@ -45,11 +45,13 @@ from contextlib import asynccontextmanager, suppress  # noqa: E402
 from dataclasses import dataclass, field  # noqa: E402
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect  # noqa: E402
-from pydantic import BaseModel  # noqa: E402
+from pydantic import BaseModel, Field  # noqa: E402
 
 import devices  # noqa: E402
 from book.batch import BatchRunner  # noqa: E402
 from engines import EngineManager  # noqa: E402
+from files.search import KINDS as FILE_KINDS  # noqa: E402
+from files.search import FileSearch  # noqa: E402
 from ocr.base import lines_to_json  # noqa: E402
 from ocr.engines import OCRConfig  # noqa: E402
 from stt.base import SAMPLE_RATE as STT_RATE  # noqa: E402
@@ -107,6 +109,8 @@ async def lifespan(_app: FastAPI):
     yield
     state.uia.stop()
     state.manager.shutdown()
+    if _files is not None:
+        _files.close()
 
 
 app = FastAPI(title="Lumi sidecar", version=VERSION, lifespan=lifespan)
@@ -653,6 +657,34 @@ async def embed(req: EmbedRequest, _: None = Depends(http_auth)) -> dict:
         return await asyncio.to_thread(_embed, req)
     except Exception as err:
         raise HTTPException(status_code=503, detail=str(err)) from err
+
+
+# ---------------- finding files (Lumi uses the PC, roadmap 16.3) ----------------
+
+
+class FilesRequest(BaseModel):
+    query: str | None = None
+    kind: str | None = None
+    # ISO instants, [from, to)
+    from_: str | None = Field(default=None, alias="from")
+    to: str | None = None
+    limit: int = 8
+
+
+_files: FileSearch | None = None
+
+
+@app.post("/files/search")
+async def files_search(req: FilesRequest, _: None = Depends(http_auth)) -> dict:
+    """Windows Search and the recent files, by name, kind and date. Paths and dates only, never contents;
+    the log gets counts, never names."""
+    global _files
+    if req.kind and req.kind not in FILE_KINDS:
+        raise HTTPException(status_code=422, detail="kind")
+    if _files is None:
+        _files = FileSearch()
+    results = await asyncio.wrap_future(_files.submit(req.query, req.kind, req.from_, req.to, req.limit))
+    return {"results": results}
 
 
 # ---------------- end of turn ----------------

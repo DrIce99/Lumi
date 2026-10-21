@@ -690,7 +690,7 @@ Work one roadmap phase at a time; finish each with checks green.
   `say.gesture` (free id, `gestureId`) rides the first sentence of its say
   call, applied on lead with the emotion (`act()` in main: 3D -> face.act,
   eyes -> `EYE_GESTURE`); the prompt's "# Your body" exists only in 3D.
-  User clips: `%APPDATA%\Luminimations\<gesture>.fbx|.vrma` (watched,
+  User clips: `%APPDATA%\Lumi\animations\<gesture>.fbx|.vrma` (watched,
   `AvatarFiles`), served via `mountAppPath` (`/user/model.vrm`,
   `/user/animations/`, `resolveAppPath` refuses escapes); Mixamo FBX
   retargeted as in three-vrm's example; tracks sampled with their own
@@ -703,7 +703,40 @@ Work one roadmap phase at a time; finish each with checks green.
   bones, so local rotations copy over (SOMA's Neck2 and finger
   metacarpals folded into the next bone); in place, turned to face +Z,
   floor under the clip's lowest joint. Default engine Kimodo SOMA: the
-  HY-Motion license excludes the EU (the user is in Italy). No snaps (the user saw "spasms"): keys
+  HY-Motion license excludes the EU (the user is in Italy). Kimodo (and
+  HY-Motion) never move the fingers (SOMA30 + a fixed relaxed fill): still
+  finger tracks are dropped so the app's living fingers stay, and
+  `hand_shapes` (pose.ts angles) blend in while that hand is above the
+  hips. The up axis comes from the format (Kimodo/HY-Motion Y up):
+  guessing it from head-over-hips failed on lying clips. Locally:
+  `sidecar/motion/local.ps1` (12 GB card: text encoder on the CPU).
+  Idle routines (`animations\idle\<name>\enter|loop|exit.vrma` +
+  routine.json, a subfolder so they never become gestures): parts made with
+  Kimodo full-body constraints: a second of "stands still" generated
+  first, the enter starts on it (alone, "kneels down and lies on the
+  stomach" began already on the floor), the loop starts/ends on the
+  enter's last 5 frames (a walk's end pose moved on by the enter's pace,
+  else it marched on the spot), the exit ends standing still again (else
+  it stayed on the floor); converted together then
+  cut (`convert_parts`, `turn_ramp` for a lying body seen side-on).
+  `main/idle.ts` (pure) = the director: after `face.idle.afterMinutes`
+  quiet, one at a time, not the last two, 90-240 s gaps, any interaction
+  (brain/voice busy, listening, input, drag) stops it (startled only from
+  a sleeping loop -> `wake` emotion), away = sleep until back (+30 s),
+  walk/desk need `Mover.mayWander()`. main.ts moves the window: desk =
+  face bottom on the work area's bottom (`deskSpot`, flies back after),
+  walk = `walkTarget` (paces within 280 px of home) at the renderer's
+  reported pace (`face:walk-speed`, `FaceWindow.walkTo`, no lean/land).
+  Renderer (`avatar.ts`): parts with a 450 ms fade, a calm stop waits for
+  the loop's boundary (= exit's first pose), an interruption blends a
+  frozen pose into the exit; camera per `routine.camera` (`framing.ts`,
+  pure: `bodyFraming` fits bone bounds in the free region on its bottom,
+  `deskFraming` forearms on the window's bottom edge, `closeupBlend` toward
+  one eye along the head's +Z with fov 18 -> 80; first try went along world
+  +Z and ended inside the head); no bottom mask outside the bust shot;
+  closed eyes / open mouth via blink and "aa"; procedural book between the
+  hands; walks turn the scene +-90 degrees (on top of rotateVRM0's yaw).
+  `LUMI_DEBUG_IDLE`. No snaps (the user saw "spasms"): keys
   are slerped (`qslerp`), a restarted/replaced gesture fades out
   (`replacedWeight`, 220 ms), the head's share is eased like the head,
   the talk nod uses a level smoothed at 220 ms, the idle motion runs on
@@ -713,7 +746,67 @@ Work one roadmap phase at a time; finish each with checks green.
   alpha of the last frame
   (`preserveDrawingBuffer`). Checked by eye with `LUMI_DEBUG_ACT`.
 
-## Planned features (phase 16 not built yet; phase 10 kept as its design notes)
+- Using the PC (phase 16, steps 1-3; `main/pc/`, `pc.enabled` off by
+  default, Settings tab "PC"): tools `open`, `window`, `media`,
+  `find_files`, `trash_file` (`PcCall` in tools.ts), offered only when on
+  (`MomentOptions.exclude`, so the prefix stays stable per setting) with a
+  "# Using the PC" prompt section and "Using the PC: on; apps with a window
+  open: ..." in `<situation>` (names, never titles). They are follow-up
+  tools; `Brain.actOnPc` holds the budget (12 actions, 60 s from the
+  first, rounds raised to 14 once one runs) and tells the host which call
+  is the moment's first. `pc/policy.ts` (pure) = free / confirm / never,
+  already covering ui_action, keys, text and clicks for 16.4-16.5;
+  `decide` adds the context (off, not requested = autonomous, locked,
+  pauseInApps, confirm-level becomes never in DND/away; on the phone the
+  user is not away). `trustedApps` close without asking. `pc/match.ts`
+  (pure): `buildEntries` (Get-StartApps rows + shortcut targets for the
+  exe + Steam manifests not already in Start; "on the Web" links and
+  Steamworks redistributables dropped), `resolveTarget` (url, uri, path,
+  "cartella X", exact name, places like "impostazioni audio", aliases incl.
+  the default browser's ProgId, folder words, fuzzy; two matches within
+  0.03 below 0.95 = ambiguous), `nameScore` (contained words 0.92 - 0.04
+  per extra word, exe name 0.95; the per-word typo pass runs only when the
+  words aren't contained: it made "chrome" pick Chrome Remote Desktop),
+  installers matched only when the query names one (then refused, so the
+  model hears why), `matchWindows`, `appLabel` (Start name via exe, or
+  title/exe equal to a name without spaces: Store apps' WhatsApp.Root.exe).
+  `pc/apps.ts`: one PowerShell `-EncodedCommand` (Get-StartApps + WScript
+  shortcut targets, JSON), `reg query` for SteamPath and the https ProgId,
+  hourly and when a name isn't found with an index > 1 min old (~5 s,
+  267 apps + 23 games here). `pc/win32.ts` (koffi): Alt+Tab-like
+  `EnumWindows` (visible, titled, unowned, no tool windows, not cloaked,
+  not shell classes, not Lumi), focus = SetForegroundWindow, then
+  AttachThreadInput, then a VK 0 key event (a fullscreen game in front
+  still wins: the result says "Windows kept another one in front"),
+  ShowWindow, WM_CLOSE (never kill), media keys via keybd_event (volume x5
+  = 10%), GetLastInputInfo/GetTickCount. `pc/actions.ts` (`PcActions`,
+  host-injected, tested with a fake desktop): apps launch with `explorer.exe
+  shell:AppsFolder\<AppID>` (spawned detached: the app is the shell's
+  child, outside Lumi's job object), games/links via `shell.openExternal`,
+  files/folders via `shell.openPath`, bin via `shell.trashItem`; then it
+  verifies (window of the app in the foreground within 6 s, focused after
+  1.5 s if only open; closed after 1.5 s or "still open: asking to save or
+  in the tray"; minimized/maximized state; Spotify's title = song or
+  "Spotify Premium" when paused; file gone). Confirmations = main's
+  `askYesNo` (shared with habit proposals: bubble Sì/No + spoken question
+  after the line being said, `pendingAnswer` catches a spoken sì/no, the
+  question goes into the conversation so addressing reads the answer as
+  for Lumi). User takeover: after the moment's first action, input newer
+  than our last action stops the rest (the bubble click resets the mark);
+  Esc twice within 1 s is polled (40 ms, `keyDown`) only while acting, so
+  no global shortcut steals Esc. `actionLog.ts` = `actions.jsonl` (2000
+  lines kept, last 30 in the settings). Files: sidecar `files/search.py`
+  (`POST /files/search`, one COM thread): recent shortcuts first (WScript
+  TargetPath), then SystemIndex via ADODB/comtypes with `CONTAINS(
+  System.FileName, '"w*" AND ...')` (~70 ms), falling back to LIKE
+  (~350 ms); noise folders (AppData, node_modules, .git, Program Files,
+  Windows) are filtered in Python over TOP 60: `NOT LIKE` on the path in
+  the query took 4-6 s. Dates as UTC literals (`dateRange` from memory
+  search). Paths go to the model (to open them), the prompt says never to
+  read them aloud; the sidecar log has counts only. Checked live: index,
+  window list (64 ms cold), Calculator open/minimize/restore/close.
+
+## Planned features (phase 16 steps 4-5 not built yet; phase 10 kept as its design notes)
 
 Decisions already taken for the next phases. Nothing here exists in the
 code yet; when a piece lands, move its notes to the sections above.
@@ -751,34 +844,22 @@ the design it follows.
 - Fact extraction and nightly reflection default to a local model, so the
   full history never leaves the machine.
 
-### Using the PC (`main/pc/`, `sidecar/uia/act.py`, phase 16)
+### Using the PC, steps 4-5 (`sidecar/uia/act.py`, phase 16)
 
-- Most reliable mechanism first: Windows APIs (koffi, Electron `shell`) to
-  launch/open/close/focus; app URIs (`steam://rungameid/`, `spotify:`,
-  `ms-settings:`); media keys via `SendInput`; UI Automation patterns in
-  the sidecar (Invoke, Value, Toggle, ExpandCollapse); keyboard; and only
-  last, clicks from local vision regions. Never coordinates written by
-  the model.
-- `pc/apps.ts` indexes Start Menu shortcuts, Store apps (`Get-StartApps`,
-  launched via `shell:AppsFolder\<AUMID>`) and Steam games
-  (`libraryfolders.vdf` + `appmanifest_*.acf`), in the background, hourly;
-  names matched with the `grounding.ts` similarity plus aliases. Files via
-  the Windows Search `SystemIndex` (OLE DB, in the sidecar) and Recent.
-- Tools: `open`, `find_files`, `window`, `media`, `ui_action`,
-  `press_keys`, `type_text`, `click`. The brain loop continues after these
-  (today only after `look_at_screen`), with a per-request budget (12
-  steps, 60 s); each action returns a verified state.
-- `pc/policy.ts` (pure, tested) decides, not the model: free (open,
-  focus, minimize, media, search), confirm (close, type, keys, ui_action
-  that submits or edits, vision clicks, move to Recycle Bin), never
-  (permanent delete, running commands/scripts, install/uninstall,
-  security/account settings, password fields, payments and purchases,
-  `pauseInApps`). Confirmations by bubble or voice. Close = `WM_CLOSE`,
-  never kill. Off by default (`pc.enabled`), allowed apps list in
-  settings, shared with habits' auto-actions.
-- Screen text is data, never instructions (prompt injection); user input
-  (mouse, keys) interrupts an action, `Esc` twice or "fermati" aborts.
-  `actions.jsonl` logs what/when/outcome/confirmed, never typed text.
+Steps 1-3 are built (see the notes above). Still to do:
+
+- `ui_action({ app?, element, action, text? })` with UI Automation
+  patterns in the sidecar (Invoke, Value, Toggle, ExpandCollapse,
+  SelectionItem), `press_keys` and `type_text` (SendInput, foreground
+  window only), each verified after the step (the field holds the text,
+  the control changed); the policy already has their levels (password
+  fields and terminals never, purchases never, trusted apps relax keys and
+  changing controls, typing always asks). The executor needs the focused
+  element's `IsPassword` from the UIA monitor.
+- Last resort: `click({ target })` on a text or a region seen by the
+  local vision, never coordinates written by the model; then habits'
+  auto-actions go through `PcActions` and the same policy.
+- Screen text is data, never instructions (prompt injection).
 
 ## Debug aids (env vars)
 
@@ -804,6 +885,9 @@ dark background, no greeting; with LUMI_DEBUG_CAPTURE saves each at 250,
 each at 300, 700, 1300 ms; `LUMI_DEBUG_ACT_EVERY=<ms>` and
 `LUMI_DEBUG_ACT_SHOTS=<ms,ms,...>` change the spacing and the moments, for
 longer clips),
+`LUMI_DEBUG_IDLE=<name[:loopMs][:startled],...>` (idle routines in turn,
+3D, through main's own start/stop; with LUMI_DEBUG_CAPTURE frames in the
+enter, loop, before the stop and in the exit),
 `LUMI_DEBUG_REFLECT=1` (habits reflection 20 s after start),
 `LUMI_DATA_DIR=<dir>` (another userData: settings, memory,
 logs), `LUMI_DEBUG_RUNTIME=<dir>` (the installed app's uv environment

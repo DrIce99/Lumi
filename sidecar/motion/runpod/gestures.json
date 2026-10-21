@@ -1,25 +1,78 @@
 {
   "defaults": { "duration": 3.0, "seeds": 4 },
   "gestures": [
-    { "name": "explain", "duration": 4.0, "prompt": "A person stands in place and talks with both hands, moving them in front of the chest and opening the palms outward." },
-    { "name": "laugh", "duration": 3.0, "prompt": "A person stands in place and laughs heartily, the shoulders shaking, leaning back slightly and then forward with a hand on the belly." },
-    { "name": "yawn", "duration": 4.0, "prompt": "A person stands in place, raises both arms overhead stretching while yawning, then lowers the arms." },
+    { "name": "explain", "duration": 4.0, "hand_shapes": { "left": "open", "right": "open" }, "prompt": "A person stands in place and talks with both hands, moving them in front of the chest and opening the palms outward." },
+    { "name": "laugh", "duration": 3.0, "hand_shapes": { "right": "relaxed" }, "prompt": "A person giggles, covering the mouth with one hand, the shoulders shaking." },
+    { "name": "yawn", "duration": 4.5, "hand_shapes": { "left": "open", "right": "open" }, "prompt": "A person stretches both arms high above the head, then lowers them slowly to the sides." },
     { "name": "stretch", "duration": 4.0, "prompt": "A person stands in place, interlocks the fingers, stretches both arms forward and then straight up, and relaxes." },
-    { "name": "dance", "duration": 5.0, "prompt": "A person dances happily in place, swaying the hips side to side and moving both arms to the rhythm." },
+    { "name": "dance", "duration": 5.0, "facing": "locked", "prompt": "A person dances happily in place, swaying the hips side to side and moving both arms to the rhythm." },
     { "name": "look_around", "duration": 4.0, "prompt": "A person stands still and turns the head to the left, then to the right, looking around, then faces forward again." },
-    { "name": "sigh", "duration": 3.0, "prompt": "A person stands in place, drops the shoulders and lowers the head with a deep breath out, then straightens up." },
-    { "name": "excited", "duration": 3.0, "prompt": "A person bounces on the toes in place and shakes both fists quickly in front of the chest." },
-    { "name": "salute", "duration": 2.5, "prompt": "A person stands straight and raises the right hand to the forehead in a military salute, then lowers it." },
-    { "name": "fist_pump", "duration": 2.5, "prompt": "A person stands in place and pumps the right fist up in the air twice." },
-    { "name": "stop", "duration": 2.5, "prompt": "A person stands in place and raises the right hand in front of the body with the palm facing forward, holding it there, then lowers it." },
-    { "name": "come_here", "duration": 3.0, "prompt": "A person stands in place and beckons with the right hand, waving it toward the body several times." },
-    { "name": "scratch_head", "duration": 3.0, "prompt": "A person stands in place, raises the right hand and scratches the back of the head, then lowers the hand." },
+    { "name": "sigh", "duration": 3.0, "prompt": "A tired person sighs: the shoulders rise with a slow breath in, then drop as they breathe out, the head nodding down slightly." },
+    { "name": "excited", "duration": 3.0, "hand_shapes": { "left": "fist", "right": "fist" }, "prompt": "A person bounces on the toes in place and shakes both fists quickly in front of the chest." },
+    { "name": "salute", "duration": 2.5, "hand_shapes": { "right": "open" }, "prompt": "A person stands straight and raises the right hand to the forehead in a military salute, then lowers it." },
+    { "name": "fist_pump", "duration": 2.5, "hand_shapes": { "right": "fist" }, "prompt": "A person stands in place and pumps the right fist up in the air twice." },
+    { "name": "stop", "duration": 2.5, "hand_shapes": { "right": "open" }, "prompt": "A person extends the right arm straight forward at chest height with the palm facing forward to signal stop, holds it, then lowers it." },
+    { "name": "come_here", "duration": 3.0, "hand_shapes": { "right": "claw" }, "prompt": "A person stands in place and beckons with the right hand, waving it toward the body several times." },
+    { "name": "scratch_head", "duration": 3.0, "hand_shapes": { "right": "claw" }, "prompt": "A person stands in place, raises the right hand and scratches the back of the head, then lowers the hand." },
     { "name": "hands_on_hips", "duration": 3.0, "prompt": "A person stands in place and puts both hands on the hips, leaning slightly forward." },
-    { "name": "shiver", "duration": 3.0, "prompt": "A person stands in place hugging themselves with both arms and shivers, rubbing the upper arms." },
-    { "name": "air_guitar", "duration": 4.0, "prompt": "A person stands in place playing air guitar, strumming quickly with the right hand while the left hand holds the neck of the guitar out to the side." },
+    { "name": "shiver", "duration": 3.0, "prompt": "A person feels cold, wraps both arms around the chest hugging themselves and shivers, rubbing the upper arms with the hands." },
+    { "name": "air_guitar", "duration": 4.0, "hand_shapes": { "left": "claw", "right": "pinch" }, "prompt": "A person stands in place playing air guitar, strumming quickly with the right hand while the left hand holds the neck of the guitar out to the side." },
     { "name": "shy", "duration": 3.5, "prompt": "A person stands with the hands clasped behind the back, sways gently side to side and lowers the head." },
-    { "name": "sneeze", "duration": 2.5, "prompt": "A person tilts the head back, then jerks the head and torso forward in a sneeze, covering the mouth with the right hand." },
-    { "name": "dab", "duration": 2.5, "prompt": "A person does a dab: the head dips into the bent left elbow while the right arm extends straight up and out to the side, then returns." },
-    { "name": "point_self", "duration": 2.5, "prompt": "A person stands in place and points at their own chest with the right index finger, then lowers the hand." }
+    { "name": "sneeze", "duration": 2.5, "hand_shapes": { "right": "open" }, "prompt": "A person tilts the head back, then jerks the head and torso forward in a sneeze, covering the mouth with the right hand." },
+    { "name": "dab", "duration": 2.5, "hand_shapes": { "left": "open", "right": "open" }, "prompt": "A person does a dab: the head dips into the bent left elbow while the right arm extends straight up and out to the side, then returns." },
+    { "name": "point_self", "duration": 2.5, "hand_shapes": { "right": "point" }, "prompt": "A person stands in place and points at their own chest with the right index finger, then lowers the hand." }
+  ],
+  "idles": [
+    {
+      "name": "ledge",
+      "seeds": 3,
+      "enter": { "duration": 5.0, "prompt": "A person stands with their back to a high table, puts both hands on its edge behind the hips, pushes up with the arms and sits on the edge of the table." },
+      "loop": { "duration": 8.0, "prompt": "A person sits on the edge of a high table with both hands on the edge beside the hips, the legs dangling and gently swinging." },
+      "exit": { "duration": 3.0, "prompt": "A person sitting on the edge of a high table slides off, lands on their feet and stands up straight." },
+      "routine": { "camera": "body" }
+    },
+    {
+      "name": "peek",
+      "seeds": 3,
+      "enter": { "duration": 2.5, "prompt": "A person steps forward and bends toward something right in front of their face, peering at it very closely." },
+      "loop": { "duration": 6.0, "prompt": "A person leans forward, peering very closely at something right in front of their face, slowly tilting the head from side to side." },
+      "exit": { "duration": 2.0, "prompt": "A person who was leaning forward to look closely at something straightens up and steps back." },
+      "routine": { "camera": "closeup" }
+    },
+    {
+      "name": "read",
+      "seeds": 4,
+      "turn": -90,
+      "enter": { "duration": 5.0, "prompt": "A person kneels down and lies on their stomach on the floor, propping themselves up on the elbows." },
+      "loop": { "duration": 8.0, "prompt": "A person lies on their stomach propped up on the elbows, holding a book with both hands and reading, the lower legs raised and swinging back and forth." },
+      "exit": { "duration": 5.0, "prompt": "A person gets up from the floor to a standing position." },
+      "routine": { "camera": "body", "prop": "book" }
+    },
+    {
+      "name": "sleep",
+      "seeds": 3,
+      "turn": 90,
+      "enter": { "duration": 5.0, "prompt": "A tired person sits down on the floor and lies down on their back to sleep." },
+      "loop": { "duration": 8.0, "prompt": "A person sleeps lying on their back on the floor, breathing slowly and shifting slightly." },
+      "exit": { "duration": 2.5, "prompt": "A frightened person lying on their back wakes up with a start and quickly jumps up to their feet." },
+      "routine": { "camera": "body", "face": { "eyes": "closed", "mouth": 0.5 }, "wake": "spavento" }
+    },
+    {
+      "name": "walk",
+      "seeds": 3,
+      "facing": "locked",
+      "enter": { "duration": 2.5, "prompt": "A person starts to walk forward slowly, lifting the knees high with each step, the hands clasped behind the back." },
+      "loop": { "duration": 6.0, "prompt": "A person walks forward slowly and playfully, lifting the knees high with each step, the hands clasped behind the back." },
+      "exit": { "duration": 2.5, "prompt": "A person walking with high knees and the hands clasped behind the back slows down and stops." },
+      "routine": { "camera": "body", "walk": true }
+    },
+    {
+      "name": "desk",
+      "seeds": 3,
+      "enter": { "duration": 4.0, "prompt": "A person sits down on a chair at a desk and leans forward, resting both forearms on the desk." },
+      "loop": { "duration": 9.0, "prompt": "A sleepy person sitting at a desk rests the chin on one fist with the elbow on the desk, the head upright; the head slowly slips off the hand, they wake with a small jerk and rest the chin on the fist again." },
+      "exit": { "duration": 3.0, "prompt": "A person sitting at a desk with the forearms on it sits up straight and stands up." },
+      "routine": { "camera": "desk", "face": { "eyes": "sleepy" } }
+    }
   ]
 }

@@ -7,6 +7,7 @@ from motion.vrma import (
     axis_angle_to_matrix,
     continuous,
     convert,
+    convert_parts,
     from_axis_angle,
     load,
     main,
@@ -17,6 +18,7 @@ from motion.vrma import (
     smpl_skeleton,
     track,
     trim,
+    turn_ramp,
 )
 
 H = smpl_skeleton().hips_height()
@@ -193,9 +195,9 @@ def test_soma_folds_extra_joints_into_vrm_bones():
     rots[:, names.index("LeftHandIndex2")] = b
     rots[:, names.index("RightArm")] = b
     pos = np.tile(rest[0], (T, 1))
-    data, report = convert(Motion(rots, pos, 30.0, sk))
+    data, report = convert(Motion(rots, pos, 30.0, sk), hands=True)
     doc, tr = unpack(data)
-    assert report.fingers  # SOMA's fingers are motion capture: written by default
+    assert report.fingers
     assert len(humans(doc)) == 22 + 30
     assert angle_between(tr("head")[0], matrix_to_quat(a @ b)) < 1e-4
     assert angle_between(tr("leftIndexProximal")[0], matrix_to_quat(a @ b)) < 1e-4
@@ -203,6 +205,24 @@ def test_soma_folds_extra_joints_into_vrm_bones():
     assert angle_between(tr("rightUpperArm")[0], matrix_to_quat(b)) < 1e-4
     assert doc["nodes"][0]["translation"][1] == pytest.approx(sk.hips_height())
     assert len(humans(unpack(convert(Motion(rots, pos, 30.0, sk), hands=False)[0])[0])) == 22
+
+
+def test_still_fingers_are_dropped_and_moving_ones_kept():
+    names, parents, rest = soma_names()
+    sk = named_skeleton(names, parents, rest)
+    T = 20
+    rots = np.tile(np.eye(3), (T, len(names), 1, 1))
+    curl = axis_angle_to_matrix(np.array([0, 0, 0.25]))  # Kimodo: the same relaxed pose all along
+    for n in names:
+        if "Hand" in n and n not in ("LeftHand", "RightHand"):
+            rots[:, names.index(n)] = curl
+    pos = np.tile(rest[0], (T, 1))
+    data, report = convert(Motion(rots, pos, 30.0, sk))
+    assert not report.fingers and len(humans(unpack(data)[0])) == 22
+    # A left index that really moves keeps the left hand's tracks, not the right one's
+    rots[:, names.index("LeftHandIndex3")] = axis_angle_to_matrix(np.stack([np.zeros(T), np.zeros(T), np.linspace(0, 1, T)], -1))
+    bones = humans(unpack(convert(Motion(rots, pos, 30.0, sk))[0])[0])
+    assert "leftIndexIntermediate" in bones and "rightIndexIntermediate" not in bones
 
 
 def test_a_skeleton_whose_chain_skips_a_joint_is_refused():
@@ -243,7 +263,7 @@ def test_loads_hy_motion_kimodo_and_amass_files(tmp_path):
         neutral_joints=rest,
         fps=np.array([30.0]),
     )
-    assert load(tmp_path / "soma.npz").skeleton.fingers_move
+    assert load(tmp_path / "soma.npz").rots.shape[1] == len(names)
 
     np.savez(tmp_path / "am.npz", root_orient=poses[:, :3], pose_body=poses[:, 3:66], trans=trans, mocap_frame_rate=60)
     m = load(tmp_path / "am.npz")
@@ -256,3 +276,74 @@ def test_command_line_converts_a_folder(tmp_path):
     np.savez(tmp_path / "bad.npz", other=np.zeros(3))
     assert main([str(tmp_path), "-o", str(tmp_path / "out")]) == 1  # one file failed
     assert read_glb((tmp_path / "out" / "a.vrma").read_bytes())[0]["asset"]["version"] == "2.0"
+
+
+def raised_right_hand(frames=40):
+    """The right arm hangs (+Z turns the right arm down), then rises to the T-pose."""
+    poses, trans = still(frames)
+    poses[:, 17 * 3 + 2] = np.concatenate([np.full(frames // 2, 1.3), np.zeros(frames - frames // 2)])
+    return from_axis_angle(poses, trans)
+
+
+def test_a_hand_shape_follows_the_hand_up():
+    data, report = convert(raised_right_hand(), shapes={"right": "fist"})
+    doc, tr = unpack(data)
+    bones = humans(doc)
+    assert report.fingers and "rightIndexProximal" in bones and "leftIndexProximal" not in bones
+    q = tr("rightIndexProximal")
+    # Hanging: the relaxed curl (14 degrees); raised: the fist (85)
+    assert angle_between(q[2], IDENTITY) == pytest.approx(14, abs=0.5)
+    assert angle_between(q[-1], IDENTITY) == pytest.approx(85, abs=0.5)
+    # The right fingers curl with +Z, as in the app's pose.ts
+    assert q[-1, 2] > 0.5
+    with pytest.raises(ValueError, match="shape"):
+        convert(raised_right_hand(), shapes={"right": "peace"})
+
+
+def test_turn_puts_the_clip_in_profile():
+    poses, trans = still(10)
+    data, _ = convert(from_axis_angle(poses, trans), turn=90)
+    q = unpack(data)[1]("hips")[0]
+    assert np.allclose(np.abs(q), [0, np.sin(np.pi / 4), 0, np.cos(np.pi / 4)], atol=1e-6)
+
+
+def test_parts_are_cut_from_one_conversion():
+    poses, trans = still(60)
+    poses[:, 3] = np.linspace(0, 1, 60)  # the left leg lifts slowly all along
+    trans[:, 0] += np.linspace(0, 1, 60)
+    parts, report = convert_parts(from_axis_angle(poses, trans), [("enter", 0, 21), ("loop", 20, 50), ("exit", 49, 60)])
+    enter = unpack(parts["enter"])[1]("leftUpperLeg")
+    loop = unpack(parts["loop"])[1]("leftUpperLeg")
+    exit_ = unpack(parts["exit"])[1]("leftUpperLeg")
+    # Each part starts where the previous one ends
+    assert np.allclose(enter[-1], loop[0], atol=1e-6) and np.allclose(loop[-1], exit_[0], atol=1e-6)
+    assert len(loop) == 30 and report.frames == 60
+    hips = unpack(parts["exit"])[1]("hips", "translation")
+    assert np.allclose(hips[:, [0, 2]], 0)  # in place over the whole motion
+    with pytest.raises(ValueError, match="outside"):
+        convert_parts(from_axis_angle(poses, trans), [("x", 50, 70)])
+
+
+def test_a_clip_spent_lying_down_keeps_the_format_s_up_axis(tmp_path):
+    poses, trans = still(20)
+    lying = axis_angle_to_matrix(np.array([-np.pi / 2, 0, 0]))  # on the back: the head points away from the camera
+    rots = np.tile(np.eye(3), (20, 22, 1, 1))
+    rots[:, 0] = lying
+    np.savez(tmp_path / "ki.npz", local_rot_mats=rots, root_positions=trans)
+    data, report = convert(load(tmp_path / "ki.npz"))
+    assert report.up == "+y"
+    assert angle_between(unpack(data)[1]("hips")[0], matrix_to_quat(lying)) < 0.05
+    # Without a format that says it, the same pose would have been "stood up" (the AMASS guess)
+    assert convert(from_axis_angle(np.concatenate([np.tile([-np.pi / 2, 0, 0], (20, 1)), poses[:, 3:]], 1), trans))[1].up != "+y"
+
+
+def test_an_idle_turns_into_profile_while_it_enters_and_back_while_it_exits():
+    poses, trans = still(60)
+    cuts = [("enter", 0, 21), ("loop", 20, 41), ("exit", 40, 60)]
+    ramp = turn_ramp(cuts, 60, 90)
+    assert ramp[0] == 0 and ramp[20] == 90 and ramp[30] == 90 and ramp[40] == 90 and ramp[59] == 0
+    parts, _ = convert_parts(from_axis_angle(poses, trans), cuts, turn=ramp)
+    yaw = lambda q: np.degrees(2 * np.arctan2(q[..., 1], q[..., 3]))
+    assert yaw(unpack(parts["enter"])[1]("hips")[0]) == pytest.approx(0, abs=1e-3)
+    assert np.allclose(yaw(unpack(parts["loop"])[1]("hips")), 90, atol=1e-3)
+    assert yaw(unpack(parts["exit"])[1]("hips")[-1]) == pytest.approx(0, abs=1e-3)

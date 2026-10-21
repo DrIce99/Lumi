@@ -502,6 +502,49 @@ function renderHabits(next: SettingsSnapshot): void {
   );
 }
 
+const PC_TOOL_LABEL: Record<string, string> = { open: "apri", window: "finestra", media: "musica", find_files: "cerca file", trash_file: "cestino" };
+const PC_ACTION_LABEL: Record<string, string> = {
+  focus: "in primo piano",
+  minimize: "riduci",
+  maximize: "ingrandisci",
+  restore: "ripristina",
+  close: "chiudi",
+  play_pause: "play/pausa",
+  next: "traccia successiva",
+  previous: "traccia precedente",
+  volume_up: "volume su",
+  volume_down: "volume giù",
+  mute: "muto",
+};
+const PC_OUTCOME_LABEL: Record<string, string> = {
+  done: "fatto",
+  refused: "rifiutato",
+  declined: "hai detto no",
+  unanswered: "nessuna risposta",
+  failed: "non riuscito",
+  not_found: "non trovato",
+  ambiguous: "ambiguo",
+  stopped: "fermato",
+};
+
+/** Using the PC: the index and the latest actions (actions.jsonl). */
+function renderPc(next: SettingsSnapshot): void {
+  const { apps, games } = next.pc;
+  $<HTMLElement>("pcIndex").textContent = next.settings.pc.enabled
+    ? apps + games
+      ? `Lumi conosce ${apps} app del menu Start e ${games} giochi di Steam (l'elenco si aggiorna ogni ora).`
+      : "Sto leggendo le app del menu Start e i giochi di Steam..."
+    : "";
+  listItems(
+    "pcActions",
+    next.pc.actions.map((a) => ({
+      tag: new Date(a.at).toLocaleString("it-IT", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }),
+      text: `${[PC_TOOL_LABEL[a.tool] ?? a.tool, a.action ? (PC_ACTION_LABEL[a.action] ?? a.action) : "", a.target].filter(Boolean).join(" · ")}: ${PC_OUTCOME_LABEL[a.outcome] ?? a.outcome}${a.confirmed ? " (confermato)" : ""}`,
+    })),
+    "Nessuna azione ancora.",
+  );
+}
+
 /** The embedding queue's state, in words. */
 /** What the sidecar's status for an app means for the person looking at the settings. */
 function appAudioText(app: string, state: string): string {
@@ -611,6 +654,11 @@ function fill(next: SettingsSnapshot): void {
   $("face3d").checked = s.face.mode === "3d";
   $("faceModel").value = s.face.model;
   $<HTMLElement>("face3dOptions").hidden = s.face.mode !== "3d";
+  $("idleEnabled").checked = s.face.idle.enabled;
+  $("idleAfter").value = String(s.face.idle.afterMinutes);
+  $<HTMLElement>("avatarIdles").textContent = next.avatarClips.idles.length
+    ? `Routine trovate: ${next.avatarClips.idles.join(", ")}. Camminata e banco spostano Lumi: servono gli spostamenti di sua iniziativa.`
+    : `Nessuna routine per ora: si creano con sidecar/motion (vedi il suo README) e vanno in ${next.avatarClips.dir}\\idle\\<nome>.`;
   $<HTMLElement>("avatarClips").textContent = `Gesti in più: metti dei file Mixamo .fbx (scaricati "Without Skin") o .vrma in ${next.avatarClips.dir}, con il nome del gesto ("wave.fbx" sostituisce il saluto incluso, "dance.fbx" ne aggiunge uno nuovo). ${next.avatarClips.names.length ? `Trovati: ${next.avatarClips.names.join(", ")}.` : "Per ora nessuno: usa i gesti inclusi."}`;
   $("moodEnabled").checked = s.mood.enabled;
   for (const m of DAY_MOODS) $(`mood-${m}`).value = String(s.mood.weights[m]);
@@ -679,6 +727,9 @@ function fill(next: SettingsSnapshot): void {
   $("phonePort").value = String(s.phone.port);
   renderPhone(next);
   renderHabits(next);
+  $("pcEnabled").checked = s.pc.enabled;
+  $<HTMLTextAreaElement>("pcTrustedApps").value = s.pc.trustedApps.join("\n");
+  renderPc(next);
   $<HTMLSelectElement>("embeddingProvider").value = s.memory.embeddings.provider;
   $("embeddingModel").value = s.memory.embeddings.model;
   embeddingModelField();
@@ -756,10 +807,18 @@ function collect(): Settings {
       showInCaptures: $("showInCaptures").checked,
       mode: $("face3d").checked ? "3d" : "minimal",
       model: $("faceModel").value.trim(),
+      idle: { enabled: $("idleEnabled").checked, afterMinutes: num("idleAfter", s.face.idle.afterMinutes) },
     },
     voices: { enabled: $("voicesEnabled").checked, onlyMe: $("onlyMe").checked },
     habits: { ...s.habits, enabled: $("habitsEnabled").checked },
     phone: { enabled: $("phoneEnabled").checked, port: num("phonePort", s.phone.port) },
+    pc: {
+      enabled: $("pcEnabled").checked,
+      trustedApps: $<HTMLTextAreaElement>("pcTrustedApps")
+        .value.split(/\n|,/)
+        .map((a) => a.trim())
+        .filter(Boolean),
+    },
     mood: { enabled: $("moodEnabled").checked, weights: moodWeights() },
     movement: { enabled: $("moveEnabled").checked, initiative: $("moveInitiative").checked, pranks: $("movePranks").checked, dodge: $("moveDodge").checked },
     web: { provider: $<HTMLSelectElement>("webProvider").value as Settings["web"]["provider"], searxngUrl: $("searxngUrl").value.trim() },
