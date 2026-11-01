@@ -34,6 +34,8 @@ export interface PolicyContext {
   requested: boolean;
   /** Apps Lumi may close and drive (keys, controls that change things) without asking. */
   trustedApps: string[];
+  /** Ask before the confirm-level actions (default). Off: they run like free ones; never stays never. */
+  askFirst?: boolean;
   /** Perception pauses there; Lumi never acts there either. */
   pauseInApps: string[];
   doNotDisturb: boolean;
@@ -189,6 +191,8 @@ export function decide(request: PcRequest, ctx: PolicyContext): Decision {
   const app = appOf(request);
   if (app && listed(app, ctx.pauseInApps)) return never("the user asked you to stay out of that app");
   const base = levelOf(request, ctx.trustedApps);
+  // The user chose not to be asked: what would need their yes just runs
+  if (base.level === "confirm" && ctx.askFirst === false) return free;
   if (base.level === "confirm" && (ctx.doNotDisturb || ctx.away)) {
     return never(`${base.reason} needs the user's yes, and they can't answer now (${ctx.doNotDisturb ? "do not disturb" : "away from the computer"})`);
   }

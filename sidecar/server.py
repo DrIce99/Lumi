@@ -591,7 +591,7 @@ async def ocr(req: OcrRequest, _: None = Depends(http_auth)) -> dict:
 
 
 class BatchRequest(BaseModel):
-    """A long text, or a .txt/.epub file, into one audio file (WAV, or M4B with chapters via ffmpeg)."""
+    """A long text, or a .txt/.epub/.docx file, into one audio file (WAV, or M4B with chapters via ffmpeg)."""
 
     output: str
     source: str | None = None

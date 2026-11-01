@@ -599,7 +599,7 @@ test("actions on the PC continue the moment step by step, within a budget of 12;
     },
   );
 
-  const settings = { ...DEFAULT_SETTINGS, pc: { enabled: true, trustedApps: [] } };
+  const settings = { ...DEFAULT_SETTINGS, pc: { enabled: true, trustedApps: [], askFirst: true } };
   t.h.settings = () => settings;
   const calls: { target: string; first: boolean; requested: boolean }[] = [];
   t.h.pc = async (call, context) => {

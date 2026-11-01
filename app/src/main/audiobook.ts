@@ -1,4 +1,4 @@
-// Audiobook mode: the same voice engine turns a .txt or .epub into an
+// Audiobook mode: the same voice engine turns a .txt, .epub or .docx into an
 // audio file with chapters (M4B through ffmpeg, else WAV). The sidecar does
 // the work; this module picks the files, follows the progress and says
 // when it's done.
@@ -16,6 +16,17 @@ interface Job {
   title: string;
   error: string | null;
   file: string | null;
+  /** Pieces no take got right (listed in `report`, a .txt next to the audio) */
+  doubtful?: number;
+  report?: string | null;
+}
+
+/** The "it's ready" line, with the places to listen again if some take never came out right. */
+export function readyText(job: Pick<Job, "title" | "doubtful">): string {
+  const n = job.doubtful ?? 0;
+  if (!n) return `L'audiolibro "${job.title}" è pronto!`;
+  const where = n === 1 ? "c'è un punto" : `ci sono ${n} punti`;
+  return `L'audiolibro "${job.title}" è pronto! Però ${where} dove potrei aver sbagliato qualche parola: te li ho segnati in un file di testo accanto.`;
 }
 
 const MALE = new Set(["ryan", "aiden", "eric", "dylan", "uncle_fu", "im_nicola"]);
@@ -63,7 +74,7 @@ export class Audiobooks {
     }
     const open = await dialog.showOpenDialog({
       title: "Scegli un libro da leggere",
-      filters: [{ name: "Libri", extensions: ["epub", "txt"] }],
+      filters: [{ name: "Libri", extensions: ["epub", "docx", "txt"] }],
       properties: ["openFile"],
     });
     const source = open.filePaths[0];
@@ -106,7 +117,7 @@ export class Audiobooks {
       this.changed();
       const j = this.job!;
       if (j.state === "done" && j.file) {
-        this.notify(`L'audiolibro "${j.title}" è pronto!`);
+        this.notify(readyText(j));
         shell.showItemInFolder(j.file);
       } else if (j.state === "error") {
         this.notify(`L'audiolibro non è riuscito: ${j.error ?? "errore sconosciuto"}.`);

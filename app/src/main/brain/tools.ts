@@ -283,6 +283,35 @@ export const TOOLS: ToolSpec[] = [
     },
   },
   {
+    name: "type_text",
+    description:
+      "Type text for the user, as if on the keyboard, into the window in front (where their cursor is) or into the app they name: for when they dictate a message, a search, a line of a document. Write exactly what they dictated (fix only spelling and punctuation, never add your own words). Set enter to true only when they say to send it or press Enter. The user confirms first unless they turned that off.",
+    parameters: {
+      type: "object",
+      properties: {
+        text: { type: "string", description: "Exactly what to type. A new line is typed as Shift+Enter (a new line, not sending)." },
+        app: { type: "string", description: "Optional: the app to type into ('Discord', 'WhatsApp'); its window comes to the front first. Leave out for the window in front." },
+        enter: { type: "boolean", description: "Press Enter after typing (send the message, run the search). Only when the user says so." },
+      },
+      required: ["text"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "press_keys",
+    description:
+      "Press keys or shortcuts in the window in front (or the app named) when the user asks: 'premi invio', 'vai a capo', 'nuova scheda' (ctrl+t), 'annulla' (ctrl+z), 'scorri giù' (pagedown). Combinations with +, several separated by spaces: 'ctrl+a ctrl+c'.",
+    parameters: {
+      type: "object",
+      properties: {
+        keys: { type: "string", description: "e.g. 'enter', 'ctrl+t', 'alt+tab', 'tab tab enter', 'shift+enter'. Names: enter, tab, esc, backspace, delete, up, down, left, right, home, end, pageup, pagedown, space, f1-f24, letters, digits; modifiers ctrl, shift, alt, win." },
+        app: { type: "string", description: "Optional: the app whose window gets the keys; it comes to the front first." },
+      },
+      required: ["keys"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "stay_quiet",
     description:
       "Choose to say nothing now (the best choice in most autonomous moments, and when the user is busy). Optionally, how many minutes to wait before your next autonomous moment.",
@@ -316,9 +345,11 @@ export type PcCall =
   | { name: "window"; app: string; action: WindowAction }
   | { name: "media"; action: MediaAction }
   | { name: "find_files"; query?: string; kind?: FileKind; from?: string; to?: string }
-  | { name: "trash_file"; path: string };
+  | { name: "trash_file"; path: string }
+  | { name: "type_text"; text: string; app?: string; enter?: boolean }
+  | { name: "press_keys"; keys: string; app?: string };
 
-export const PC_TOOLS: ReadonlySet<string> = new Set<PcCall["name"]>(["open", "window", "media", "find_files", "trash_file"]);
+export const PC_TOOLS: ReadonlySet<string> = new Set<PcCall["name"]>(["open", "window", "media", "find_files", "trash_file", "type_text", "press_keys"]);
 
 export function isPcCall(call: ToolCall): call is PcCall {
   return PC_TOOLS.has(call.name);
@@ -465,6 +496,18 @@ export function parseToolCall(name: string, input: unknown, now = new Date()): T
     case "trash_file": {
       const path = text(o.path ?? o.target ?? o.file, 1000);
       return path ? { name, path } : null;
+    }
+    case "type_text": {
+      // Not trimmed: leading spaces and new lines may be meant
+      const value = typeof o.text === "string" && o.text.trim() && o.text.length <= 4000 ? o.text : null;
+      const app = text(o.app, 200);
+      const enter = o.enter === true || o.enter === "true" || o.submit === true || o.send === true;
+      return value ? { name, text: value, ...(app ? { app } : {}), ...(enter ? { enter } : {}) } : null;
+    }
+    case "press_keys": {
+      const keys = text(Array.isArray(o.keys) ? o.keys.join(" ") : (o.keys ?? o.key), 200);
+      const app = text(o.app, 200);
+      return keys ? { name, keys, ...(app ? { app } : {}) } : null;
     }
     case "stay_quiet": {
       const minutes = typeof o.minutes === "number" && Number.isFinite(o.minutes) && o.minutes >= 1 && o.minutes <= 240 ? o.minutes : undefined;

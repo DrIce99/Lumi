@@ -112,8 +112,9 @@ export interface Settings {
    * Using the PC (phase 16, main/pc/): opening apps, files and games,
    * windows, media keys, finding files. Off until enabled. `trustedApps`:
    * apps Lumi may close and drive without asking (pc/policy.ts).
+   * `askFirst` off: nothing asks for a yes (what is never allowed stays so).
    */
-  pc: { enabled: boolean; trustedApps: string[] };
+  pc: { enabled: boolean; trustedApps: string[]; askFirst: boolean };
   /** Searching the web (web_search, read_page): which free service, or none. */
   web: { provider: WebProvider; searxngUrl: string };
   /** Long-term memory (memory.db): where the embeddings come from, and how results are ordered. */
@@ -203,7 +204,7 @@ export const DEFAULT_SETTINGS: Settings = {
   mood: { enabled: true, weights: DEFAULT_MOOD_WEIGHTS },
   habits: { enabled: true, proposalCooldownMinutes: 20, minOccurrences: 5, minFrequency: 0.7 },
   phone: { enabled: false, port: 47821 },
-  pc: { enabled: false, trustedApps: [] },
+  pc: { enabled: false, trustedApps: [], askFirst: true },
   web: { provider: "auto", searxngUrl: "" },
   memory: { embeddings: { provider: "auto", model: "bge-m3" }, weights: { relevance: 1, recency: 0.5, importance: 0.5 }, backupDays: 7 },
   listen: {

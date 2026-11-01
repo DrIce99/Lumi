@@ -21,6 +21,7 @@ ITALIAN_VOICES = ["im_nicola", "if_sara"]
 
 class KokoroEngine(TTSEngine):
     name = "kokoro"
+    seeded = False
 
     def __init__(self, config, models_dir_path: str):
         super().__init__(config, models_dir_path)
@@ -50,7 +51,7 @@ class KokoroEngine(TTSEngine):
         # Italian first, then the rest (they speak Italian with an accent)
         return ITALIAN_VOICES + sorted(v for v in available if v not in ITALIAN_VOICES)
 
-    def stream(self, text: str, emotion: str, intensity: float, voice: str, cancel: Cancel | None = None) -> Iterator[bytes]:
+    def stream(self, text: str, emotion: str, intensity: float, voice: str, cancel: Cancel | None = None, seed: int | None = None) -> Iterator[bytes]:
         if not self.kokoro:
             self.load()
         name = voice if voice and voice in self.voices() else ITALIAN_VOICES[0]

@@ -188,6 +188,7 @@ export function sanitizeSettings(input: unknown): Settings {
     pc: {
       enabled: bool(pc.enabled, d.pc.enabled),
       trustedApps: strings(pc.trustedApps, d.pc.trustedApps, 50, 80).map((a) => a.replace(/\.exe$/i, "")),
+      askFirst: bool(pc.askFirst, d.pc.askFirst),
     },
     habits: {
       enabled: bool(habits.enabled, d.habits.enabled),

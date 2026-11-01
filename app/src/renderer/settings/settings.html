@@ -494,13 +494,16 @@
 
       <section class="panel" data-panel="pc">
         <h2>Usare il PC</h2>
-        <label class="check"><input id="pcEnabled" type="checkbox" /> Lumi può agire sul PC quando glielo chiedi: aprire app, giochi, cartelle e file, gestire le finestre, la musica, cercare file</label>
+        <label class="check"><input id="pcEnabled" type="checkbox" /> Lumi può agire sul PC quando glielo chiedi: aprire app, giochi, cartelle e file, gestire le finestre, la musica, cercare file, scrivere per te e premere tasti</label>
         <p class="note">
           Cosa può fare lo decide il codice, non il modello. Aprire, mettere in primo piano, ridurre a icona, i tasti della musica e la ricerca
-          dei file sono liberi. Chiudere un'app o spostare un file nel cestino li fa solo dopo il tuo sì (fumetto o a voce). Non cancella mai
+          dei file sono liberi. Scrivere, premere tasti, chiudere un'app o spostare un file nel cestino li fa solo dopo il tuo sì (fumetto o a voce), a meno che tu non tolga la
+          conferma qui sotto. Non cancella mai
           file definitivamente, non esegue comandi o script, non installa né disinstalla, non tocca sicurezza, account, password e pagamenti,
           e non agisce nelle app in cui la percezione si ferma. Se muovi il mouse o premi un tasto mentre lavora si ferma; Esc due volte annulla tutto.
         </p>
+        <label class="check"><input id="pcAskFirst" type="checkbox" /> Chiedi conferma prima di scrivere, premere tasti, chiudere app, spostare file nel cestino o aprire un terminale</label>
+        <small class="hint">Se togli la spunta Lumi le fa subito, senza fumetto né domanda. Quello che non fa mai resta vietato comunque.</small>
         <label class="field">
           <span>App di fiducia: Lumi può chiuderle senza chiedere (una per riga, per esempio Spotify)</span>
           <textarea id="pcTrustedApps" rows="3"></textarea>

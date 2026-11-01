@@ -7,6 +7,7 @@ import { muteConsole } from "../src/main/log";
 import { PcActions, type PcHost } from "../src/main/pc/actions";
 import { buildEntries, browserNames, matchApps, matchWindows, openApps, parseVdf, resolveTarget, steamLibraries, steamManifest, type AppEntry, type WindowInfo } from "../src/main/pc/match";
 import { decide, levelOf, type PolicyContext } from "../src/main/pc/policy";
+import { comboEvents, encodeInputs, parseCombo, parseKeys, showsTyped, textEvents } from "../src/main/pc/keys";
 import { DEFAULT_SETTINGS, type ActionRecord, type Settings } from "../src/shared/types";
 
 muteConsole();
@@ -83,6 +84,13 @@ test("policy context: off, not asked, locked, pause apps, do not disturb and awa
   assert.equal(decide(close, ctx()).level, "confirm");
   assert.match(decide(close, ctx({ doNotDisturb: true })).reason, /can't answer now \(do not disturb\)/);
   assert.equal(decide(close, ctx({ away: true })).level, "never");
+  // Without confirmations what would ask just runs; never stays never
+  assert.equal(decide(close, ctx({ askFirst: false })).level, "free");
+  assert.equal(decide(close, ctx({ askFirst: false, doNotDisturb: true })).level, "free");
+  assert.equal(decide({ kind: "trash", path: "C:\\a.txt" }, ctx({ askFirst: false })).level, "free");
+  assert.equal(decide({ kind: "delete", path: "C:\\a.txt" }, ctx({ askFirst: false })).level, "never");
+  assert.equal(decide({ kind: "type_text", app: "Windows PowerShell" }, ctx({ askFirst: false })).level, "never");
+  assert.match(decide(close, ctx({ askFirst: false, requested: false })).reason, /only when the user asks/);
 });
 
 // Names as Get-StartApps prints them on the development PC
@@ -243,7 +251,7 @@ test("PC tools validate their input", () => {
 });
 
 /** A fake desktop: windows appear when apps launch, input comes when the test says. */
-function fakeHost(over: { settings?: Partial<Settings["pc"]>; answer?: boolean | null; files?: Record<string, "file" | "folder"> } = {}) {
+function fakeHost(over: { settings?: Partial<Settings["pc"]>; answer?: boolean | null; files?: Record<string, "file" | "folder">; password?: boolean; modifier?: boolean; blocked?: boolean; answerFocusesLumi?: boolean } = {}) {
   const windows: WindowInfo[] = WINDOWS.map((w) => ({ ...w }));
   let foreground = "1";
   let tick = 1000;
@@ -253,8 +261,11 @@ function fakeHost(over: { settings?: Partial<Settings["pc"]>; answer?: boolean |
   const launched: string[] = [];
   const closed: string[] = [];
   const media: string[] = [];
+  /** What reached each window: typed characters, and key presses as <vk>. */
+  const typed: Record<string, string> = {};
+  let line: string | null = "";
   const files: Record<string, "file" | "folder"> = { ...(over.files ?? {}) };
-  const settings: Settings = { ...DEFAULT_SETTINGS, pc: { enabled: true, trustedApps: [], ...over.settings }, perception: { ...DEFAULT_SETTINGS.perception, pauseInApps: ["KeePass"] } };
+  const settings: Settings = { ...DEFAULT_SETTINGS, pc: { enabled: true, trustedApps: [], askFirst: true, ...over.settings }, perception: { ...DEFAULT_SETTINGS.perception, pauseInApps: ["KeePass"] } };
   const host: PcHost = {
     settings: () => settings,
     state: () => ({ doNotDisturb: false, away: false, locked: false }),
@@ -285,7 +296,20 @@ function fakeHost(over: { settings?: Partial<Settings["pc"]>; answer?: boolean |
       },
       lastInput: () => lastInput,
       tick: () => tick,
+      foreground: () => windows.find((w) => w.id === foreground) ?? null,
+      send: (events) => {
+        if (over.blocked) return 0;
+        for (const e of events) {
+          if (e.flags & 2) continue; // key up
+          const text = e.flags & 4 ? String.fromCharCode(e.scan) : `<${e.vk}>`;
+          typed[foreground] = (typed[foreground] ?? "") + text;
+          if (e.flags & 4) line = (line ?? "") + text;
+        }
+        return events.length;
+      },
+      modifierHeld: () => over.modifier === true,
     },
+    field: () => ({ isPassword: over.password === true, line, processId: 0 }),
     launch: {
       explorer: async (arg) => {
         launched.push(arg);
@@ -315,6 +339,7 @@ function fakeHost(over: { settings?: Partial<Settings["pc"]>; answer?: boolean |
     },
     confirm: async (question) => {
       questions.push(question);
+      if (over.answerFocusesLumi) foreground = "lumi";
       tick += 10;
       lastInput = tick; // the click on the bubble
       return over.answer === undefined ? true : over.answer;
@@ -332,6 +357,7 @@ function fakeHost(over: { settings?: Partial<Settings["pc"]>; answer?: boolean |
     closed,
     media,
     files,
+    typed,
     userInput: () => {
       lastInput = tick + 5;
     },
@@ -391,6 +417,12 @@ test("windows: closing asks and is verified; a no is respected; trusted apps clo
   assert.equal(await new PcActions(trusted.host).run({ name: "window", app: "Spotify", action: "close" }, { requested: true, first: true }), "Closed Spotify.");
   assert.deepEqual(trusted.questions, []);
 
+  // Confirmations turned off in the settings: no question at all
+  const direct = fakeHost({ settings: { askFirst: false } });
+  assert.equal(await new PcActions(direct.host).run({ name: "window", app: "Discord", action: "close" }, { requested: true, first: true }), "Closed Discord.");
+  assert.deepEqual(direct.questions, []);
+  assert.equal(direct.records[0].level, "free");
+
   // Autonomous moments never act; off means off
   const quiet = fakeHost();
   assert.match(await new PcActions(quiet.host).run({ name: "open", target: "Spotify" }, { requested: false, first: true }), /only when the user asks/);
@@ -430,4 +462,110 @@ test("the user takes over: input after an action, or Esc twice, stops the rest o
   await pc2.run({ name: "media", action: "next" }, { requested: true, first: true });
   assert.equal(await pc2.run({ name: "window", app: "Discord", action: "close" }, { requested: true, first: false }), "Closed Discord.");
   assert.match(await pc2.run({ name: "media", action: "next" }, { requested: true, first: false }), /^Pressed/);
+});
+
+test("keys: names in English and Italian, combinations, several at once; Unicode text; the INPUT array", () => {
+  const labels = (k: string) => parseKeys(k)?.map((c) => c.label) ?? null;
+  assert.deepEqual(labels("enter"), ["enter"]);
+  assert.deepEqual(labels("Invio"), ["enter"]);
+  assert.deepEqual(labels("Ctrl + T"), ["ctrl+t"]);
+  assert.deepEqual(labels("shift+ctrl+tab"), ["ctrl+shift+tab"]);
+  assert.deepEqual(labels("ctrl+a ctrl+c"), ["ctrl+a", "ctrl+c"]);
+  assert.deepEqual(labels("tab, tab, invio"), ["tab", "tab", "enter"]);
+  assert.deepEqual(labels("freccia giù freccia su"), ["down", "up"]);
+  assert.deepEqual(labels("a capo"), ["enter"]);
+  assert.deepEqual(labels("alt+f4"), ["alt+f4"]);
+  assert.deepEqual(labels("win"), ["win"]);
+  assert.equal(labels("ctrl+boh"), null);
+  assert.equal(labels(""), null);
+  assert.equal(labels("a b c d e f g h i j k"), null, "at most 10");
+
+  const t = parseCombo("ctrl+t")!;
+  assert.deepEqual(comboEvents(t), [
+    { vk: 0x11, scan: 0, flags: 0 },
+    { vk: 0x54, scan: 0, flags: 0 },
+    { vk: 0x54, scan: 0, flags: 2 },
+    { vk: 0x11, scan: 0, flags: 2 },
+  ]);
+  // Arrows are extended keys, or they arrive as the numeric keypad's
+  assert.equal(comboEvents(parseCombo("up")!)[0].flags, 1);
+
+  const events = textEvents("Ciao è 😀\nok");
+  const typed = events.filter((e) => !(e.flags & 2)).map((e) => (e.flags & 4 ? String.fromCharCode(e.scan) : `<${e.vk}>`)).join("");
+  assert.equal(typed, "Ciao è 😀<16><13>ok", "a new line is Shift+Enter; emoji go as their two UTF-16 units");
+
+  const buffer = encodeInputs([{ vk: 0, scan: 0xe8, flags: 4 }]);
+  assert.equal(buffer.length, 40);
+  assert.equal(buffer.readUInt32LE(0), 1, "INPUT_KEYBOARD");
+  assert.equal(buffer.readUInt16LE(10), 0xe8);
+  assert.equal(buffer.readUInt32LE(12), 4);
+
+  assert.equal(showsTyped("Ciao Marco, arrivo tra dieci minuti", "arrivo tra dieci minuti"), true);
+  assert.equal(showsTyped("", "ciao"), false);
+  assert.equal(showsTyped(null, "ciao"), null);
+});
+
+test("type_text: asks with the words, types into the window in front or the app named, Enter only when asked", async () => {
+  const f = fakeHost();
+  const pc = new PcActions(f.host);
+  assert.equal(await pc.run({ name: "type_text", text: "ciao Marco, arrivo tra dieci minuti" }, { requested: true, first: true }), "Typed it in Visual Studio Code: the field shows it. Nothing was sent (no Enter).");
+  assert.deepEqual(f.questions, ["Scrivo «ciao Marco, arrivo tra dieci minuti» in Visual Studio Code?"]);
+  assert.equal(f.typed["1"], "ciao Marco, arrivo tra dieci minuti");
+
+  assert.equal(await pc.run({ name: "type_text", text: "ci sono", app: "Discord", enter: true }, { requested: true, first: false }), "Typed it in Discord and pressed Enter.");
+  assert.equal(f.questions.at(-1), "Scrivo «ci sono» in Discord e premo Invio?");
+  assert.equal(f.typed["2"], "ci sono<13>");
+  assert.deepEqual(f.records.map((r) => [r.tool, r.target, r.action ?? "", r.outcome, r.confirmed]), [
+    ["type_text", "Visual Studio Code", "", "done", true],
+    ["type_text", "Discord", "enter", "done", true],
+  ]);
+  assert.ok(!JSON.stringify(f.records).includes("Marco"), "the log never has the text");
+
+  assert.equal(await pc.run({ name: "press_keys", keys: "invio" }, { requested: true, first: false }), "Pressed enter in Discord.");
+  assert.equal(f.questions.at(-1), "Premo Invio in Discord?");
+  assert.match(await pc.run({ name: "press_keys", keys: "ctrl+boh" }, { requested: true, first: false }), /can't be read/);
+  assert.match(await pc.run({ name: "type_text", text: "x", app: "Photoshop" }, { requested: true, first: false }), /no open window of "Photoshop"/);
+});
+
+test("type_text without confirmations, and its refusals: passwords, terminals, held keys, blocked input, a lost focus", async () => {
+  // Hands busy and confirmations off: straight in
+  const direct = fakeHost({ settings: { askFirst: false } });
+  assert.equal(await new PcActions(direct.host).run({ name: "type_text", text: "va bene", enter: true }, { requested: true, first: true }), "Typed it in Visual Studio Code and pressed Enter.");
+  assert.deepEqual(direct.questions, []);
+
+  const password = fakeHost({ settings: { askFirst: false } , password: true });
+  assert.match(await new PcActions(password.host).run({ name: "type_text", text: "1234" }, { requested: true, first: true }), /never type into password fields/);
+  assert.equal(password.typed["1"], undefined);
+  assert.match(await new PcActions(password.host).run({ name: "press_keys", keys: "enter" }, { requested: true, first: true }), /password fields/);
+
+  const terminal = fakeHost({ settings: { askFirst: false } });
+  terminal.host.win.list().unshift(win("t", "WindowsTerminal.exe", "PowerShell"));
+  assert.match(await new PcActions(terminal.host).run({ name: "type_text", text: "dir", app: "powershell" }, { requested: true, first: true }), /never run commands/);
+  assert.match(await new PcActions(fakeHost({ settings: { askFirst: false } }).host).run({ name: "press_keys", keys: "win+r" }, { requested: true, first: true }), /command runner/);
+
+  const held = fakeHost({ settings: { askFirst: false }, modifier: true });
+  assert.match(await new PcActions(held.host).run({ name: "type_text", text: "ciao" }, { requested: true, first: true }), /held down/);
+  assert.equal(held.typed["1"], undefined);
+
+  const blocked = fakeHost({ settings: { askFirst: false }, blocked: true });
+  assert.match(await new PcActions(blocked.host).run({ name: "type_text", text: "ciao" }, { requested: true, first: true }), /administrator/);
+
+  // Answering on the bubble took the focus: it goes back to the app before typing
+  const bubble = fakeHost({ answerFocusesLumi: true });
+  assert.match(await new PcActions(bubble.host).run({ name: "type_text", text: "ciao" }, { requested: true, first: true }), /^Typed it in Visual Studio Code/);
+  assert.equal(bubble.typed["1"], "ciao");
+  assert.equal(bubble.typed["lumi"], undefined);
+
+  // Talking to Lumi in her chat box (her window in front): the app just under her gets the text
+  const chat = fakeHost({ settings: { askFirst: false } });
+  chat.host.win.focus({ ...WINDOWS[0], id: "lumi" });
+  assert.match(await new PcActions(chat.host).run({ name: "type_text", text: "ciao" }, { requested: true, first: true }), /^Typed it in Visual Studio Code/);
+  assert.equal(chat.typed["1"], "ciao");
+
+  // A no means nothing typed
+  const no = fakeHost({ answer: false });
+  assert.match(await new PcActions(no.host).run({ name: "type_text", text: "ciao" }, { requested: true, first: true }), /^The user said no/);
+  assert.equal(no.typed["1"], undefined);
+  assert.deepEqual(parseToolCall("type_text", { text: "  rientro\n", enter: "true" }), { name: "type_text", text: "  rientro\n", enter: true });
+  assert.deepEqual(parseToolCall("press_keys", { keys: ["ctrl+a", "ctrl+c"] }), { name: "press_keys", keys: "ctrl+a ctrl+c" });
 });

@@ -14,7 +14,8 @@
     "start": "node build.mjs && node run.mjs",
     "debug": "node build.mjs && node run.mjs --debug",
     "dist": "node build.mjs && node scripts/prepare-dist.mjs && electron-builder --win nsis --x64",
-    "dist:dir": "node build.mjs && node scripts/prepare-dist.mjs && electron-builder --win dir --x64"
+    "dist:dir": "node build.mjs && node scripts/prepare-dist.mjs && electron-builder --win dir --x64",
+    "update": "node scripts/update.mjs"
   },
   "dependencies": {
     "@discordjs/voice": "^0.19.2",

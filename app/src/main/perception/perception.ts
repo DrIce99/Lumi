@@ -37,8 +37,6 @@ export interface PerceptionHost {
   /** Center of the face (screen DIP). */
   faceCenter(): Point;
   cursor(): Point;
-  /** Where the user sits, seen from the face: bottom center of Lumi's screen. */
-  userPoint(): Point;
   context(): AttentionContext;
   /** The face is shown and not being dragged. */
   active(): boolean;
@@ -147,6 +145,16 @@ export class Perception {
     return { app: this.foreground ? appName(this.foreground.process) : "", text };
   }
 
+  /**
+   * The focused field (UI Automation): whether it is a password field, the
+   * line at the caret, its process. For typing on the user's behalf: never
+   * into a password, and to check the text landed. Null when unknown.
+   */
+  focusedField(): { isPassword: boolean; line: string | null; processId: number } | null {
+    const u = this.uia;
+    return u ? { isPassword: u.focus.isPassword, line: u.focus.isPassword ? null : u.line, processId: u.focus.processId } : null;
+  }
+
   /** The summary that goes into the prompt. */
   summary(): string {
     if (!this.host.settings().perception.enabled) return "";
@@ -165,6 +173,16 @@ export class Perception {
 
   // ---------------- gaze ----------------
 
+  /**
+   * Where the user is, seen from the face: in front of the screen, straight
+   * ahead. The face's own center gives a zero offset, so the eyes (and the
+   * 3D avatar, which then aims at its camera) look the user in the eye.
+   * It used to be the bottom center of the screen: the eyes looked down.
+   */
+  private userPoint(): Point {
+    return this.host.faceCenter();
+  }
+
   tick(now = this.now()): void {
     if (!this.host.active()) return;
     const cursor = this.host.cursor();
@@ -174,7 +192,7 @@ export class Perception {
     this.lastCursor = cursor;
     const context = this.host.context();
     if (context.listening || context.speaking) {
-      const user = this.host.userPoint();
+      const user = this.userPoint();
       this.add({ id: "user", kind: "user", rect: { x: user.x, y: user.y, width: 1, height: 1 }, salience: 1, t: now });
     }
     this.advanceReading(now);
@@ -388,7 +406,7 @@ export class Perception {
 
   /** Looks at a region of the screen. */
   lookAtRegion(region: string, holdMs = 5000): string {
-    const user = this.host.userPoint();
+    const user = this.userPoint();
     const fg = this.foreground;
     switch (region) {
       case "user":

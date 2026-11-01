@@ -25,7 +25,7 @@ class FakeTTS(TTSEngine):
     def unload(self):
         FakeTTS.unloads += 1
 
-    def stream(self, text, emotion, intensity, voice, cancel=None):
+    def stream(self, text, emotion, intensity, voice, cancel=None, seed=None):
         FakeTTS.spoken.append((text, emotion, intensity))
         for i in range(3):
             if FakeTTS.gate is not None and i == 1:

@@ -24,7 +24,22 @@ test("scores follow the README priorities and decay with age", () => {
   assert.ok(Math.abs(old - fresh / 2) < 1e-9, "half-life");
   // The user matters while listening, more than the mouse and screen changes
   const user = candidate("user", "user", now);
-  assert.ok(score(user, now, { listening: true, speaking: false }) > score(candidate("c", "change", now), now, idle));
+  const listening = { listening: true, speaking: false };
+  assert.ok(score(user, now, listening) > score(candidate("c", "change", now), now, idle));
+  // ...and more than the text cursor: while the user speaks (dictating too), Lumi looks them in the eye
+  assert.ok(score(user, now, listening) > score(candidate("k", "caret", now), now, listening));
+  assert.ok(score(user, now, listening) < score(candidate("s", "speaking", now), now, listening));
+});
+
+test("while listening the eyes go to the user and stay there over the caret", () => {
+  const a = new Attention();
+  const listening = { listening: true, speaking: false };
+  a.add(candidate("caret", "caret", 0));
+  assert.equal(a.select(0, idle)?.kind, "caret");
+  a.add(candidate("user", "user", 100));
+  assert.equal(a.select(100, listening)?.kind, "user");
+  a.add(candidate("caret", "caret", 400));
+  assert.equal(a.select(400, listening)?.kind, "user");
 });
 
 test("select picks the best candidate and forgets stale ones", () => {

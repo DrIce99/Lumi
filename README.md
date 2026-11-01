@@ -51,14 +51,14 @@ L'obiettivo è che sembri **il più umano possibile**, cioè con poca latenza, t
 - **Si muove sullo schermo**: se le chiedi di spostarsi ("vai in alto a destra", "sull'altro schermo", "levati, mi copri") vola lì da sola, anche tra i monitor; e si muove anche di sua iniziativa quando ha un motivo, per indicarti qualcosa o per farti un piccolo dispetto se l'hai infastidita.
 - **Ha i suoi giorni**: ogni mattina si sveglia con un umore estratto a sorte (con le probabilità che scegli tu): allegra, tranquilla, annoiata, triste, arrabbiata… L'umore colora le risposte e gli occhi, e se è giù di corda torna di buon umore solo se riesci a tirarla su tu (ma può anche peggiorare, se la tratti male).
 - **Passa sul telefono**: con il tasto "Chiama" dell'app Lumi viene risucchiata fuori dallo schermo del PC (come un oggetto che cade in un buco nero) e riemerge nell'app, dove la vedi e le parli; voce, cervello e memoria restano sul PC.
-- **Usa il PC** (facoltativo, spento di default): quando glielo chiedi apre app, giochi di Steam, cartelle, file e pagine, mette in primo piano, riduce, ingrandisce e chiude le finestre, controlla la musica e cerca i file per nome, tipo e data. Chiudere un'app o spostare un file nel cestino lo fa solo dopo il tuo sì; cancellare per sempre, eseguire comandi, installare o pagare mai. Premere i controlli dentro le app e scrivere arriveranno nei prossimi passi.
+- **Usa il PC** (facoltativo, spento di default): quando glielo chiedi apre app, giochi di Steam, cartelle, file e pagine, mette in primo piano, riduce, ingrandisce e chiude le finestre, controlla la musica e cerca i file per nome, tipo e data. Chiudere un'app o spostare un file nel cestino lo fa solo dopo il tuo sì; cancellare per sempre, eseguire comandi, installare o pagare mai. **Scrive per te** quando hai le mani occupate: detti il messaggio e lei lo digita nella finestra in primo piano (o nell'app che nomini) e, se lo dici, preme Invio; preme anche tasti e scorciatoie ("premi invio", "nuova scheda"). Premere i controlli dentro le app arriverà nei prossimi passi.
 - **Impara le tue abitudini**: dalle app che apri (solo i nomi, sul PC) capisce che "nei feriali verso le 9 apri Spotify" o che "dopo VS Code apri Discord", e al momento giusto ti chiede se aprirle. Fa da sola solo quando glielo permetti tu, per singola abitudine.
 - **Riconosce le voci**: un piccolo modello (WeSpeaker ResNet34, ONNX su CPU) misura l'"impronta" di ogni frase. La prima voce sentita al microfono è la tua; le altre diventano "Voce 2", "Voce 3"… finché non dici a Lumi chi sono ("quello che ha parlato è Marco", tool `name_voice`). Le impronte restano in `voices.json` e si cancellano dalle impostazioni.
 - **Parla nelle chiamate Discord** (facoltativo, spento di default): un bot ti segue nei canali vocali dei server e parla con la voce di Lumi, così la sentono anche i tuoi amici; tu la senti in Discord (sul PC non suona due volte) e gli occhi continuano ad animarsi. Il bot entra "silenziato in ascolto" (non riceve l'audio di nessuno). Non funziona nelle chiamate private: i bot non possono entrarci.
 - **Ascolta l'audio delle app** (facoltativo, spento di default): per esempio i tuoi amici su Discord. Windows cattura solo l'audio di quelle app (process loopback), mai la voce di Lumi, la musica o i video; il sidecar lo divide in frasi, lo trascrive in locale e riconosce chi parla. Le frasi entrano nella conversazione come contesto; Lumi risponde a un amico solo se lo chiama per nome, e durante una chiamata l'ascolto continuo aspetta la parola di attivazione.
   - **Quali app**: il nome del programma («Discord» vale anche per Discord PTB, Canary, Vesktop…). Se usi Discord **dal browser** scrivi il browser (`chrome`, `opera`…): così Lumi sentirà però anche le altre schede, video compresi. Se l'app non è aperta, nelle impostazioni lo stato dice «non è aperta su questo PC»; «in ascolto, silenzio» vuol dire che è aperta ma non arriva suono.
   - **Chi parla**: serve «Riconosci le voci» (impostazioni, Ascolto). Ogni frase di almeno 2 secondi dà un'impronta; una voce nuova nasce solo da frasi di almeno 2 s (le brevi non creano profili), una voce simile a una nota (≥ 0,50) è indicata come «probabile» senza imparare da essa, due profili che diventano troppo vicini (media ≥ 0,72) si fondono e i profili sentiti una volta sola e mai più dopo un giorno vengono eliminati. Per dare un nome basta dirglielo («quello è Marco»).
-- **Audiolibri**: dal menu della tray, lo stesso motore TTS converte un `.txt` o un `.epub` in un file `.m4b` con i capitoli (WAV senza ffmpeg), con una voce diversa per i dialoghi.
+- **Audiolibri**: dal menu della tray, lo stesso motore TTS converte un `.txt`, un `.epub` o un `.docx` (i capitoli sono i titoli di Word) in un file `.m4b` con i capitoli (WAV senza ffmpeg), con una voce diversa per i dialoghi. Legge a blocchi di qualche frase per paragrafo, così l'intonazione scorre, con pause diverse tra frasi, paragrafi, cambi di scena e capitoli. Ogni blocco viene riascoltato con il riconoscimento vocale locale: se la voce salta o inventa parole lo rigenera (fino a 3 prove) e tiene la migliore; i punti mai venuti bene finiscono in un file `.da-riascoltare.txt` accanto all'audiolibro, con il minuto e il testo. I silenzi ai bordi e quelli troppo lunghi vengono tagliati e il volume è uniforme da un blocco all'altro (circa −22 LUFS).
 
 ---
 
@@ -126,7 +126,8 @@ Il volto si disegna su `<canvas>` (o SVG) nel renderer, a 60 fps solo mentre qua
 - **Saccadi**: spostamenti rapidi di 30–60 ms con easing. **Fissazioni**: 250–800 ms. **Micro-saccadi**: tremolio di ±0,5 px ogni 0,5–1,5 s durante la fissazione.
 - **Inseguimento morbido** solo per bersagli che si muovono con continuità (il mouse che si sposta).
 - Leggera **vergenza** (occhi che si avvicinano) quando il bersaglio è molto vicino al volto.
-- Quando non ha niente da guardare, vaga piano o guarda verso di te (in basso al centro dello schermo).
+- **Quando le parli ti guarda negli occhi**: tu sei davanti allo schermo, quindi lo sguardo va dritto in avanti (spostamento zero), anche sopra il cursore del testo se stai dettando; con Lumi in 3D gli occhi puntano proprio alla camera, che sta all'altezza del busto. Mentre risponde ti guarda, a meno che non parli di qualcosa sullo schermo. Prima "tu" era il bordo inferiore dello schermo, e gli occhi scendevano.
+- Quando non ha niente da guardare, vaga piano o torna a guardare verso di te.
 
 ### Espressioni (solo con gli occhi)
 
@@ -409,7 +410,7 @@ Tool esposti al modello:
 - `web_search({ query })` e `read_page({ url })`: cerca sul web e legge una pagina (vedi sotto)
 - `stay_quiet()`
 - `move_to({ where, text?, style?, stay? })`: vola in un altro punto dello schermo (vedi [Movimento sullo schermo](#movimento-sullo-schermo))
-- `open`, `find_files`, `window`, `media`, `ui_action`, `press_keys`, `type_text`, `click` (previsti, vedi [Usare il PC](#usare-il-pc))
+- `open`, `find_files`, `window`, `media`, `trash_file`, `type_text`, `press_keys` (con l'opzione accesa); `ui_action`, `click` previsti (vedi [Usare il PC](#usare-il-pc))
 
 ### Ricerca sul web
 
@@ -755,7 +756,7 @@ Serve l'SDK Android (quello di Android Studio) e un JDK 21 (per esempio `JAVA_HO
 
 ## Usare il PC
 
-> Fatti i passi 16.1–16.3 (policy, ciclo con budget e conferme, registro; indice delle app, `open`, `window`, `media`; file con `find_files` e `trash_file`). Previsti: `ui_action`, `press_keys`, `type_text`, `click` (16.4–16.5).
+> Fatti i passi 16.1–16.3 (policy, ciclo con budget e conferme, registro; indice delle app, `open`, `window`, `media`; file con `find_files` e `trash_file`) e la tastiera del 16.4 (`type_text`, `press_keys`). Previsti: `ui_action` (16.4) e `click` (16.5).
 
 Si accende in Impostazioni → **PC** (spento di default). Lumi deve poter **agire sul PC** su cui gira: aprire e chiudere app (Esplora file, Discord, Spotify, Opera, Steam, VS Code…), aprire file, gestire le finestre, controllare la musica e, nei passi successivi, interagire con i controlli dentro le app ("metti in pausa", "apri la cartella Download", "avvia Hollow Knight", "chiudi Discord", "cerca il PDF della bolletta e aprilo").
 
@@ -787,7 +788,8 @@ Un modello che "vede" lo schermo e clicca coordinate (computer use generico) è 
 - `media({ action })`: `play_pause`, `next`, `previous`, `volume_up`, `volume_down`, `mute`.
 - `trash_file({ path })`: sposta un file o una cartella nel cestino, dopo il sì dell'utente.
 - `ui_action({ app?, element, action, text? })` (previsto): azione UI Automation su un controllo trovato per nome o ruolo.
-- `press_keys({ keys })` e `type_text({ text })` (previsti): tastiera, solo nella finestra in primo piano.
+- `type_text({ text, app?, enter? })`: scrive il testo dettato nella finestra in primo piano (o nell'app nominata, portata davanti prima; se davanti c'è la chat di Lumi, nell'app subito sotto), e con `enter` preme Invio dopo. Una sola conferma per testo e Invio: «Scrivo "arrivo tra dieci minuti" in Discord e premo Invio?», a cui puoi rispondere "sì" a voce. Il testo va come caratteri Unicode (`SendInput` con `KEYEVENTF_UNICODE`, qualsiasi lettera ed emoji, con qualsiasi layout di tastiera); un a capo diventa Shift+Invio (nuova riga, non invio). Prima di scrivere aspetta che tu abbia lasciato Ctrl/Alt/Shift/Win (altrimenti partirebbero scorciatoie) e rimette davanti la finestra se il clic sul fumetto le ha tolto il focus. Dopo, controlla con UI Automation che la riga del campo mostri il testo.
+- `press_keys({ keys, app? })`: tasti e scorciatoie, anche in italiano e in sequenza: `invio`, `ctrl+t`, `alt+tab`, `tab tab invio`, `freccia giù` (al massimo 10).
 - `click({ target })` (previsto): livello 6, il bersaglio è un testo o una regione vista, mai coordinate scritte dal modello.
 
 Dopo un'azione il modello riceve il risultato e lo **stato verificato**: la finestra dell'app è comparsa ed è in primo piano (o Windows ha tenuto davanti un'altra finestra, per esempio un gioco a schermo intero), la finestra è davvero ridotta o chiusa (o l'app sta chiedendo di salvare, o resta nella tray), il file è finito nel cestino, Spotify sta suonando quella canzone o è in pausa. Il ciclo del cervello continua dopo ogni azione, con un budget per richiesta di 12 azioni e 60 s dalla prima; le azioni arrivano solo nei momenti in cui l'utente ha chiesto qualcosa, mai in quelli autonomi. Mentre lavora Lumi guarda la finestra che ha appena toccato. Il prompt (sezione "Using the PC", presente solo con l'opzione accesa, come i tool) chiede una frase neutra insieme all'azione e il commento solo dopo il risultato, come per `move_to`.
@@ -800,7 +802,7 @@ Agire sul PC è la parte più delicata: un errore o un testo malevolo letto sull
   - **libero**: aprire app, file e cartelle, mettere a fuoco, ridurre a icona, tasti multimediali, cercare file;
   - **con conferma** (fumetto "Posso chiudere Discord?" con Sì/No, e la stessa domanda a voce dopo la frase in corso; un "sì" o un "no" detto subito dopo risponde, come per le abitudini): chiudere app, aprire una riga di comando, scrivere testo, premere tasti, `ui_action` che invia o modifica qualcosa, clic con la visione, spostare file nel cestino;
   - **mai**: cancellare definitivamente file, eseguire comandi o script (aprire `.exe`, `.bat`, `.ps1`, `.lnk`… fuori dal menu Start; scrivere o premere tasti in un terminale; `Win+R`), installare o disinstallare (`.msi`, `.msix`, disinstallatori, `steam://install`), impostazioni di sicurezza, account e privacy (`ms-settings:privacy…`, Editor del Registro, Sicurezza di Windows), campi password, pagamenti e acquisti (anche su Steam), link di tipo sconosciuto, app in `pauseInApps`.
-- In Impostazioni → **PC** (spento di default) c'è l'elenco delle **app di fiducia**: Lumi può chiuderle (e, nei passi successivi, comandarle) senza chiedere. Le azioni automatiche delle [abitudini](#abitudini-e-proattività) passeranno dallo stesso esecutore e dalla stessa policy (16.5).
+- In Impostazioni → **PC** (spento di default) c'è l'elenco delle **app di fiducia**: Lumi può chiuderle (e, nei passi successivi, comandarle) senza chiedere. Con la spunta **«Chiedi conferma…»** tolta (`pc.askFirst: false`) le azioni con conferma partono subito, per qualsiasi app, anche in "Non disturbare"; quelle del livello **mai** restano vietate e le azioni partono comunque solo se le chiedi tu. Le azioni automatiche delle [abitudini](#abitudini-e-proattività) passeranno dallo stesso esecutore e dalla stessa policy (16.5).
 - **Chiudere** = chiedere alla finestra di chiudersi (`WM_CLOSE`), così l'app può chiedere di salvare; mai terminare il processo.
 - **Il testo letto sullo schermo è un dato, non un'istruzione**: il prompt lo dice, e le azioni con conferma restano con conferma anche se il modello insiste.
 - **L'utente vince sempre**: se muovi il mouse o premi un tasto mentre Lumi agisce (cioè dopo la sua prima azione della richiesta: `GetLastInputInfo` più recente della sua ultima azione), le azioni successive non partono e il modello lo sa; il clic sul fumetto di conferma conta come risposta, non come interruzione. `Esc` due volte entro un secondo (letto solo mentre Lumi agisce, senza rubare `Esc` alle altre app) o "fermati" annullano tutto.
@@ -1068,7 +1070,7 @@ Il sidecar ascolta solo su `127.0.0.1`, con una porta casuale e un token generat
   "habits": { "enabled": true, "proposalCooldownMinutes": 20, "minOccurrences": 5, "minFrequency": 0.7 },
   "movement": { "enabled": true, "initiative": true, "pranks": true, "dodge": true },
   "mood": { "enabled": true, "weights": { "tranquilla": 6, "allegra": 5, "entusiasta": 2, "annoiata": 2, "malinconica": 2, "triste": 1, "irritata": 2, "arrabbiata": 1 } },
-  "pc": { "enabled": false, "trustedApps": ["Spotify"] },
+  "pc": { "enabled": false, "askFirst": true, "trustedApps": ["Spotify"] },
   "phone": { "enabled": false, "port": 47821 },
   "sociability": "normale"
 }
@@ -1139,7 +1141,7 @@ Ogni fase si chiude con `npm run check` e `pytest` verdi e una prova manuale.
     1. ~~`policy.ts` con i test e il ciclo del cervello che continua dopo le azioni (budget di passi, conferme con fumetto o a voce, stop con il mouse o `Esc`), registro delle azioni~~ (fatto).
     2. ~~Indice delle app (menu Start, Store, Steam) e tool `open`, `window`, `media`~~ (fatto).
     3. ~~File: `find_files` sull'indice di Windows Search e sui recenti, apertura, spostamento nel cestino con conferma~~ (fatto: `trash_file`).
-    4. UI Automation nel sidecar (`ui_action`) e tastiera (`press_keys`, `type_text`), con verifica dopo ogni passo.
+    4. UI Automation nel sidecar (`ui_action`) e ~~tastiera (`press_keys`, `type_text`)~~ (fatta: la riga del campo letta con UI Automation fa da verifica), con verifica dopo ogni passo.
     5. Ultima risorsa: `click` con la visione locale. Poi le azioni automatiche delle abitudini (fase 11) usano lo stesso esecutore e la stessa policy.
 17. ~~**Pronuncia italiana**~~ (fatto) ([dettagli](#pronuncia-italiana)). Indipendente dalle altre fasi:
     1. ~~Frasi trappola e `scripts/pronuncia.py` (WAV per motore e voce, punteggio con `--asr`)~~ (fatto).
@@ -1206,6 +1208,14 @@ Log in `%APPDATA%\Lumi\logs\` (`setup.log` per l'installazione del motore della 
 cd phone && npm run build    # la pagina che il PC serve ai telefoni (phone/www)
 cd app && npm run dist        # release/Lumi-Setup-<versione>.exe (npm run dist:dir: solo la cartella)
 ```
+
+**Aggiornare la Lumi installata con il codice di questa cartella**, in un solo comando:
+
+```bash
+cd app && npm run update      # --no-phone: non ricompila phone/www; --no-start: non la riavvia
+```
+
+`scripts/update.mjs` compila la pagina del telefono e l'installer, chiude la Lumi installata se è aperta (con `Lumi.exe --quit`, così salva la memoria e ferma il motore vocale; le versioni precedenti al 27 ottobre non conoscono `--quit` e vengono chiuse d'ufficio), lancia l'installer in modo silenzioso (`/S`) sopra quella esistente e la riavvia. Impostazioni, memoria, chiavi e modelli stanno in `%APPDATA%\Lumi` e restano; l'aggiornamento conserva anche l'ambiente del motore vocale. Installata e `npm start` usano la stessa cartella dei dati e lo stesso blocco d'istanza: ne gira una sola alla volta. La prima riga del log dice quale: `Lumi 0.1.0 (installed, built 2026-10-27 17:05 UTC; …)` oppure `(dev, …)`.
 
 L'installer (NSIS, per utente, senza diritti di amministratore, circa 135 MB) contiene:
 

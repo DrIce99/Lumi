@@ -57,13 +57,13 @@ class ChatterboxEngine(TTSEngine):
     def voices(self) -> list[str]:
         return ["predefinita"]
 
-    def stream(self, text: str, emotion: str, intensity: float, voice: str, cancel: Cancel | None = None) -> Iterator[bytes]:
+    def stream(self, text: str, emotion: str, intensity: float, voice: str, cancel: Cancel | None = None, seed: int | None = None) -> Iterator[bytes]:
         import torch
 
         if self.model is None:
             self.load()
         with self._lock, torch.inference_mode():
-            torch.manual_seed(self.config.seed)
+            torch.manual_seed(self.config.seed if seed is None else seed)
             wav = self.model.generate(
                 text,
                 language_id="it",

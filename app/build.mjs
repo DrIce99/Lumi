@@ -18,6 +18,8 @@ const jobs = [
     format: "cjs",
     // node_modules (electron, koffi) are resolved at runtime
     packages: "external",
+    // The log says which build is running (the installed app or `npm start`)
+    define: { __LUMI_BUILD__: JSON.stringify(new Date().toISOString().slice(0, 16).replace("T", " ")) },
   }),
   build({
     ...common,

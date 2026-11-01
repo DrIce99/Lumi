@@ -78,8 +78,9 @@ export function center(c: Pick<Candidate, "rect" | "point">): { x: number; y: nu
 
 /** The priority of a candidate's kind in this context. */
 export function rank(kind: AttentionKind, context: AttentionContext): number {
-  // While listening Lumi looks at the user; while talking, at the user unless it talks about something
-  if (kind === "user") return context.listening ? 0.8 : context.speaking ? 0.55 : PRIORITY.user;
+  // While listening Lumi looks the user in the eye, even over the text cursor (dictating);
+  // while talking, at the user unless it talks about something
+  if (kind === "user") return context.listening ? 0.95 : context.speaking ? 0.55 : PRIORITY.user;
   return PRIORITY[kind];
 }
 

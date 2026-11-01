@@ -13,6 +13,7 @@ import type { ActionRecord, FileKind, Settings } from "../../shared/types";
 import type { PcCall } from "../brain/tools";
 import { dateRange } from "../brain/memory/search";
 import { appLabel, matchWindows, openApps, resolveTarget, type AppEntry, type KnownFolder, type Resolved, type WindowInfo } from "./match";
+import { comboEvents, parseKeys, showsTyped, textEvents, VK_RETURN, type KeyEvent } from "./keys";
 import { decide, type Decision, type MediaAction, type PcRequest, type WindowAction } from "./policy";
 
 export interface FileHit {
@@ -43,6 +44,12 @@ export interface PcHost {
   folder(name: KnownFolder): string;
   win: {
     list(): WindowInfo[];
+    /** The window in front, dialogs included; null when none or Lumi's. */
+    foreground(): WindowInfo | null;
+    /** SendInput to the window in front; how many events went through. */
+    send(events: KeyEvent[]): number;
+    /** Ctrl, Alt, Shift or Win held by the user right now. */
+    modifierHeld(): boolean;
     foregroundId(): string;
     focus(window: WindowInfo): boolean;
     show(window: WindowInfo, action: "minimize" | "maximize" | "restore"): void;
@@ -69,6 +76,8 @@ export interface PcHost {
     /** Windows Search + recent files (the sidecar); null when it is not available. */
     search(query: FileQuery): Promise<FileHit[] | null>;
   };
+  /** The focused field as UI Automation sees it (null when unknown: UIA off or not ready). */
+  field(): { isPassword: boolean; line: string | null; processId: number } | null;
   /** Asks the user yes or no (bubble and voice); null without an answer. */
   confirm(question: string): Promise<boolean | null>;
   /** The eyes go to the window Lumi just touched. */
@@ -130,6 +139,10 @@ export class PcActions {
           return await this.findFiles(call, context.requested);
         case "trash_file":
           return await this.trash(call.path, context.requested);
+        case "type_text":
+          return await this.type(call, context.requested);
+        case "press_keys":
+          return await this.keys(call, context.requested);
       }
     } finally {
       this.mark = this.host.win.tick();
@@ -140,15 +153,17 @@ export class PcActions {
 
   private decide(request: PcRequest, requested: boolean): Decision {
     const s = this.host.settings();
-    return decide(request, { enabled: s.pc.enabled, requested, trustedApps: s.pc.trustedApps, pauseInApps: s.perception.pauseInApps, ...this.host.state() });
+    return decide(request, { enabled: s.pc.enabled, requested, trustedApps: s.pc.trustedApps, askFirst: s.pc.askFirst, pauseInApps: s.perception.pauseInApps, ...this.host.state() });
   }
 
   /**
    * Free: go. Never: the refusal for the model. Confirm: ask the user; a
    * click on the bubble is input too, so the clock restarts after the answer.
    */
-  private async allowed(request: PcRequest, requested: boolean, question: string, tool: string, target: string, action?: string): Promise<{ go: true; decision: Decision; confirmed?: boolean } | { go: false; text: string }> {
-    const decision = this.decide(request, requested);
+  private async allowed(request: PcRequest | PcRequest[], requested: boolean, question: string, tool: string, target: string, action?: string): Promise<{ go: true; decision: Decision; confirmed?: boolean } | { go: false; text: string }> {
+    // Several parts (typing, then Enter): the strictest decides, and one question covers them all
+    const decisions = (Array.isArray(request) ? request : [request]).map((r) => this.decide(r, requested));
+    const decision = decisions.find((d) => d.level === "never") ?? decisions.find((d) => d.level === "confirm") ?? decisions[0];
     if (decision.level === "never") {
       this.record(tool, target, "refused", decision, undefined, action);
       return { go: false, text: `You did NOT do it: ${decision.reason}. Tell the user in a few words.` };
@@ -363,6 +378,147 @@ export class PcActions {
     return `Files found for ${what}:\n${lines.join("\n")}\nTo open one, call open with its full path. If several fit, ask the user which one (by name and date, never reading paths aloud).`;
   }
 
+  // ---------------- keyboard ----------------
+
+  /** Where the keys go: the app named (brought to the front), else the window in front; or why not. */
+  private async keyTarget(app: string | undefined, tool: string): Promise<KeyTarget | { refusal: string }> {
+    const entries = this.host.index.entries();
+    const free: Decision = { level: "free", reason: "" };
+    if (app) {
+      const window = matchWindows(app, this.host.win.list(), entries)[0];
+      if (!window) {
+        this.record(tool, app, "not_found", free);
+        return { refusal: `There is no open window of "${app}": nothing was typed. Open it first, or ask the user.` };
+      }
+      const label = appLabel(window, entries);
+      if (this.host.win.foregroundId() !== window.id) {
+        if (!this.host.win.focus(window)) {
+          this.record(tool, label, "failed", free);
+          return { refusal: `Windows didn't let you bring ${label} to the front, so nothing was typed.` };
+        }
+        await this.host.sleep(150);
+      }
+      return { window, label };
+    }
+    // Lumi's own window in front (her chat box): the app just under her, the one the user was in (z-order)
+    const window = this.host.win.foreground() ?? this.host.win.list().find((w) => !w.minimized);
+    if (!window) {
+      this.record(tool, "", "not_found", free);
+      return { refusal: "No app window is in front (or it is yours): nothing was typed. Ask the user to click where to write, or to name the app." };
+    }
+    return { window, label: appLabel(window, entries) };
+  }
+
+  /** The focused field is a password field of that window. */
+  private passwordField(window: WindowInfo): boolean {
+    const field = this.host.field();
+    return field?.isPassword === true && (!field.processId || field.processId === window.pid);
+  }
+
+  /**
+   * Right before the keys: no modifier held by the user (Ctrl + text would
+   * fire shortcuts) and the target in front again (a click on the bubble
+   * may have taken the focus). Returns why not, or null.
+   */
+  private async ready(target: KeyTarget): Promise<string | null> {
+    for (let i = 0; i < 20 && this.host.win.modifierHeld(); i++) await this.host.sleep(100);
+    if (this.host.win.modifierHeld()) return "You did NOT type: a key like Ctrl, Alt, Shift or Win is held down, and typing now would fire shortcuts. Ask the user to let go and try again.";
+    if (this.host.win.foregroundId() !== target.window.id) {
+      if (!this.host.win.focus(target.window)) return `${target.label} is no longer in front and Windows didn't let you bring it back: nothing was typed.`;
+      await this.host.sleep(150);
+    }
+    return null;
+  }
+
+  /** Sends key events in small batches; false when Windows blocked them (an app run as administrator). */
+  private async send(events: KeyEvent[]): Promise<boolean> {
+    for (let i = 0; i < events.length; i += TYPE_CHUNK) {
+      const chunk = events.slice(i, i + TYPE_CHUNK);
+      if (this.host.win.send(chunk) < chunk.length) return false;
+      if (i + TYPE_CHUNK < events.length) await this.host.sleep(TYPE_PAUSE_MS);
+    }
+    return true;
+  }
+
+  private async type(call: Extract<PcCall, { name: "type_text" }>, requested: boolean): Promise<string> {
+    const target = await this.keyTarget(call.app, "type_text");
+    if ("refusal" in target) return target.refusal;
+    const { window, label } = target;
+    const app = `${label} ${window.process}`;
+    const password = this.passwordField(window);
+    const flat = call.text.replace(/\s+/g, " ").trim();
+    const short = flat.length > 60 ? `${flat.slice(0, 57)}…` : flat;
+    const action = call.enter ? "enter" : undefined;
+    const ok = await this.allowed(
+      [{ kind: "type_text", app, password }, ...(call.enter ? [{ kind: "press_keys" as const, app, keys: "enter", password }] : [])],
+      requested,
+      `Scrivo «${short}» in ${label}${call.enter ? " e premo Invio" : ""}?`,
+      "type_text",
+      label,
+      action,
+    );
+    if (!ok.go) return ok.text;
+    const notReady = await this.ready(target);
+    if (notReady) {
+      this.record("type_text", label, "failed", ok.decision, ok.confirmed, action);
+      return notReady;
+    }
+    if (!(await this.send(textEvents(call.text)))) {
+      this.record("type_text", label, "failed", ok.decision, ok.confirmed, action);
+      return `Windows blocked the keys for ${label} (it may run as administrator): nothing or only part was typed.`;
+    }
+    if (call.enter) {
+      await this.host.sleep(80);
+      this.host.win.send(ENTER);
+    }
+    await this.host.sleep(250);
+    this.record("type_text", label, "done", ok.decision, ok.confirmed, action);
+    this.host.lookAtActive?.();
+    if (call.enter) return `Typed it in ${label} and pressed Enter.`;
+    const shows = showsTyped(this.host.field()?.line ?? null, call.text);
+    return shows === false
+      ? `Typed it in ${label}, but the field doesn't seem to show it: the cursor may not have been in a text field. Ask the user to check.`
+      : `Typed it in ${label}${shows ? ": the field shows it" : ""}. Nothing was sent (no Enter).`;
+  }
+
+  private async keys(call: Extract<PcCall, { name: "press_keys" }>, requested: boolean): Promise<string> {
+    const combos = parseKeys(call.keys);
+    if (!combos) return `Those keys can't be read: "${call.keys}". Use names like enter, tab, esc, ctrl+t, alt+tab, separated by spaces (at most 10).`;
+    const target = await this.keyTarget(call.app, "press_keys");
+    if ("refusal" in target) return target.refusal;
+    const { window, label } = target;
+    const app = `${label} ${window.process}`;
+    const password = this.passwordField(window);
+    const labels = combos.map((c) => c.label).join(" ");
+    const spoken = combos.map((c) => c.label.replace(/\benter\b/, "Invio").replace(/\besc\b/, "Esc")).join(", ");
+    const ok = await this.allowed(
+      combos.map((c) => ({ kind: "press_keys" as const, app, keys: c.label, password })),
+      requested,
+      `Premo ${spoken} in ${label}?`,
+      "press_keys",
+      label,
+      labels,
+    );
+    if (!ok.go) return ok.text;
+    const notReady = await this.ready(target);
+    if (notReady) {
+      this.record("press_keys", label, "failed", ok.decision, ok.confirmed, labels);
+      return notReady;
+    }
+    for (const [i, combo] of combos.entries()) {
+      if (i) await this.host.sleep(40);
+      if (!(await this.send(comboEvents(combo)))) {
+        this.record("press_keys", label, "failed", ok.decision, ok.confirmed, labels);
+        return `Windows blocked the keys for ${label} (it may run as administrator).`;
+      }
+    }
+    await this.host.sleep(200);
+    this.record("press_keys", label, "done", ok.decision, ok.confirmed, labels);
+    const now = this.host.win.foreground();
+    const moved = now && now.id !== window.id ? ` The window in front is now ${appLabel(now, this.host.index.entries())}.` : "";
+    return `Pressed ${labels} in ${label}.${moved}`;
+  }
+
   private async trash(raw: string, requested: boolean): Promise<string> {
     const path = this.host.files.expand(raw);
     const name = fileName(path);
@@ -383,6 +539,16 @@ export class PcActions {
     this.record("trash_file", name, still ? "failed" : "done", ok.decision, ok.confirmed);
     return still ? `${name} is still there: moving it to the Recycle Bin didn't work.` : `Moved ${name} to the Recycle Bin: the user can restore it from there.`;
   }
+}
+
+const ENTER = comboEvents({ label: "enter", mods: [], key: VK_RETURN });
+/** Key events per SendInput call while typing, and the pause between calls (long texts don't flood the app). */
+const TYPE_CHUNK = 60;
+const TYPE_PAUSE_MS = 10;
+
+export interface KeyTarget {
+  window: WindowInfo;
+  label: string;
 }
 
 function actionOf(call: PcCall): string | undefined {

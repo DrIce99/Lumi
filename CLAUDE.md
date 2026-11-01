@@ -16,7 +16,13 @@ Work one roadmap phase at a time; finish each with checks green.
 - `app/`: `npm run check` (typecheck + `node:test` bundled by esbuild),
   `npm start` / `npm run debug` (DevTools), `npm run dist` (NSIS
   installer in `release/`; `dist:dir` = unpacked only; build `phone/www`
-  first).
+  first), `npm run update` (`scripts/update.mjs`: phone/www + dist, closes
+  the installed Lumi with `Lumi.exe --quit` (second-instance argv; older
+  builds get taskkill), installer `/S` over it, folder from the uninstall
+  entry's UninstallString, restarts it; `--no-phone`, `--no-start`). The
+  first log line says `installed`/`dev` and the build time
+  (`__LUMI_BUILD__`, defined by build.mjs). Installed and dev share
+  `%APPDATA%\Lumi` and the single-instance lock.
 - Always launch through `run.mjs`: shells spawned by VS Code export
   `ELECTRON_RUN_AS_NODE=1`, which makes `electron.exe` behave as plain Node.
 - `phone/` (Capacitor app): `npm run typecheck`, `npm run build` (www/),
@@ -225,9 +231,30 @@ Work one roadmap phase at a time; finish each with checks green.
 - Whisper hallucinates on silence ("Grazie a tutti"): an RMS gate before
   transcription plus a phrase filter in `stt/base.py`; Groq's Whisper runs
   in the app and gets the same rules from `voice/sttFilter.ts`.
-- Audiobooks: `sidecar/book/` parses .txt/.epub (stdlib only), sentences
-  go one by one through the TTS thread (live speech can interleave), output
-  M4B with chapters via ffmpeg, else WAV. `POST/GET/DELETE /tts/batch`.
+- Audiobooks: `sidecar/book/` parses .txt/.epub/.docx (stdlib only; docx
+  chapters at Word headings 1-2 found by style *name*, ids are localized
+  "Titolo1"; deleted text and text boxes skipped) into
+  `pieces` (parse.py): whole sentences of one voice packed up to 250
+  chars per paragraph (one TTS call each: sentence by sentence restarted
+  the intonation flat), dialogue split out for the second voice only when
+  there is one (quotes, and dashes that switch voice inside a dash line),
+  "[Illustrazione: ...]" paragraphs skipped, pause after each: 150 ms
+  voice switch or comma cut, 250 sentence, 700 paragraph, 1600 scene
+  break, 2000 chapter. Each take goes one by one through the TTS thread
+  (live speech can interleave), then `audio.py` (pure): `tidy` trims the
+  edges (-45 dB) and shortens inner silences > 900 ms to 450, `level`
+  sets the voiced RMS to -17 dB (+-9, peaks <= -1 dBFS; Pinocchio ch. 1
+  came out -21.9 LUFS, -1.2 dBTP). With a local STT each take is heard
+  back (`acceptable`: letters compared after `normalize` of the
+  transcript too, <= 4% wrong or 3 letters, not longer than 1.5 s +
+  0.16 s/letter); else up to 3 takes with seeds `seed + 1009k`
+  (`stream(..., seed=)`; Kokoro is `seeded = False`: one take), best
+  kept, failures listed in `<book>.da-riascoltare.txt` with time and
+  text. Logs carry counts and scores, never the text. Output M4B with
+  chapters via ffmpeg, else WAV. `POST/GET/DELETE /tts/batch`. Checked
+  live (user's clip, speed 1.15): 37 pieces, 4 min 13 s of audio in
+  ~100 s warm, 0 retakes; the first takes of each voice are slow (40-90
+  s: warmup), then 2-7 s.
 - Gemma 4 through Ollama writes many say calls as text instead of calling
   the tool (5 of 12 in a probe): `say{emotion:<|"|>gioia<|"|>,text:<|"|>…<|"|>}`,
   `say(emotion:gioia,text: "…")`, with unquoted text, positional
@@ -567,6 +594,12 @@ Work one roadmap phase at a time; finish each with checks green.
   same reply as the call, before the result, so the prompt asks for a
   neutral say there and no moving when it can't find the target.
   `LUMI_DEBUG_MOVE=a,b,c`.
+- Eye contact: the "user" attention candidate is the face's own center
+  (zero offset = straight out of the screen; it was the screen's bottom
+  center and the eyes dropped while the user talked), ranked 0.95 while
+  listening (over the caret 0.85, under "speaking"). In 3D, a "user" gaze
+  aims VRMLookAt at the camera's world position (`lookAt.lookAt`), plus
+  the controller's micro-saccade offset; not in the closeup routine.
 - Glare: `perception/glare.ts` (pure) turns the change detector's luma
   frames of the watched display (gaze target's, else the foreground's)
   into a 64x36 linear-light thumbnail (sRGB decoding of the luma: an
@@ -758,7 +791,9 @@ Work one roadmap phase at a time; finish each with checks green.
   already covering ui_action, keys, text and clicks for 16.4-16.5;
   `decide` adds the context (off, not requested = autonomous, locked,
   pauseInApps, confirm-level becomes never in DND/away; on the phone the
-  user is not away). `trustedApps` close without asking. `pc/match.ts`
+  user is not away). `trustedApps` close without asking; `pc.askFirst`
+  off (user's choice) turns every confirm into free, never stays never.
+  `pc/match.ts`
   (pure): `buildEntries` (Get-StartApps rows + shortcut targets for the
   exe + Steam manifests not already in Start; "on the Web" links and
   Steamworks redistributables dropped), `resolveTarget` (url, uri, path,
@@ -805,6 +840,26 @@ Work one roadmap phase at a time; finish each with checks green.
   search). Paths go to the model (to open them), the prompt says never to
   read them aloud; the sidecar log has counts only. Checked live: index,
   window list (64 ms cold), Calculator open/minimize/restore/close.
+- Keyboard (16.4 part 1): `type_text({ text, app?, enter? })` and
+  `press_keys({ keys, app? })`. `pc/keys.ts` (pure): key names EN/IT
+  ("invio", "freccia giù", "a capo", two-word names tried first),
+  combos normalized ctrl+shift+alt+win+key (the policy and the log see
+  these labels, one decision per combo, the strictest wins), text as
+  KEYEVENTF_UNICODE units (layout-independent, emoji as two units, "\n" =
+  Shift+Enter), extended flag for arrows/home/end/ins/del/pg, INPUT = 40
+  bytes on x64 with KEYBDINPUT at offset 8 (checked live: SendInput takes
+  1/1, a wrong size 0). Target: the app named (focused first), else the
+  foreground (`win32.foregroundInfo`, dialogs included), else, when Lumi's
+  own window is in front (her chat box), the topmost unminimized app
+  window. One confirmation covers text + Enter ("Scrivo «...» in X e
+  premo Invio?"; askFirst off skips it). Before sending: wait up to 2 s
+  for the user's modifiers to be released, refocus the target if the
+  bubble took the focus. Sent in batches of 60 events, 10 ms apart; fewer
+  accepted = blocked (an elevated app). Verified with the UIA line
+  (`Perception.focusedField`, `showsTyped` = last 24 chars), password
+  field of that process = never. Main ignores Esc for "Esc twice" for
+  150 ms after each injection. Not tried live on a real app (it would
+  type into the user's windows).
 
 ## Planned features (phase 16 steps 4-5 not built yet; phase 10 kept as its design notes)
 
@@ -850,12 +905,10 @@ Steps 1-3 are built (see the notes above). Still to do:
 
 - `ui_action({ app?, element, action, text? })` with UI Automation
   patterns in the sidecar (Invoke, Value, Toggle, ExpandCollapse,
-  SelectionItem), `press_keys` and `type_text` (SendInput, foreground
-  window only), each verified after the step (the field holds the text,
-  the control changed); the policy already has their levels (password
-  fields and terminals never, purchases never, trusted apps relax keys and
-  changing controls, typing always asks). The executor needs the focused
-  element's `IsPassword` from the UIA monitor.
+  SelectionItem), verified after the step (the control changed); the
+  policy already has its levels (password fields and terminals never,
+  purchases never, trusted apps relax changing controls). The keyboard
+  tools are built (see the notes above).
 - Last resort: `click({ target })` on a text or a region seen by the
   local vision, never coordinates written by the model; then habits'
   auto-actions go through `PcActions` and the same policy.

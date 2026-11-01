@@ -5,7 +5,8 @@
 // are quick and synchronous: no waiting on the main thread. Without koffi
 // (or off Windows) nothing works and every function says so.
 import { log } from "../log";
-import { processImage } from "../perception/desktop";
+import { keyDown, processImage } from "../perception/desktop";
+import { encodeInputs, INPUT_SIZE, type KeyEvent } from "./keys";
 import type { MediaAction } from "./policy";
 import type { WindowInfo } from "./match";
 
@@ -34,6 +35,7 @@ interface Api {
   keybd_event(vk: number, scan: number, flags: number, extra: number): void;
   GetLastInputInfo(info: { cbSize: number; dwTime: number }): boolean;
   GetTickCount(): number;
+  SendInput(count: number, inputs: Buffer, size: number): number;
   address(handle: Handle): bigint;
 }
 
@@ -97,6 +99,7 @@ function load(): Api | null {
       keybd_event: user32.func("void __stdcall keybd_event(uint8_t bVk, uint8_t bScan, uint32_t dwFlags, uintptr_t dwExtraInfo)"),
       GetLastInputInfo: user32.func("bool __stdcall GetLastInputInfo(_Inout_ LUMI_PC_LASTINPUTINFO *plii)"),
       GetTickCount: kernel32.func("uint32_t __stdcall GetTickCount()"),
+      SendInput: user32.func("uint32_t __stdcall SendInput(uint32_t cInputs, void *pInputs, int cbSize)"),
       address: (handle) => (handle ? (koffi.address(handle) as bigint) : 0n),
     };
   } catch (err) {
@@ -157,6 +160,32 @@ export function listWindows(): WindowInfo[] {
     log.warn("Listing the windows failed", err);
   }
   return out;
+}
+
+/** The foreground window as an app window (dialogs too, which Alt+Tab leaves out), or null when it is none or Lumi's. */
+export function foregroundInfo(): WindowInfo | null {
+  const w = load();
+  if (!w) return null;
+  try {
+    const hwnd = w.GetForegroundWindow();
+    if (!hwnd) return null;
+    const pid = [0];
+    w.GetWindowThreadProcessId(hwnd, pid);
+    if (pid[0] === w.GetCurrentProcessId()) return null;
+    if (SHELL_CLASSES.has(text((b, n) => w.GetClassNameW(hwnd, b, n)))) return null;
+    const path = processImage(pid[0]);
+    return {
+      handle: hwnd,
+      id: String(w.address(hwnd)),
+      title: text((b, n) => w.GetWindowTextW(hwnd, b, n), 512),
+      process: path.split("\\").pop() || "",
+      pid: pid[0],
+      minimized: w.IsIconic(hwnd),
+      maximized: w.IsZoomed(hwnd),
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** The id of the foreground window ("" when none). */
@@ -251,6 +280,18 @@ export function mediaKey(action: MediaAction): boolean {
     w.keybd_event(vk, 0, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, 0);
   }
   return true;
+}
+
+/** Sends key events to the foreground window; returns how many went through (0 when blocked, e.g. by a higher-integrity window). */
+export function sendKeys(events: KeyEvent[]): number {
+  const w = load();
+  if (!w || !events.length) return 0;
+  return w.SendInput(events.length, encodeInputs(events), INPUT_SIZE);
+}
+
+/** A modifier is held down by the user (typing now would fire shortcuts). */
+export function modifierHeld(): boolean {
+  return [0x10, 0x11, 0x12, 0x5b, 0x5c].some((vk) => keyDown(vk));
 }
 
 /** GetTickCount() of the last keyboard or mouse input (ours too), or null when unknown. */

@@ -136,7 +136,6 @@ function fakeHost(overrides: Partial<PerceptionHost> = {}) {
     settings: () => DEFAULT_SETTINGS,
     faceCenter: () => ({ x: 1000, y: 1000 }),
     cursor: () => ({ x: 0, y: 0 }),
-    userPoint: () => ({ x: 960, y: 1080 }),
     context: () => ({ listening: false, speaking: false }),
     active: () => true,
     sendGaze: (g) => gazes.push(g),

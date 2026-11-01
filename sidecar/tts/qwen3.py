@@ -167,7 +167,7 @@ class Qwen3Engine(TTSEngine):
     def voices(self) -> list[str]:
         return self.speakers if self.kind == "custom" else []
 
-    def stream(self, text: str, emotion: str, intensity: float, voice: str, cancel: Cancel | None = None) -> Iterator[bytes]:
+    def stream(self, text: str, emotion: str, intensity: float, voice: str, cancel: Cancel | None = None, seed: int | None = None) -> Iterator[bytes]:
         import torch
 
         if self.model is None:
@@ -175,7 +175,7 @@ class Qwen3Engine(TTSEngine):
         instruct = qwen_instruct(emotion, intensity, self.config.speed)
         with self._lock, torch.inference_mode():
             # Same seed for every sentence: the voice doesn't drift
-            torch.manual_seed(self.config.seed)
+            torch.manual_seed(self.config.seed if seed is None else seed)
             if self.kind == "custom":
                 speaker = (voice or self.config.voice or "ryan").lower()
                 if speaker not in self.speakers:

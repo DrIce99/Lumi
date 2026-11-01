@@ -64,6 +64,8 @@ class EngineUnavailable(RuntimeError):
 class TTSEngine(ABC):
     name = "base"
     sample_rate = SAMPLE_RATE
+    #: Another seed gives another take (Kokoro always says it the same way)
+    seeded = True
 
     def __init__(self, config: TTSConfig, models_dir: str):
         self.config = config
@@ -77,8 +79,9 @@ class TTSEngine(ABC):
         """Frees memory (and VRAM)."""
 
     @abstractmethod
-    def stream(self, text: str, emotion: str, intensity: float, voice: str, cancel: Cancel | None = None) -> Iterator[bytes]:
-        """Synthesizes `text`, yielding PCM 16-bit mono chunks at `sample_rate` as soon as they are ready."""
+    def stream(self, text: str, emotion: str, intensity: float, voice: str, cancel: Cancel | None = None, seed: int | None = None) -> Iterator[bytes]:
+        """Synthesizes `text`, yielding PCM 16-bit mono chunks at `sample_rate` as soon as they are ready.
+        `seed` replaces the configured one (another take of the same sentence); deterministic engines ignore it."""
 
     def voices(self) -> list[str]:
         return []

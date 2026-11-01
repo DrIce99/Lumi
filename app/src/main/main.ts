@@ -1,4 +1,6 @@
 // Entry point: wires the face, perception, brain, voice and UI together.
+/** When this bundle was built (build.mjs define), shown in the log. */
+declare const __LUMI_BUILD__: string | undefined;
 import { app, BrowserWindow, dialog, globalShortcut, nativeImage, powerMonitor, screen, shell, type Display, type Rectangle } from "electron";
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
@@ -140,7 +142,7 @@ function start(): void {
       lag.reset();
     }, 5000);
   }
-  log.info(`Lumi ${app.getVersion()} (Electron ${process.versions.electron}), data in ${dataDir}`);
+  log.info(`Lumi ${app.getVersion()} (${app.isPackaged ? "installed" : "dev"}, built ${typeof __LUMI_BUILD__ === "string" ? __LUMI_BUILD__ : "?"} UTC; Electron ${process.versions.electron}), data in ${dataDir}`);
   serveAppScheme(join(__dirname, ".."));
 
   const settingsStore = new SettingsStore(dataDir);
@@ -562,10 +564,6 @@ function start(): void {
     settings,
     faceCenter: () => face.faceCenter(),
     cursor: () => screen.getCursorScreenPoint(),
-    userPoint: () => {
-      const b = lumiDisplay().bounds;
-      return { x: b.x + b.width / 2, y: b.y + b.height };
-    },
     context: () => ({ listening: mood.state().listening, speaking: mood.state().speaking }),
     active: () => visible && !face.isDragging(),
     sendGaze: (gaze) => face.gaze(gaze),
@@ -1156,7 +1154,15 @@ function start(): void {
       media: (action) => win32.mediaKey(action),
       lastInput: () => win32.lastInputTick(),
       tick: () => win32.tickNow(),
+      foreground: () => win32.foregroundInfo(),
+      send: (events) => {
+        // Esc pressed by Lumi itself must not count for "Esc twice"
+        escIgnoredUntil = Date.now() + 150;
+        return win32.sendKeys(events);
+      },
+      modifierHeld: () => win32.modifierHeld(),
     },
+    field: () => perception.focusedField(),
     launch: {
       // shell:AppsFolder\<AppID> starts an app the way the Start menu does; explorer hands it to the shell and exits
       explorer: (arg) =>
@@ -1209,12 +1215,13 @@ function start(): void {
   let escDown = false;
   let escPresses: number[] = [];
   let lastPcActionAt = 0;
+  let escIgnoredUntil = 0;
   function watchEsc(): void {
     lastPcActionAt = Date.now();
     if (escWatch) return;
     escWatch = setInterval(() => {
       const down = keyDown(0x1b);
-      if (down && !escDown) {
+      if (down && !escDown && Date.now() >= escIgnoredUntil) {
         const now = Date.now();
         escPresses = [...escPresses.filter((t) => now - t < 1000), now];
         if (escPresses.length >= 2) {
@@ -1963,7 +1970,13 @@ function start(): void {
     tray.refresh();
   });
 
-  app.on("second-instance", talk);
+  // Starting Lumi again opens the chat; "Lumi.exe --quit" closes the running one properly (npm run update)
+  app.on("second-instance", (_event, argv) => {
+    if (argv.includes("--quit")) {
+      log.info("Asked to quit by another instance (--quit)");
+      app.quit();
+    } else talk();
+  });
   // Lumi lives in the tray: closing the settings window must not quit
   app.on("window-all-closed", () => undefined);
   let quitting = false;

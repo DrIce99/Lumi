@@ -728,6 +728,7 @@ function fill(next: SettingsSnapshot): void {
   renderPhone(next);
   renderHabits(next);
   $("pcEnabled").checked = s.pc.enabled;
+  $("pcAskFirst").checked = s.pc.askFirst;
   $<HTMLTextAreaElement>("pcTrustedApps").value = s.pc.trustedApps.join("\n");
   renderPc(next);
   $<HTMLSelectElement>("embeddingProvider").value = s.memory.embeddings.provider;
@@ -814,6 +815,7 @@ function collect(): Settings {
     phone: { enabled: $("phoneEnabled").checked, port: num("phonePort", s.phone.port) },
     pc: {
       enabled: $("pcEnabled").checked,
+      askFirst: $("pcAskFirst").checked,
       trustedApps: $<HTMLTextAreaElement>("pcTrustedApps")
         .value.split(/\n|,/)
         .map((a) => a.trim())

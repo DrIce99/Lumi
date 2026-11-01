@@ -94,6 +94,7 @@ const DESK_BONES: VRMHumanBoneName[] = ["leftLowerArm", "rightLowerArm", "leftHa
 const DEG = Math.PI / 180;
 const tmpQ = new Quaternion();
 const tmpE = new ThreeEuler(0, 0, 0, "XYZ");
+const tmpV = new Vector3();
 
 function quat(e: Euler, out = new Quaternion()): Quaternion {
   return out.setFromEuler(tmpE.set(e[0] * DEG, e[1] * DEG, e[2] * DEG, "XYZ"));
@@ -847,10 +848,19 @@ export class Avatar implements FaceView {
     if (this.cam.close > 0.01) this.faceTheLens(vrm, result, this.cam.close);
     if (vrm.lookAt) {
       const range = eyeRange(vrm);
-      vrm.lookAt.yaw = gx * range.yaw;
-      // VRMLookAt's pitch grows downward on the eyes (checked on the model): gaze y is + down too
-      // (a head raised toward a high target leaves the eyes less to do)
-      vrm.lookAt.pitch = gy * range.pitch * (gy < 0 ? 1 - 0.35 * Math.min(1, -this.headLook.y) : 1);
+      if (this.gazeKind === "user" && this.cam.close <= 0.01) {
+        // Eye contact: the user is in front of the screen, i.e. where the camera is (it sits at bust
+        // height, so "straight ahead" would look over their head). The gaze's offset is ~0 here, only
+        // the micro-saccades: they ride on top so the eyes stay alive.
+        vrm.lookAt.lookAt(this.camera.getWorldPosition(tmpV));
+        vrm.lookAt.yaw += gx * range.yaw;
+        vrm.lookAt.pitch += gy * range.pitch;
+      } else {
+        vrm.lookAt.yaw = gx * range.yaw;
+        // VRMLookAt's pitch grows downward on the eyes (checked on the model): gaze y is + down too
+        // (a head raised toward a high target leaves the eyes less to do)
+        vrm.lookAt.pitch = gy * range.pitch * (gy < 0 ? 1 - 0.35 * Math.min(1, -this.headLook.y) : 1);
+      }
     }
 
     for (const [name, q] of result) humanoid.getNormalizedBoneNode(name)?.quaternion.copy(q);
